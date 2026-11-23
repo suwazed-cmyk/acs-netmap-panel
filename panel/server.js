@@ -561,6 +561,69 @@ function tcpCheck(host, port) {
   });
 }
 
+// ---------- Tes koneksi bertahap ----------
+function testPlan(site) {
+  const virt = parseCidr(site.virtualSubnet);
+  const real = parseCidr(site.realSubnet);
+  const steps = [
+    { key: "vpn", label: "Koneksi VPN", desc: "MikroTik tersambung ke VPS lewat L2TP" },
+    { key: "ping-mt", label: "Respons MikroTik", desc: `VPS menjangkau MikroTik di ${site.tunnelIp}` },
+    { key: "route", label: "Jalur ke jaringan ONT", desc: `Route ${site.virtualSubnet} terpasang di VPS` },
+    { key: "ping-gw", label: "Jaringan ONT", desc: `Gateway ${intToIp(virt.net + 1)} (asli ${intToIp(real.net + 1)}) terjangkau lewat NETMAP` },
+    { key: "genie", label: "Patch GenieACS", desc: `IP virtual ${site.virtualSubnet} dikenali GenieACS untuk Summon` },
+  ];
+  for (const f of site.forwards || []) {
+    if (f.proto === "udp") continue;
+    steps.push({ key: "fwd:" + f.id, label: `Remote ${f.label}`, desc: `Port ${f.publicPort} → ${fwdTarget(site, f)}:${f.targetPort}` });
+  }
+  return steps;
+}
+async function runTestStep(site, key, st) {
+  const peers = await onlinePeers();
+  const iface = peers[site.tunnelIp] || "";
+  const virt = parseCidr(site.virtualSubnet);
+  const gw = intToIp(virt.net + 1);
+  if (key === "vpn") {
+    return iface
+      ? { ok: true, detail: `Tersambung lewat ${iface}` }
+      : { ok: false, detail: "MikroTik belum tersambung ke VPS", hint: "Pastikan script MikroTik sudah dipasang, MikroTik punya internet, dan alamat VPS di Pengaturan benar." };
+  }
+  if (key === "ping-mt") {
+    const r = await run("ping", ["-c", "2", "-W", "1", site.tunnelIp]);
+    if (r.code === -2) return { ok: null, detail: "Dilewati: perintah ping tidak ada di VPS", hint: "Pasang dengan: apt install iputils-ping" };
+    return r.code === 0 ? { ok: true, detail: "MikroTik membalas" } : { ok: false, detail: "MikroTik tidak membalas", hint: "Cek apakah firewall MikroTik memblokir ping dari l2tp-acs." };
+  }
+  if (key === "route") {
+    const r = await run("ip", ["route", "get", gw]);
+    const okr = !!iface && r.out.includes(iface);
+    return okr ? { ok: true, detail: `Lewat ${iface}` } : { ok: false, detail: "Route belum terpasang", hint: "Route dipasang otomatis saat VPN tersambung. Sambungkan ulang L2TP di MikroTik." };
+  }
+  if (key === "ping-gw") {
+    const r = await run("ping", ["-c", "2", "-W", "1", gw]);
+    if (r.code === -2) return { ok: null, detail: "Dilewati: perintah ping tidak ada di VPS" };
+    return r.code === 0
+      ? { ok: true, detail: "Gateway membalas, NETMAP bekerja" }
+      : { ok: false, detail: "Gateway tidak membalas", hint: "Pastikan bagian NETMAP di script MikroTik terpasang. Jika gateway ONT bukan alamat .1, langkah ini boleh diabaikan." };
+  }
+  if (key === "genie") {
+    const g = insideGenie(site.virtualSubnet, st.genieCidr);
+    if (g === null) return { ok: null, detail: "Dilewati: GenieACS tidak ada di VPS ini" };
+    return g
+      ? { ok: true, detail: `Termasuk rentang ${st.genieCidr}` }
+      : { ok: false, detail: `Di luar rentang patch (${st.genieCidr || "kosong"})`, hint: "Jalankan ulang genieacs-virtualip.sh dengan VIRTUAL_CIDR yang mencakup IP virtual lokasi ini." };
+  }
+  if (key.startsWith("fwd:")) {
+    const f = (site.forwards || []).find((x) => "fwd:" + x.id === key);
+    if (!f) return { ok: null, detail: "Port forwarding tidak ditemukan" };
+    const tip = fwdTarget(site, f);
+    const okp = await tcpCheck(tip, f.targetPort);
+    return okp
+      ? { ok: true, detail: `${tip}:${f.targetPort} menjawab` }
+      : { ok: false, detail: `${tip}:${f.targetPort} tidak menjawab`, hint: "Pastikan layanan aktif di perangkat tujuan dan script MikroTik terbaru sudah dipasang." };
+  }
+  return { ok: null, detail: "Tidak dikenal" };
+}
+
 // ---------- Sesi & keamanan login ----------
 const sessions = new Map();
 const loginFails = new Map();
@@ -766,7 +829,7 @@ async function handleApi(req, res, url) {
     }
   }
 
-  const m = p.match(/^\/api\/sites\/([a-f0-9]{12})(\/(test|reset-password))?$/);
+  const m = p.match(/^\/api\/sites\/([a-f0-9]{12})(\/(test|test-plan|test-step|reset-password))?$/);
   if (m) {
     const d = loadData();
     const site = d.sites.find((s) => s.id === m[1]);
@@ -809,45 +872,23 @@ async function handleApi(req, res, url) {
       await applyAll(d);
       return send(res, 200, { ok: true });
     }
+    if (action === "test-plan" && method === "GET") {
+      return send(res, 200, { steps: testPlan(site) });
+    }
+    if (action === "test-step" && method === "POST") {
+      const body = await readBody(req);
+      const step = testPlan(site).find((x) => x.key === body.key);
+      if (!step) return send(res, 400, { error: "Langkah tes tidak dikenal." });
+      const r = await runTestStep(site, step.key, settings(d));
+      return send(res, 200, Object.assign({ key: step.key }, r));
+    }
     if (action === "test" && method === "POST") {
+      const st = settings(d);
       const peers = await onlinePeers();
-      const virt = parseCidr(site.virtualSubnet);
-      const gw = intToIp(virt.net + 1);
       const result = { online: !!peers[site.tunnelIp], iface: peers[site.tunnelIp] || "", steps: [] };
-      result.steps.push({
-        label: "VPN L2TP tersambung",
-        ok: result.online,
-        detail: result.online ? `Tersambung lewat ${result.iface}` : "MikroTik belum tersambung ke VPS",
-      });
-      const p1 = await run("ping", ["-c", "2", "-W", "1", site.tunnelIp]);
-      result.steps.push(
-        p1.code === -2
-          ? { label: `Ping MikroTik (${site.tunnelIp})`, ok: null, detail: "Dilewati: perintah ping tidak ada di VPS (apt install iputils-ping)" }
-          : { label: `Ping MikroTik (${site.tunnelIp})`, ok: p1.code === 0, detail: p1.code === 0 ? "Membalas" : "Tidak membalas" },
-      );
-      const r = await run("ip", ["route", "get", gw]);
-      const routeOk = result.online && r.out.includes(result.iface);
-      result.steps.push({ label: `Route ke ${site.virtualSubnet}`, ok: routeOk, detail: routeOk ? `Lewat ${result.iface}` : "Route belum terpasang" });
-      const p2 = await run("ping", ["-c", "2", "-W", "1", gw]);
-      result.steps.push({
-        label: `Ping gateway ONT (${gw} = ${intToIp(parseCidr(site.realSubnet).net + 1)} asli)`,
-        ok: p2.code === -2 ? null : p2.code === 0,
-        detail:
-          p2.code === -2
-            ? "Dilewati: perintah ping tidak ada di VPS"
-            : p2.code === 0
-              ? "Membalas, NETMAP bekerja"
-              : "Tidak membalas (cek NETMAP di MikroTik, atau gateway ONT bukan .1)",
-      });
-      for (const f of site.forwards || []) {
-        if (f.proto === "udp") continue;
-        const tip = fwdTarget(site, f);
-        const okp = await tcpCheck(tip, f.targetPort);
-        result.steps.push({
-          label: `Port forward ${f.label} (${f.publicPort} → ${tip}:${f.targetPort})`,
-          ok: okp,
-          detail: okp ? "Tujuan bisa dijangkau dari VPS" : "Tujuan tidak menjawab (cek layanan aktif di perangkat tujuan / script MikroTik)",
-        });
+      for (const step of testPlan(site)) {
+        const r = await runTestStep(site, step.key, st);
+        result.steps.push({ label: step.label, ok: r.ok, detail: r.detail });
       }
       return send(res, 200, result);
     }
