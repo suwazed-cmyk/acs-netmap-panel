@@ -19,6 +19,7 @@ ONT ─ OLT ─ MikroTik lokasi ═══ VPN L2TP ═══ VPS (GenieACS + Pan
 |---|---|
 | `install-vpn-acs.sh` | Installer Panel VPN ACS (sudah berisi seluruh panel) |
 | `genieacs-virtualip.sh` | Patch IP virtual untuk GenieACS v1.2.13 |
+| `pasang-parameter.sh`, `parameter/` | Parameter GenieACS versi bersih (basis beryindo) + pemasang dengan backup/rollback |
 | `panel/server.js`, `panel/public/index.html` | Kode sumber panel (untuk dibaca/diubah) |
 
 ## Rekomendasi VPS
@@ -68,10 +69,14 @@ systemctl status xl2tpd --no-pager | head -5
 ```
 
 ### 4. GenieACS
+`genie.sh` mengunduh `libssl1.1` dari `ftp.debian.org`, yang sering macet. Baris `sed` di bawah mengganti sumbernya ke server Ubuntu:
 ```bash
 wget -O /root/genie.sh https://raw.githubusercontent.com/beryindo/genieacs/refs/heads/main/genie.sh
+sed -i 's#https://ftp.debian.org/debian/pool/main/o/openssl/libssl1.1_1.1.1w-0+deb11u1_amd64.deb#http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2.24_amd64.deb#; s#dpkg -i libssl1.1_1.1.1w-0+deb11u1_amd64.deb#dpkg -i libssl1.1_1.1.1f-1ubuntu2.24_amd64.deb#' /root/genie.sh
+grep -n "libssl" /root/genie.sh
 bash /root/genie.sh
 ```
+Ketik `y` saat ditanya. Cek: `systemctl status mongod genieacs-cwmp genieacs-ui --no-pager | grep -E "●|Active"`
 Perbaikan keamanan (wajib):
 ```bash
 sed -i "s/^GENIEACS_UI_JWT_SECRET=.*/GENIEACS_UI_JWT_SECRET=$(openssl rand -hex 32)/" /opt/genieacs/genieacs.env
@@ -94,6 +99,16 @@ sed -i 's#^VIRTUAL_CIDR=.*#VIRTUAL_CIDR="10.100.0.0/14,10.20.0.0/16"#' genieacs-
 bash genieacs-virtualip.sh
 ```
 Cek: `bash genieacs-virtualip.sh status`
+
+### 5b. Parameter GenieACS versi bersih (disarankan)
+`genie.sh` memasang parameter dari repo beryindo. Script ini menggantinya dengan versi yang sudah dibersihkan (lihat `parameter/README.md`):
+```bash
+cd /root/suwazed-panel
+bash pasang-parameter.sh
+```
+- Pilih mode akses WAN ONT (disarankan **1 / buka-web**).
+- Kredensial ACS: tekan Enter untuk dibuat acak. Hasilnya disimpan di `/root/genieacs-kredensial-acs.txt`.
+- Parameter lama otomatis di-backup. Untuk kembali: `bash pasang-parameter.sh daftar-backup`, lalu `bash pasang-parameter.sh rollback /root/backup-parameter-...`
 
 ### 6. Panel VPN ACS
 ```bash
