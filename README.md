@@ -19,7 +19,6 @@ ONT ─ OLT ─ MikroTik router ═══ VPN L2TP ═══ VPS (GenieACS + Pan
 |---|---|
 | `install-vpn-acs.sh` | Installer Panel VPN ACS (sudah berisi seluruh panel) |
 | `genieacs-virtualip.sh` | Patch IP virtual untuk GenieACS v1.2.13 |
-| `pasang-parameter.sh`, `parameter/` | Parameter GenieACS versi bersih (basis beryindo) + pemasang dengan backup/rollback |
 | `bersihkan.sh` | Menghapus aturan/pengaturan yang dipasang repo ini dari VPS |
 | `panel/server.js`, `panel/public/index.html` | Kode sumber panel (untuk dibaca/diubah) |
 
@@ -100,16 +99,6 @@ sed -i 's#^VIRTUAL_CIDR=.*#VIRTUAL_CIDR="10.100.0.0/14,10.20.0.0/16"#' genieacs-
 bash genieacs-virtualip.sh
 ```
 Cek: `bash genieacs-virtualip.sh status`
-
-### 5b. Parameter GenieACS versi bersih (disarankan)
-`genie.sh` memasang parameter dari repo beryindo. Script ini menggantinya dengan versi yang sudah dibersihkan (lihat `parameter/README.md`):
-```bash
-cd /root/suwazed-panel
-bash pasang-parameter.sh
-```
-- Pilih mode akses WAN ONT (disarankan **1 / buka-web**).
-- Kredensial ACS: tekan Enter untuk memakai `admin`/`admin` (atau isi sendiri). Hasilnya disimpan di `/root/genieacs-kredensial-acs.txt`.
-- Parameter lama otomatis di-backup. Untuk kembali: `bash pasang-parameter.sh daftar-backup`, lalu `bash pasang-parameter.sh rollback /root/backup-parameter-...`
 
 ### 6. Panel VPN ACS
 ```bash
@@ -217,7 +206,7 @@ Pilihan menu:
 1. **Hapus semua port forwarding saja** (VPN & router tetap jalan)
 2. **Hapus Panel VPN ACS** + akun VPN router + route IP virtual + aturan firewall panel, dan kembalikan xl2tpd ke bawaan `vpnsetup.sh`
 3. **Kembalikan GenieACS asli** (hapus patch IP virtual)
-4. **Kembalikan parameter GenieACS** dari backup
+4. **Kembalikan parameter GenieACS** dari backup lama (`/root/backup-parameter-*`), jika pernah dibuat
 5. **Hapus semua** (2 + 3, parameter ditanyakan)
 
 Atau langsung: `bash bersihkan.sh portforward|panel|genieacs|parameter|semua`. Setiap pilihan meminta konfirmasi (ketik `YA`) dan membackup data penting ke `/root` dulu. Server VPN (xl2tpd/IPsec), GenieACS, MongoDB, dan data ONT tidak dihapus.

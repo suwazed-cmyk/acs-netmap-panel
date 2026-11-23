@@ -178,7 +178,15 @@ mode_parameter() {
   if [ -z "$pilih" ]; then b="$(echo "$list" | head -1)"; else b="$(echo "$list" | sed -n "${pilih}p")"; fi
   [ -n "$b" ] || fail "Pilihan tidak valid"
   konfirmasi "Parameter GenieACS (preset, provision, virtual parameter, tampilan) akan dikembalikan dari $b."
-  bash "$SCRIPT_DIR/pasang-parameter.sh" rollback "$b"
+  [ -d "$b/genieacs" ] || fail "Folder backup tidak valid: $b"
+  command -v mongorestore >/dev/null || fail "mongorestore tidak ditemukan (MongoDB belum terpasang?)"
+  mongorestore --quiet --db genieacs --drop "$b/genieacs" || fail "Gagal mengembalikan parameter"
+  ok "Parameter GenieACS dikembalikan dari $b"
+  for s in genieacs-cwmp genieacs-nbi genieacs-fs genieacs-ui; do systemctl restart "$s" 2>/dev/null || true; done
+  sleep 2
+  for s in genieacs-cwmp genieacs-nbi genieacs-ui; do
+    if systemctl is-active --quiet "$s"; then ok "$s berjalan"; else warn "$s tidak berjalan, cek: journalctl -u $s -n 30"; fi
+  done
 }
 
 mode_semua() {
