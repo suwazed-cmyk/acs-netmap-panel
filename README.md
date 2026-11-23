@@ -130,7 +130,7 @@ Jangan menyalakan `ufw` (bentrok dengan aturan VPN). Buka di firewall provider j
 | 20001-20999 | TCP | Port forwarding / remote MikroTik |
 | 500, 4500 | UDP | Hanya jika IPsec dinyalakan |
 
-Port 7547 dan 7557 **tidak perlu** dibuka ke publik.
+Port 7547 dan 7557 **tidak perlu** dibuka ke publik. HTTPS panel memakai port yang sama (8088) dan tidak butuh port 80/443. VPS hanya perlu bisa keluar ke internet (Telegram, Cloudflare, Let's Encrypt).
 
 ### 8. Atur panel (sekali di awal)
 Menu **Pengaturan**:
@@ -139,13 +139,40 @@ Menu **Pengaturan**:
 3. **Jaringan VPN (L2TP)**: tentukan **sekarang** (default `192.168.42.0/24`). Mengganti belakangan berarti URL ACS di semua ONT ikut berubah.
 4. **Patch IP virtual GenieACS** harus berstatus **Aktif**
 
+### 8b. Notifikasi Telegram (opsional)
+Menu **Pengaturan → Notifikasi Telegram**:
+1. Buat bot lewat **@BotFather** (`/newbot`) dan salin token-nya.
+2. Buat grup Telegram → aktifkan **Topik (Topics)** → buat topik, misalnya `🔴 VPN`.
+3. Masukkan bot ke grup dan jadikan **admin**, lalu kirim pesan apa saja di topik tujuan.
+4. Di panel: tempel token → **Deteksi grup & topik** → pilih grup dan topik → atur jeda → **Kirim pesan tes** → **Simpan**.
+
+Aturan pengiriman:
+- Hanya dikirim saat status **berubah**. Putus yang lebih singkat dari **jeda** (bawaan 3 menit) tidak dilaporkan.
+- Banyak lokasi putus bersamaan digabung jadi **satu pesan**.
+- Opsional: pesan **tersambung lagi** (beserta lama putus), **pengingat** jika masih putus, dan **jam tenang** (pesan tanpa bunyi).
+- Lokasi berstatus **Menunggu pemasangan** (belum pernah tersambung) tidak dikirim notifikasi.
+
+### 8c. Domain Cloudflare + HTTPS (opsional)
+Menu **Pengaturan → Domain & HTTPS**. Isi domain (misalnya `vpn.domainanda.com`) dan **API Token** Cloudflare (template **Edit zone DNS**, batasi ke domain Anda; jangan pakai Global API Key).
+
+Panel memeriksa token → domain → izin DNS → IP VPS → membuat record A (**DNS only**) → memastikan domain sudah mengarah ke VPS → (opsional) menerbitkan sertifikat **Let's Encrypt** → menerapkan. **Jika satu langkah gagal, semua dibatalkan** dan pengaturan tetap seperti semula.
+
+Setelah berhasil:
+- Alamat VPS di script MikroTik otomatis memakai domain. MikroTik lama tidak wajib diubah karena domain dan IP mengarah ke server yang sama.
+- Jika HTTPS dipilih, panel dibuka lewat `https://domain:8088`, dan alamat http/IP dialihkan otomatis. Sertifikat diperpanjang otomatis oleh certbot.
+- Record harus **DNS only** (awan abu-abu). Proxy Cloudflare (awan oranye) tidak bisa meneruskan L2TP dan Winbox; panel mengaturnya otomatis.
+
 ### 9. GenieACS UI
 Buka `http://IP_VPS:3000`. Jika muncul *initialization wizard*, buat akun admin dan centang **Users saja** agar config dari repo beryindo tidak tertimpa.
 
 ### 10. Tambah lokasi
 Panel → **＋ Tambah Lokasi** → isi nama, subnet ONT (lihat Winbox: IP → DHCP Server → Networks), IP virtual (opsional, tidak boleh sama dengan lokasi lain) → **Salin Script** → tempel di Winbox **New Terminal** → tunggu status **Tersambung** → **Tes Koneksi**.
 
-Remote MikroTik: **🌐 Remote / Port Forward** → Winbox → Tambah → pakai alamat `IP_VPS:20001` di Winbox *Connect To*.
+Remote MikroTik: buka lokasi → tab **Remote** → **Tambah** → Winbox → pakai alamat `IP_VPS:20001` di Winbox *Connect To*.
+
+Lokasi baru berstatus **Menunggu pemasangan** sampai MikroTik tersambung pertama kali. Setelah itu tab **Riwayat** mencatat setiap putus (kapan dan berapa lama), uptime 24 jam / 7 hari / 30 hari, dan grafik 30 hari. Riwayat disimpan 90 hari.
+
+Semua perubahan di panel (login, tambah/ubah/hapus lokasi, remote, pengaturan, Cloudflare) tercatat di menu **Log aktivitas** selama 90 hari. Password dan token tidak ikut dicatat.
 
 ### 11. ONT
 - URL ACS: `http://192.168.42.1:7547` (atau `.1` dari jaringan VPN yang dipilih, lihat menu Pengaturan)

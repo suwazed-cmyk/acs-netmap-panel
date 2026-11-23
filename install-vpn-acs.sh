@@ -70,6 +70,18 @@ command -v iptables >/dev/null 2>&1 || fail "iptables tidak ditemukan. Pasang du
 if ! command -v ping >/dev/null 2>&1; then
   apt-get install -y -qq iputils-ping >/dev/null 2>&1 && ok "ping terpasang (untuk Tes Koneksi)" || warn "Gagal memasang ping, Tes Koneksi melewati langkah ping"
 fi
+# certbot + plugin Cloudflare: untuk HTTPS panel (menu Pengaturan > Domain & HTTPS)
+if ! command -v certbot >/dev/null 2>&1 || ! dpkg -s python3-certbot-dns-cloudflare >/dev/null 2>&1; then
+  echo "Memasang certbot (untuk HTTPS panel)..."
+  if DEBIAN_FRONTEND=noninteractive apt-get install -y -qq certbot python3-certbot-dns-cloudflare >/dev/null 2>&1 || \
+     { apt-get update -qq >/dev/null 2>&1 && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq certbot python3-certbot-dns-cloudflare >/dev/null 2>&1; }; then
+    ok "certbot terpasang (HTTPS panel siap dipakai)"
+  else
+    warn "Gagal memasang certbot. Domain Cloudflare tetap bisa dipakai, tetapi HTTPS panel tidak."
+  fi
+else
+  ok "certbot sudah ada"
+fi
 sysctl -qw net.ipv4.ip_forward=1 || true
 grep -qs '^net.ipv4.ip_forward *= *1' /etc/sysctl.conf /etc/sysctl.d/*.conf || echo 'net.ipv4.ip_forward = 1' > /etc/sysctl.d/99-vpn-acs.conf
 ok "IP forwarding aktif (dibutuhkan port forwarding)"
@@ -131,6 +143,9 @@ cat > "$APP_DIR/server.js" <<'SERVEREOF'
 "use strict";
 
 const http = require("http");
+const https = require("https");
+const net = require("net");
+const tls = require("tls");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
@@ -147,6 +162,20 @@ const IPSEC_SECRETS = ROOT + "/etc/ipsec.secrets";
 const ROUTE_SCRIPT = ROOT + "/etc/ppp/ip-up.d/vpn-acs-routes";
 const GENIE_ENV = ROOT + "/opt/genieacs/genieacs.env";
 const DRY_RUN = process.env.VPNACS_DRYRUN === "1"; // tidak menjalankan perintah ip
+const HISTORY_FILE = ROOT + "/opt/vpn-acs/history.json";
+const ACTIVITY_FILE = ROOT + "/opt/vpn-acs/activity.json";
+const CF_INI = ROOT + "/opt/vpn-acs/cloudflare.ini";
+const LE_LIVE = ROOT + "/etc/letsencrypt/live";
+// Alamat layanan luar (bisa diganti untuk pengujian)
+const TG_API = process.env.VPNACS_TG_API || "https://api.telegram.org";
+const CF_API = process.env.VPNACS_CF_API || "https://api.cloudflare.com/client/v4";
+const IP_TRACE = process.env.VPNACS_IP_TRACE || "https://cloudflare.com/cdn-cgi/trace";
+const DOH_URL = process.env.VPNACS_DOH || "https://cloudflare-dns.com/dns-query";
+const TICK_MS = parseInt(process.env.VPNACS_TICK_MS || "30000", 10);
+const MIN_MS = parseInt(process.env.VPNACS_MIN_MS || "60000", 10); // panjang 1 menit (diperkecil hanya untuk pengujian)
+const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
+const DAY_MS = 24 * 3600 * 1000;
+const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -306,10 +335,10 @@ function settings(d) {
 }
 
 // ---------- Jalankan perintah ----------
-function run(cmd, args) {
+function run(cmd, args, timeoutMs) {
   return new Promise((resolve) => {
     if (DRY_RUN && ((cmd === "ip" && args[0] === "route") || cmd === "iptables")) return resolve({ code: 0, out: "" });
-    execFile(cmd, args, { timeout: 15000 }, (err, stdout, stderr) => {
+    execFile(cmd, args, { timeout: timeoutMs || 15000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
       const code = !err ? 0 : err.code === "ENOENT" ? -2 : typeof err.code === "number" ? err.code : 1;
       resolve({ code, out: (stdout || "") + (stderr || "") });
     });
@@ -535,10 +564,17 @@ function mikrotikRemoveScript() {
     `:put "Pengaturan VPN ACS sudah dihapus."`,
   ].join("\n");
 }
-function siteView(s, st, peers) {
+function siteView(s, st, peers, h, now) {
   const real = parseCidr(s.realSubnet);
   const virt = parseCidr(s.virtualSubnet);
+  const online = !!(peers && peers[s.tunnelIp]);
+  const r = h && h.sites[s.id];
+  const up = h ? siteUptime(s, h, now || Date.now()) : null;
   return {
+    state: siteState(s, online),
+    installedAt: s.installedAt || null,
+    downSince: !online && r && r.state === "down" ? r.since : null,
+    uptime7: up ? up.d7 : null,
     id: s.id,
     name: s.name,
     note: s.note || "",
@@ -709,9 +745,10 @@ async function runTestStep(site, key, st) {
   const virt = parseCidr(site.virtualSubnet);
   const gw = intToIp(virt.net + 1);
   if (key === "vpn") {
-    return iface
-      ? { ok: true, detail: `Tersambung lewat ${iface}` }
-      : { ok: false, detail: "MikroTik belum tersambung ke VPS", hint: "Pastikan script MikroTik sudah dipasang, MikroTik punya internet, dan alamat VPS di Pengaturan benar." };
+    if (iface) return { ok: true, detail: `Tersambung lewat ${iface}` };
+    return site.installedAt
+      ? { ok: false, detail: "MikroTik belum tersambung ke VPS", hint: "Pastikan script MikroTik sudah dipasang, MikroTik punya internet, dan alamat VPS di Pengaturan benar." }
+      : { ok: false, detail: "Lokasi ini belum pernah tersambung (menunggu pemasangan)", hint: "Salin script dari tab Script MikroTik, tempel di Winbox → New Terminal, lalu tes lagi." };
   }
   if (key === "ping-mt") {
     const r = await run("ping", ["-c", "2", "-W", "1", site.tunnelIp]);
@@ -749,6 +786,742 @@ async function runTestStep(site, key, st) {
   return { ok: null, detail: "Tidak dikenal" };
 }
 
+// =====================================================================
+//  Utilitas umum: berkas JSON, waktu, HTTP keluar
+// =====================================================================
+function readJson(file, def) {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (e) {
+    return def;
+  }
+}
+function writeJson(file, obj) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = file + ".tmp";
+  fs.writeFileSync(tmp, JSON.stringify(obj), { mode: 0o600 });
+  fs.renameSync(tmp, file);
+}
+function tzName(d) {
+  const t = d && d.settings && d.settings.timezone;
+  return TIMEZONES[t] ? t : "Asia/Makassar";
+}
+const BULAN = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+function localDate(t, tz) {
+  return new Date(t + TIMEZONES[tz].off * 3600 * 1000);
+}
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+function fmtClock(t, tz, withDate) {
+  const x = localDate(t, tz);
+  const jam = `${pad2(x.getUTCHours())}.${pad2(x.getUTCMinutes())}`;
+  return withDate ? `${x.getUTCDate()} ${BULAN[x.getUTCMonth()]} ${jam}` : jam;
+}
+function fmtDur(ms) {
+  const mins = Math.round(ms / 60000);
+  if (mins < 1) return "kurang dari 1 menit";
+  const d = Math.floor(mins / 1440);
+  const h = Math.floor((mins % 1440) / 60);
+  const m = mins % 60;
+  const parts = [];
+  if (d) parts.push(d + " hari");
+  if (h) parts.push(h + " jam");
+  if (m && !d) parts.push(m + " menit");
+  return parts.slice(0, 2).join(" ");
+}
+function escHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+}
+function clampInt(v, min, max, def) {
+  const n = parseInt(v, 10);
+  if (isNaN(n)) return def;
+  return Math.min(max, Math.max(min, n));
+}
+// Permintaan HTTP(S) keluar; selalu resolve, tidak pernah throw
+function httpJson(method, urlStr, body, headers, timeoutMs) {
+  return new Promise((resolve) => {
+    let u;
+    try {
+      u = new URL(urlStr);
+    } catch (e) {
+      return resolve({ status: 0, error: "URL tidak valid" });
+    }
+    const mod = u.protocol === "http:" ? http : https;
+    const data = body == null ? null : Buffer.from(JSON.stringify(body));
+    const h = Object.assign({ Accept: "application/json", "User-Agent": "vpn-acs-panel" }, headers || {});
+    if (data) {
+      h["Content-Type"] = "application/json";
+      h["Content-Length"] = data.length;
+    }
+    const req = mod.request(u, { method, family: 4, headers: h, timeout: timeoutMs || 15000 }, (res) => {
+      const ch = [];
+      res.on("data", (c) => ch.push(c));
+      res.on("end", () => {
+        const text = Buffer.concat(ch).toString("utf8");
+        let json = null;
+        try {
+          json = JSON.parse(text);
+        } catch (e) {
+          json = null;
+        }
+        resolve({ status: res.statusCode, json, text });
+      });
+    });
+    req.on("timeout", () => req.destroy(new Error("waktu habis")));
+    req.on("error", (e) => resolve({ status: 0, error: e.message }));
+    if (data) req.write(data);
+    req.end();
+  });
+}
+
+// =====================================================================
+//  Log aktivitas
+// =====================================================================
+function logActivity(req, action, detail) {
+  try {
+    let a = readJson(ACTIVITY_FILE, []);
+    if (!Array.isArray(a)) a = [];
+    const now = Date.now();
+    a.push({ t: now, ip: req ? clientIp(req) : "sistem", a: action, d: String(detail || "").slice(0, 300) });
+    a = a.filter((x) => x.t >= now - RETENTION_MS);
+    if (a.length > 5000) a = a.slice(-5000);
+    writeJson(ACTIVITY_FILE, a);
+  } catch (e) {
+    console.error("Gagal menulis log aktivitas:", e.message);
+  }
+}
+
+// =====================================================================
+//  Riwayat koneksi & uptime
+// =====================================================================
+function loadHistory() {
+  const h = readJson(HISTORY_FILE, null) || {};
+  h.sites = h.sites || {};
+  return h;
+}
+function siteState(s, online) {
+  if (!s.installedAt) return "pending";
+  return online ? "up" : "down";
+}
+function makeDownIn(events, now) {
+  return (from, to) =>
+    events.reduce((a, e) => {
+      const s0 = Math.max(e.s, from);
+      const e0 = Math.min(e.e == null ? now : e.e, to);
+      return a + Math.max(0, e0 - s0);
+    }, 0);
+}
+function siteUptime(s, h, now) {
+  const start = s.installedAt ? Date.parse(s.installedAt) : null;
+  if (!start) return null;
+  const r = h.sites[s.id];
+  const events = (r && r.events) || [];
+  const downIn = makeDownIn(events, now);
+  const win = (ms) => {
+    const from = Math.max(now - ms, start);
+    const tot = now - from;
+    if (tot < 60000) return null;
+    return Math.max(0, Math.min(100, 100 * (1 - downIn(from, now) / tot)));
+  };
+  return { d1: win(DAY_MS), d7: win(7 * DAY_MS), d30: win(30 * DAY_MS), start, events, downIn };
+}
+function siteHistory(s, h, now, tz) {
+  const u = siteUptime(s, h, now);
+  if (!u) return { pending: true, tz: TIMEZONES[tz].label };
+  const off = TIMEZONES[tz].off * 3600 * 1000;
+  const todayStart = Math.floor((now + off) / DAY_MS) * DAY_MS - off;
+  const days = [];
+  for (let i = 29; i >= 0; i--) {
+    const ds = todayStart - i * DAY_MS;
+    const de = Math.min(ds + DAY_MS, now);
+    const x = localDate(ds, tz);
+    const label = `${x.getUTCDate()} ${BULAN[x.getUTCMonth()]}`;
+    if (de <= u.start) {
+      days.push({ label, status: "nodata" });
+      continue;
+    }
+    const from = Math.max(ds, u.start);
+    const down = u.downIn(from, de);
+    const count = u.events.filter((e) => e.s < de && (e.e == null ? now : e.e) > from).length;
+    const pct = 100 * (1 - down / Math.max(1, de - from));
+    days.push({ label, down, count, pct, status: down === 0 ? "ok" : down < 30 * 60000 ? "minor" : "major" });
+  }
+  const events = u.events
+    .slice(-100)
+    .reverse()
+    .map((e) => ({ s: e.s, e: e.e, dur: (e.e == null ? now : e.e) - e.s, open: e.e == null }));
+  const r = h.sites[s.id];
+  return {
+    pending: false,
+    tz: TIMEZONES[tz].label,
+    installedAt: s.installedAt,
+    uptime: { d1: u.d1, d7: u.d7, d30: u.d30 },
+    days,
+    events,
+    state: r ? r.state : null,
+    since: r ? r.since : null,
+  };
+}
+
+// =====================================================================
+//  Notifikasi Telegram
+// =====================================================================
+function tgConfig(d) {
+  const t = (d.settings && d.settings.telegram) || {};
+  const c = {
+    enabled: t.enabled !== false,
+    token: t.token || "",
+    botName: t.botName || "",
+    chatId: t.chatId || "",
+    chatTitle: t.chatTitle || "",
+    threadId: parseInt(t.threadId, 10) || 0,
+    threadName: t.threadName || "",
+    delayMin: clampInt(t.delayMin, 1, 1440, 3),
+    notifyRecovery: t.notifyRecovery !== false,
+    remindMin: t.remindMin == null ? 60 : clampInt(t.remindMin, 0, 1440, 60),
+    quietStart: t.quietStart || "",
+    quietEnd: t.quietEnd || "",
+  };
+  c.active = c.enabled && !!c.token && !!c.chatId;
+  return c;
+}
+function isQuiet(c, tz, now) {
+  if (!c.quietStart || !c.quietEnd || c.quietStart === c.quietEnd) return false;
+  const toMin = (v) => {
+    const [h, m] = v.split(":").map((x) => parseInt(x, 10));
+    return h * 60 + m;
+  };
+  const x = localDate(now || Date.now(), tz);
+  const cur = x.getUTCHours() * 60 + x.getUTCMinutes();
+  const s = toMin(c.quietStart);
+  const e = toMin(c.quietEnd);
+  return s < e ? cur >= s && cur < e : cur >= s || cur < e;
+}
+function tgErr(r) {
+  if (r.status === 0) return `VPS tidak bisa menghubungi Telegram (${r.error}).`;
+  const desc = (r.json && r.json.description) || `HTTP ${r.status}`;
+  const map = [
+    [/chat not found/i, "Grup tidak ditemukan. Pastikan bot sudah dimasukkan ke grup."],
+    [/thread not found|topic/i, "Topik tidak ditemukan. Klik Deteksi lalu pilih ulang topik."],
+    [/kicked|not a member/i, "Bot sudah dikeluarkan dari grup."],
+    [/not enough rights|have no rights|need administrator/i, "Bot tidak punya izin mengirim pesan di grup/topik ini. Jadikan bot admin."],
+    [/upgraded to a supergroup/i, "Grup berubah menjadi supergroup. Klik Deteksi lalu pilih grupnya lagi."],
+    [/terminated by other getUpdates|webhook/i, "Bot ini sedang dipakai aplikasi lain (webhook). Buat bot khusus untuk panel."],
+  ];
+  for (const [re, msg] of map) if (re.test(desc)) return msg;
+  if (r.status === 401 || r.status === 404 || /^(unauthorized|not found)$/i.test(desc)) return "Token bot salah atau bot sudah dihapus.";
+  return "Telegram menolak: " + desc;
+}
+async function tgCall(token, method, params) {
+  return httpJson("POST", `${TG_API}/bot${token}/${method}`, params || {}, null, 20000);
+}
+async function tgSend(c, text, silent) {
+  const params = { chat_id: c.chatId, text, parse_mode: "HTML", disable_web_page_preview: true, disable_notification: !!silent };
+  if (c.threadId) params.message_thread_id = c.threadId;
+  const r = await tgCall(c.token, "sendMessage", params);
+  if (r.json && r.json.ok) return { ok: true };
+  return { ok: false, error: tgErr(r), fatal: r.status >= 400 && r.status < 500 && r.status !== 429 };
+}
+const TG_STATUS = { lastOk: 0, lastError: "", lastErrorAt: 0 };
+const tgQueue = [];
+let tgBusy = false;
+function tgEnqueue(text) {
+  tgQueue.push({ text, created: Date.now() });
+  while (tgQueue.length > 50) tgQueue.shift();
+}
+async function tgFlush() {
+  if (tgBusy) return;
+  tgBusy = true;
+  try {
+    while (tgQueue.length) {
+      const d = loadData();
+      const c = tgConfig(d);
+      if (!c.active) {
+        tgQueue.length = 0;
+        break;
+      }
+      const it = tgQueue[0];
+      const r = await tgSend(c, it.text, isQuiet(c, tzName(d)));
+      if (r.ok) {
+        tgQueue.shift();
+        TG_STATUS.lastOk = Date.now();
+        TG_STATUS.lastError = "";
+        continue;
+      }
+      if (TG_STATUS.lastError !== r.error) logActivity(null, "Notifikasi Telegram gagal", r.error);
+      TG_STATUS.lastError = r.error;
+      TG_STATUS.lastErrorAt = Date.now();
+      console.error("Telegram gagal:", r.error);
+      // Pesan yang ditolak permanen atau sudah lebih dari 1 jam dibuang; lainnya dicoba lagi nanti
+      if (r.fatal || Date.now() - it.created > 3600 * 1000) {
+        tgQueue.shift();
+        continue;
+      }
+      break;
+    }
+  } finally {
+    tgBusy = false;
+  }
+}
+function siteLabel(s) {
+  return `<b>${escHtml(s.name)}</b>${s.note ? ` <i>(${escHtml(s.note)})</i>` : ""}`;
+}
+function listLines(items, fn) {
+  const max = 30;
+  const lines = items.slice(0, max).map(fn);
+  if (items.length > max) lines.push(`… dan ${items.length - max} lokasi lainnya`);
+  return lines.join("\n");
+}
+function msgDown(list, now, tz) {
+  if (list.length === 1) {
+    const x = list[0];
+    return `🔴 <b>VPN TERPUTUS</b>\n${siteLabel(x.s)}\nPutus sejak ${fmtClock(x.since, tz, true)} (${fmtDur(now - x.since)})`;
+  }
+  return `🔴 <b>${list.length} VPN TERPUTUS</b>\n` + listLines(list, (x) => `• ${siteLabel(x.s)} — sejak ${fmtClock(x.since, tz)}`);
+}
+function msgUp(list) {
+  if (list.length === 1) {
+    const x = list[0];
+    return `✅ <b>VPN TERSAMBUNG LAGI</b>\n${siteLabel(x.s)}\nSempat putus ${fmtDur(x.dur)}`;
+  }
+  return `✅ <b>${list.length} VPN TERSAMBUNG LAGI</b>\n` + listLines(list, (x) => `• ${siteLabel(x.s)} — putus ${fmtDur(x.dur)}`);
+}
+function msgRemind(list, now) {
+  return `⏰ <b>MASIH TERPUTUS</b>\n` + listLines(list, (x) => `• ${siteLabel(x.s)} — sudah ${fmtDur(now - x.since)}`);
+}
+
+// =====================================================================
+//  Pemantau: cek status VPN berkala -> riwayat + notifikasi
+// =====================================================================
+let monitorBusy = false;
+async function monitorTick() {
+  if (monitorBusy) return;
+  monitorBusy = true;
+  try {
+    const peers = await onlinePeers();
+    // Mulai di sini semua sinkron (tidak ada await) supaya tidak menimpa perubahan dari panel
+    const now = Date.now();
+    const d = loadData();
+    const h = loadHistory();
+    const tz = tzName(d);
+    const c = tgConfig(d);
+    const delay = c.delayMin * MIN_MS;
+    const remind = c.remindMin * MIN_MS;
+    let dataChanged = false;
+    const downList = [];
+    const upList = [];
+    const remindList = [];
+    const ids = new Set();
+    for (const s of d.sites) {
+      ids.add(s.id);
+      const online = !!peers[s.tunnelIp];
+      if (!s.installedAt) {
+        // Belum pernah tersambung = menunggu pemasangan: tidak dicatat, tidak dikirim notifikasi
+        if (!online) continue;
+        s.installedAt = new Date(now).toISOString();
+        dataChanged = true;
+        logActivity(null, "Lokasi tersambung pertama kali", s.name);
+      }
+      let r = h.sites[s.id];
+      if (!r) {
+        r = h.sites[s.id] = { state: online ? "up" : "down", since: now, events: [], alerted: false, lastRemind: 0 };
+        if (!online) r.events.push({ s: now, e: null });
+      } else if (online && r.state === "down") {
+        const ev = r.events[r.events.length - 1];
+        if (ev && ev.e == null) ev.e = now;
+        if (r.alerted) upList.push({ s, dur: now - r.since });
+        r.state = "up";
+        r.since = now;
+        r.alerted = false;
+        r.lastRemind = 0;
+      } else if (!online && r.state === "up") {
+        r.state = "down";
+        r.since = now;
+        r.alerted = false;
+        r.events.push({ s: now, e: null });
+      }
+      if (r.state === "down" && c.active) {
+        if (!r.alerted && now - r.since >= delay) {
+          downList.push({ s, since: r.since });
+          r.alerted = true;
+          r.lastRemind = now;
+        } else if (r.alerted && remind > 0 && now - (r.lastRemind || r.since) >= remind) {
+          remindList.push({ s, since: r.since });
+          r.lastRemind = now;
+        }
+      }
+    }
+    for (const id of Object.keys(h.sites)) if (!ids.has(id)) delete h.sites[id];
+    const cutoff = now - RETENTION_MS;
+    for (const r of Object.values(h.sites)) r.events = (r.events || []).filter((e) => e.e == null || e.e >= cutoff);
+    h.lastTick = now;
+    writeJson(HISTORY_FILE, h);
+    if (dataChanged) saveData(d);
+    if (c.active) {
+      if (downList.length) tgEnqueue(msgDown(downList, now, tz));
+      if (upList.length && c.notifyRecovery) tgEnqueue(msgUp(upList));
+      if (remindList.length) tgEnqueue(msgRemind(remindList, now));
+    }
+  } catch (e) {
+    console.error("Pemantau gagal:", e.message);
+  } finally {
+    monitorBusy = false;
+  }
+  tgFlush();
+}
+
+// Baca grup & topik yang pernah dilihat bot (dari getUpdates)
+async function tgDetect(token) {
+  const me = await tgCall(token, "getMe", {});
+  if (!(me.json && me.json.ok)) return { error: tgErr(me) };
+  const up = await tgCall(token, "getUpdates", { limit: 100, timeout: 0 });
+  if (!(up.json && up.json.ok)) return { error: tgErr(up) };
+  const chats = new Map();
+  const gone = new Set();
+  for (const u of up.json.result || []) {
+    const m = u.message || u.edited_message;
+    const cm = u.my_chat_member;
+    const chat = (m && m.chat) || (cm && cm.chat);
+    if (!chat || !["group", "supergroup"].includes(chat.type)) continue;
+    const id = String(chat.id);
+    if (m && m.migrate_to_chat_id) gone.add(id);
+    let c = chats.get(id);
+    if (!c) {
+      c = { id, title: chat.title || id, isForum: !!chat.is_forum, topics: new Map(), removed: false };
+      chats.set(id, c);
+    }
+    c.title = chat.title || c.title;
+    if (chat.is_forum) c.isForum = true;
+    if (cm) c.removed = ["left", "kicked"].includes(cm.new_chat_member && cm.new_chat_member.status);
+    else if (m) c.removed = false;
+    if (m && m.is_topic_message && m.message_thread_id) {
+      const tid = m.message_thread_id;
+      const nm =
+        (m.forum_topic_created && m.forum_topic_created.name) ||
+        (m.forum_topic_edited && m.forum_topic_edited.name) ||
+        (m.reply_to_message && m.reply_to_message.forum_topic_created && m.reply_to_message.forum_topic_created.name) ||
+        "";
+      if (nm || !c.topics.has(tid)) c.topics.set(tid, nm || c.topics.get(tid) || `Topik #${tid}`);
+    }
+  }
+  const list = [];
+  for (const c of chats.values()) {
+    if (gone.has(c.id) || c.removed) continue;
+    list.push({ id: c.id, title: c.title, isForum: c.isForum, topics: Array.from(c.topics, ([id, name]) => ({ id, name })) });
+  }
+  return { bot: { username: me.json.result.username, name: me.json.result.first_name }, chats: list };
+}
+
+// =====================================================================
+//  Cloudflare DNS + HTTPS (bertahap, gagal = dibatalkan)
+// =====================================================================
+function isHostname(v) {
+  return /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(v);
+}
+function certPaths(domain) {
+  const base = `${LE_LIVE}/${domain}`;
+  return { cert: `${base}/fullchain.pem`, key: `${base}/privkey.pem` };
+}
+function certExpiry(domain) {
+  try {
+    const x = new crypto.X509Certificate(fs.readFileSync(certPaths(domain).cert));
+    return Date.parse(x.validTo);
+  } catch (e) {
+    return null;
+  }
+}
+let CF_JOB = null;
+function cfSteps(withHttps) {
+  const s = [
+    { key: "token", label: "Cek token", desc: "Token Cloudflare valid dan aktif" },
+    { key: "zone", label: "Cek domain", desc: "Domain terdaftar dan aktif di akun Cloudflare" },
+    { key: "perm", label: "Cek izin DNS", desc: "Token boleh membaca DNS domain ini" },
+    { key: "ip", label: "IP publik VPS", desc: "Mendeteksi IP publik VPS ini" },
+    { key: "dns", label: "Record DNS", desc: "Membuat / memperbarui record A (DNS only, awan abu-abu)" },
+    { key: "resolve", label: "Cek ulang domain", desc: "Domain sudah mengarah ke IP VPS" },
+  ];
+  if (withHttps) s.push({ key: "cert", label: "Sertifikat HTTPS", desc: "Menerbitkan sertifikat Let's Encrypt (bisa 1–2 menit)" });
+  s.push({ key: "apply", label: "Terapkan", desc: withHttps ? "Alamat VPS diganti ke domain dan panel pindah ke HTTPS" : "Alamat VPS diganti ke domain" });
+  return s;
+}
+async function cfApi(job, method, p, body) {
+  const r = await httpJson(method, CF_API + p, body, { Authorization: "Bearer " + job.token }, 20000);
+  const j = r.json || {};
+  return { ok: !!j.success, result: j.result, errors: j.errors || [], status: r.status, error: r.error };
+}
+function cfErr(r) {
+  if (r.status === 0) return `VPS tidak bisa menghubungi Cloudflare (${r.error}).`;
+  const e = (r.errors || []).map((x) => (x.code ? `${x.message} [${x.code}]` : x.message)).join("; ");
+  return e || `HTTP ${r.status}`;
+}
+function cfPermErr(r) {
+  return r.status === 403 || (r.errors || []).some((x) => [10000, 9109, 1000].includes(x.code));
+}
+async function dohLookup(domain) {
+  const r = await httpJson("GET", `${DOH_URL}?name=${encodeURIComponent(domain)}&type=A`, null, { Accept: "application/dns-json" }, 10000);
+  const ans = ((r.json && r.json.Answer) || []).filter((a) => a.type === 1).map((a) => a.data);
+  return { ok: r.status === 200, ips: ans, error: r.error };
+}
+async function cfRunStep(job, key) {
+  const c = job.ctx;
+  if (key === "token") {
+    const r = await cfApi(job, "GET", "/user/tokens/verify");
+    if (r.ok) {
+      if (r.result && r.result.status !== "active") return { ok: false, detail: `Token tidak aktif (status: ${r.result.status})`, hint: "Aktifkan token di Cloudflare → My Profile → API Tokens, atau buat token baru." };
+      return { ok: true, detail: "Token aktif" };
+    }
+    // Token milik akun (bukan profil) tidak bisa dicek di /user; coba langsung baca zona
+    const z = await cfApi(job, "GET", "/zones?per_page=1");
+    if (z.ok) return { ok: true, detail: "Token valid" };
+    return {
+      ok: false,
+      detail: "Token ditolak Cloudflare: " + cfErr(r),
+      hint: 'Buat token di Cloudflare → My Profile → API Tokens → Create Token → template "Edit zone DNS" → Zone Resources: pilih domain Anda. Salin token-nya (bukan Global API Key).',
+    };
+  }
+  if (key === "zone") {
+    const labels = job.domain.split(".");
+    let zone = null;
+    let lastErr = null;
+    for (let i = 0; i <= labels.length - 2 && !zone; i++) {
+      const name = labels.slice(i).join(".");
+      const r = await cfApi(job, "GET", `/zones?name=${encodeURIComponent(name)}`);
+      if (r.ok && Array.isArray(r.result) && r.result.length) zone = r.result[0];
+      else if (!r.ok) lastErr = r;
+    }
+    if (!zone)
+      return {
+        ok: false,
+        detail: lastErr && cfPermErr(lastErr) ? "Token tidak boleh membaca domain ini" : "Domain tidak ditemukan di akun Cloudflare ini",
+        hint: "Pastikan domain sudah ditambahkan di Cloudflare dan token diberi akses ke domain tersebut (Zone Resources → Include → Specific zone → domain Anda).",
+      };
+    if (zone.status !== "active")
+      return { ok: false, detail: `Domain belum aktif di Cloudflare (status: ${zone.status})`, hint: "Ganti nameserver domain (di tempat Anda membeli domain) ke nameserver Cloudflare, lalu tunggu sampai statusnya Active." };
+    c.zone = { id: zone.id, name: zone.name };
+    return { ok: true, detail: `Zona ${zone.name} aktif` };
+  }
+  if (key === "perm") {
+    const r = await cfApi(job, "GET", `/zones/${c.zone.id}/dns_records?name=${encodeURIComponent(job.domain)}&per_page=100`);
+    if (!r.ok)
+      return {
+        ok: false,
+        detail: cfPermErr(r) ? "Token tidak punya izin DNS untuk domain ini" : "Gagal membaca DNS: " + cfErr(r),
+        hint: "Edit token di Cloudflare: Permissions → Zone → DNS → Edit, untuk domain ini.",
+      };
+    c.records = r.result || [];
+    return { ok: true, detail: c.records.length ? `Bisa membaca DNS · ${c.records.length} record untuk ${job.domain}` : `Bisa membaca DNS · ${job.domain} belum punya record` };
+  }
+  if (key === "ip") {
+    const r = await httpJson("GET", IP_TRACE, null, { Accept: "text/plain" }, 10000);
+    const m = (r.text || "").match(/^ip=(\d+\.\d+\.\d+\.\d+)$/m);
+    let ip = m ? m[1] : "";
+    if (!ip) ip = detectPublicIp();
+    if (!ip) return { ok: false, detail: "IP publik VPS tidak terdeteksi", hint: "Pastikan VPS terhubung ke internet." };
+    c.ip = ip;
+    return { ok: true, detail: `IP VPS: ${ip}` };
+  }
+  if (key === "dns") {
+    const recs = c.records || [];
+    const cname = recs.find((x) => x.type === "CNAME");
+    if (cname) return { ok: false, detail: `Sudah ada record CNAME untuk ${job.domain}`, hint: "Hapus record CNAME itu di dashboard Cloudflare, atau pakai subdomain lain." };
+    const as = recs.filter((x) => x.type === "A");
+    if (as.length > 1) return { ok: false, detail: `Ada ${as.length} record A untuk ${job.domain}`, hint: "Sisakan satu record A saja di dashboard Cloudflare, atau pakai subdomain lain." };
+    const warn = recs.some((x) => x.type === "AAAA") ? " · Perhatian: ada record AAAA, pastikan juga mengarah ke VPS ini" : "";
+    const permHint = "Edit token di Cloudflare: Permissions → Zone → DNS → Edit.";
+    if (as.length === 1) {
+      const a = as[0];
+      c.recordId = a.id;
+      if (a.content === c.ip && !a.proxied) return { ok: true, detail: `Record A sudah benar (${job.domain} → ${c.ip}), tidak diubah` + warn };
+      const r = await cfApi(job, "PATCH", `/zones/${c.zone.id}/dns_records/${a.id}`, { content: c.ip, proxied: false });
+      if (!r.ok) return { ok: false, detail: (cfPermErr(r) ? "Token tidak punya izin mengubah DNS" : "Gagal memperbarui record: ") + (cfPermErr(r) ? "" : cfErr(r)), hint: permHint };
+      c.prev = { id: a.id, content: a.content, proxied: !!a.proxied };
+      return { ok: true, detail: `Record A diperbarui: ${a.content}${a.proxied ? " (proxied)" : ""} → ${c.ip} (DNS only)` + warn };
+    }
+    const r = await cfApi(job, "POST", `/zones/${c.zone.id}/dns_records`, { type: "A", name: job.domain, content: c.ip, ttl: 1, proxied: false });
+    if (!r.ok) return { ok: false, detail: (cfPermErr(r) ? "Token tidak punya izin mengubah DNS" : "Gagal membuat record: ") + (cfPermErr(r) ? "" : cfErr(r)), hint: permHint };
+    c.created = r.result.id;
+    c.recordId = r.result.id;
+    return { ok: true, detail: `Record A dibuat: ${job.domain} → ${c.ip} (DNS only)` + warn };
+  }
+  if (key === "resolve") {
+    const until = Date.now() + 30000;
+    let last = null;
+    while (Date.now() < until) {
+      last = await dohLookup(job.domain);
+      if (last.ips.includes(c.ip)) return { ok: true, detail: `${job.domain} → ${c.ip}` };
+      await new Promise((z) => setTimeout(z, 3000));
+    }
+    return {
+      ok: false,
+      detail: last && last.ips.length ? `${job.domain} masih mengarah ke ${last.ips.join(", ")}` : `${job.domain} belum bisa ditemukan di DNS`,
+      hint: "DNS belum menyebar. Tunggu beberapa menit lalu coba lagi.",
+    };
+  }
+  if (key === "cert") {
+    const v = await run("certbot", ["--version"]);
+    if (v.code === -2) return { ok: false, detail: "certbot belum terpasang di VPS", hint: "Jalankan ulang: cd /root/suwazed-panel && git pull && bash install-vpn-acs.sh" };
+    try {
+      c.prevIni = fs.existsSync(CF_INI) ? fs.readFileSync(CF_INI, "utf8") : null;
+      fs.mkdirSync(path.dirname(CF_INI), { recursive: true });
+      fs.writeFileSync(CF_INI, `dns_cloudflare_api_token = ${job.token}\n`, { mode: 0o600 });
+      fs.chmodSync(CF_INI, 0o600);
+      c.iniWritten = true;
+    } catch (e) {
+      return { ok: false, detail: "Gagal menulis berkas token: " + e.message };
+    }
+    const r = await run(
+      "certbot",
+      ["certonly", "--non-interactive", "--agree-tos", "--register-unsafely-without-email", "--keep-until-expiring", "--dns-cloudflare", "--dns-cloudflare-credentials", CF_INI, "--dns-cloudflare-propagation-seconds", "30", "--cert-name", job.domain, "-d", job.domain],
+      300000,
+    );
+    if (r.code !== 0) {
+      const tail = r.out.trim().split("\n").filter(Boolean).slice(-3).join(" ").slice(0, 300);
+      return { ok: false, detail: "Sertifikat gagal terbit" + (tail ? `: ${tail}` : ""), hint: "Pastikan token punya izin DNS Edit. Let's Encrypt membatasi 5 kali gagal per jam, jadi tunggu sebentar sebelum mencoba lagi." };
+    }
+    try {
+      const p = certPaths(job.domain);
+      tls.createSecureContext({ cert: fs.readFileSync(p.cert), key: fs.readFileSync(p.key) });
+    } catch (e) {
+      return { ok: false, detail: "Berkas sertifikat tidak bisa dibaca: " + e.message };
+    }
+    const exp = certExpiry(job.domain);
+    return { ok: true, detail: exp ? `Sertifikat berlaku sampai ${fmtClock(exp, job.tz, true)}, diperpanjang otomatis` : "Sertifikat terbit" };
+  }
+  if (key === "apply") {
+    const d = loadData();
+    d.settings = d.settings || {};
+    const s = d.settings;
+    const before = s.publicIp || "";
+    if (!s.cloudflare) s.publicIpBeforeCf = before;
+    const hadHttps = !!(s.cloudflare && s.cloudflare.https);
+    s.publicIp = job.domain;
+    s.cloudflare = { domain: job.domain, zoneId: c.zone.id, zoneName: c.zone.name, recordId: c.recordId, ip: c.ip, https: job.https, token: job.token, appliedAt: new Date().toISOString() };
+    if (job.https) {
+      try {
+        await httpsEnable(job.domain);
+      } catch (e) {
+        return { ok: false, detail: "Panel gagal memakai sertifikat: " + e.message };
+      }
+    } else if (hadHttps) httpsDisable();
+    saveData(d);
+    return {
+      ok: true,
+      detail: `Alamat VPS sekarang ${job.domain}` + (job.https ? ` · Panel: https://${job.domain}:${PORT}` : ""),
+      url: job.https ? `https://${job.domain}:${PORT}/` : null,
+    };
+  }
+  return { ok: null, detail: "Langkah tidak dikenal" };
+}
+async function cfRollback(job) {
+  const c = job.ctx;
+  const notes = [];
+  try {
+    if (c.created) {
+      const r = await cfApi(job, "DELETE", `/zones/${c.zone.id}/dns_records/${c.created}`);
+      notes.push(r.ok ? "record DNS yang baru dibuat sudah dihapus" : "record DNS gagal dihapus otomatis, hapus manual di Cloudflare");
+    } else if (c.prev) {
+      const r = await cfApi(job, "PATCH", `/zones/${c.zone.id}/dns_records/${c.prev.id}`, { content: c.prev.content, proxied: c.prev.proxied });
+      notes.push(r.ok ? "record DNS dikembalikan seperti semula" : "record DNS gagal dikembalikan otomatis, cek di Cloudflare");
+    }
+  } catch (e) {
+    notes.push("pembatalan DNS gagal: " + e.message);
+  }
+  try {
+    if (c.iniWritten) {
+      if (c.prevIni == null) fs.unlinkSync(CF_INI);
+      else fs.writeFileSync(CF_INI, c.prevIni, { mode: 0o600 });
+    }
+  } catch (e) {
+    // abaikan
+  }
+  job.done = true;
+  return notes;
+}
+
+// =====================================================================
+//  HTTPS panel: satu port untuk http & https
+//  - HTTPS aktif: koneksi TLS diteruskan ke server https internal,
+//    permintaan http biasa diarahkan (301) ke https://domain:PORT
+// =====================================================================
+let httpsServer = null;
+let httpsPort = 0;
+let HTTPS_ON = false;
+let HTTPS_DOMAIN = "";
+let certMtime = 0;
+const PROXY_IPS = new Map(); // port lokal proxy -> IP asli klien
+function httpsEnable(domain) {
+  return new Promise((resolve, reject) => {
+    try {
+      const p = certPaths(domain);
+      const opts = { cert: fs.readFileSync(p.cert), key: fs.readFileSync(p.key) };
+      certMtime = fs.statSync(p.cert).mtimeMs;
+      if (httpsServer) {
+        httpsServer.setSecureContext(opts);
+        HTTPS_ON = true;
+        HTTPS_DOMAIN = domain;
+        return resolve();
+      }
+      httpsServer = https.createServer(opts, appHandler);
+      httpsServer.on("error", reject);
+      httpsServer.listen(0, "127.0.0.1", () => {
+        httpsPort = httpsServer.address().port;
+        HTTPS_ON = true;
+        HTTPS_DOMAIN = domain;
+        resolve();
+      });
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+function httpsDisable() {
+  HTTPS_ON = false;
+}
+function certReloadCheck() {
+  if (!HTTPS_ON) return;
+  try {
+    const m = fs.statSync(certPaths(HTTPS_DOMAIN).cert).mtimeMs;
+    if (m !== certMtime) {
+      console.log("Sertifikat diperbarui, memuat ulang");
+      httpsEnable(HTTPS_DOMAIN).catch((e) => console.error("Muat ulang sertifikat gagal:", e.message));
+    }
+  } catch (e) {
+    // abaikan
+  }
+}
+function frontHandler(sock) {
+  sock.on("error", () => {});
+  if (!HTTPS_ON) return httpServer.emit("connection", sock);
+  sock.setTimeout(20000, () => sock.destroy());
+  sock.once("data", (buf) => {
+    sock.setTimeout(0);
+    if (buf[0] !== 0x16) {
+      const m = buf.toString("latin1").match(/^[A-Z]+ (\S+) HTTP/);
+      const p = m && m[1].startsWith("/") ? m[1] : "/";
+      sock.end(`HTTP/1.1 301 Moved Permanently\r\nLocation: https://${HTTPS_DOMAIN}:${PORT}${p}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`);
+      return;
+    }
+    sock.pause();
+    const remote = sock.remoteAddress;
+    let key = 0;
+    const up = net.connect({ host: "127.0.0.1", port: httpsPort }, () => {
+      key = up.localPort;
+      PROXY_IPS.set(key, remote);
+      up.write(buf);
+      sock.pipe(up);
+      up.pipe(sock);
+      sock.resume();
+    });
+    up.on("error", () => sock.destroy());
+    up.on("close", () => {
+      if (key) PROXY_IPS.delete(key);
+      sock.destroy();
+    });
+    sock.on("close", () => up.destroy());
+  });
+}
+
 // ---------- Sesi & keamanan login ----------
 const sessions = new Map();
 const loginFails = new Map();
@@ -777,7 +1550,12 @@ function authed(req) {
   return true;
 }
 function clientIp(req) {
-  return (req.socket.remoteAddress || "").replace(/^::ffff:/, "");
+  let ip = req.socket.remoteAddress || "";
+  if (req.socket.encrypted && PROXY_IPS.has(req.socket.remotePort)) ip = PROXY_IPS.get(req.socket.remotePort);
+  return ip.replace(/^::ffff:/, "");
+}
+function cookieFlags(req) {
+  return "HttpOnly; SameSite=Strict; Path=/" + (req.socket.encrypted ? "; Secure" : "");
 }
 
 // ---------- HTTP ----------
@@ -827,6 +1605,14 @@ async function handleApi(req, res, url) {
 
   if (method !== "GET" && !(req.headers["content-type"] || "").includes("application/json"))
     return send(res, 415, { error: "Content-Type harus application/json" });
+  let body = {};
+  if (method !== "GET") {
+    try {
+      body = await readBody(req);
+    } catch (e) {
+      return send(res, 400, { error: "Data yang dikirim tidak valid." });
+    }
+  }
 
   // --- Login ---
   if (p === "/api/login" && method === "POST") {
@@ -836,27 +1622,27 @@ async function handleApi(req, res, url) {
       const sec = Math.ceil((f.until - Date.now()) / 1000);
       return send(res, 429, { error: `Terlalu banyak percobaan. Coba lagi dalam ${sec} detik.` });
     }
-    const body = await readBody(req);
     const d = loadData();
     if (!checkPassword(body.password || "", d.admin)) {
       f.n += 1;
       if (f.n >= 5) {
         f.until = Date.now() + 5 * 60 * 1000;
         f.n = 0;
-      }
+        logActivity(req, "Login diblokir", "5 kali salah password, diblokir 5 menit");
+      } else logActivity(req, "Login gagal", "Password salah");
       loginFails.set(ip, f);
       await new Promise((r) => setTimeout(r, 800));
       return send(res, 401, { error: "Password salah." });
     }
     loginFails.delete(ip);
     const t = newSession();
-    return send(res, 200, { ok: true }, {
-      "Set-Cookie": `vpnacs=${t}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL / 1000}`,
-    });
+    logActivity(req, "Login berhasil", "");
+    return send(res, 200, { ok: true }, { "Set-Cookie": `vpnacs=${t}; ${cookieFlags(req)}; Max-Age=${SESSION_TTL / 1000}` });
   }
   if (p === "/api/logout" && method === "POST") {
+    if (authed(req)) logActivity(req, "Logout", "");
     sessions.delete(getCookie(req, "vpnacs"));
-    return send(res, 200, { ok: true }, { "Set-Cookie": "vpnacs=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0" });
+    return send(res, 200, { ok: true }, { "Set-Cookie": `vpnacs=; ${cookieFlags(req)}; Max-Age=0` });
   }
   if (p === "/api/me" && method === "GET") return send(res, 200, { loggedIn: authed(req) });
 
@@ -867,6 +1653,11 @@ async function handleApi(req, res, url) {
     const d = loadData();
     const st = settings(d);
     const peers = await onlinePeers();
+    const h = loadHistory();
+    const now = Date.now();
+    const tg = tgConfig(d);
+    const cf = (d.settings && d.settings.cloudflare) || null;
+    const tz = tzName(d);
     return send(res, 200, {
       settings: {
         publicIp: st.publicIp,
@@ -881,17 +1672,186 @@ async function handleApi(req, res, url) {
         tunnelStatic: `${intToIp(st.tun.first)} - ${intToIp(st.tun.last)}`,
         tunnelPool: `${st.tun.poolStart} - ${st.tun.poolEnd}`,
         tunnelMax: st.tun.last - st.tun.first + 1,
-      presets: SERVICE_PRESETS,
-      autoPortStart: FWD_AUTO_START,
-      reservedPorts: Array.from(RESERVED_PORTS),
+        presets: SERVICE_PRESETS,
+        autoPortStart: FWD_AUTO_START,
+        reservedPorts: Array.from(RESERVED_PORTS),
+        port: PORT,
+        timezone: tz,
+        timezones: Object.entries(TIMEZONES).map(([id, v]) => ({ id, label: v.label })),
+        telegram: {
+          enabled: tg.enabled,
+          active: tg.active,
+          tokenSet: !!tg.token,
+          tokenMask: tg.token ? tg.token.split(":")[0] + ":••••" + tg.token.slice(-4) : "",
+          botName: tg.botName,
+          chatId: tg.chatId,
+          chatTitle: tg.chatTitle,
+          threadId: tg.threadId,
+          threadName: tg.threadName,
+          delayMin: tg.delayMin,
+          notifyRecovery: tg.notifyRecovery,
+          remindMin: tg.remindMin,
+          quietStart: tg.quietStart,
+          quietEnd: tg.quietEnd,
+          lastOk: TG_STATUS.lastOk,
+          lastError: TG_STATUS.lastError,
+          lastErrorAt: TG_STATUS.lastErrorAt,
+        },
+        cloudflare: cf
+          ? { domain: cf.domain, zoneName: cf.zoneName, ip: cf.ip, https: !!cf.https, httpsActive: HTTPS_ON, appliedAt: cf.appliedAt, certExpiry: cf.https ? certExpiry(cf.domain) : null, publicIpBefore: d.settings.publicIpBeforeCf || "" }
+          : null,
       },
-      sites: d.sites.map((s) => siteView(s, st, peers)),
+      sites: d.sites.map((s) => siteView(s, st, peers, h, now)),
     });
+  }
+
+  // --- Log aktivitas ---
+  if (p === "/api/activity" && method === "GET") {
+    const q = String(url.searchParams.get("q") || "").trim().toLowerCase();
+    let a = readJson(ACTIVITY_FILE, []);
+    if (!Array.isArray(a)) a = [];
+    a = a.slice().reverse();
+    if (q) a = a.filter((x) => [x.a, x.d, x.ip].join(" ").toLowerCase().includes(q));
+    return send(res, 200, { total: a.length, items: a.slice(0, 300), tz: TIMEZONES[tzName(loadData())].label });
+  }
+
+  // --- Telegram ---
+  if (p.startsWith("/api/telegram/") && method === "POST") {
+    const d = loadData();
+    const saved = tgConfig(d);
+    const token = String(body.token || "").trim() || saved.token;
+    if (!token) return send(res, 400, { error: "Isi token bot dulu." });
+    if (!/^\d{5,}:[A-Za-z0-9_-]{30,}$/.test(token)) return send(res, 400, { error: "Format token salah. Contoh: 123456789:AAH…  (salin dari @BotFather)" });
+    if (p === "/api/telegram/detect") {
+      const r = await tgDetect(token);
+      if (r.error) return send(res, 400, { error: r.error });
+      return send(res, 200, r);
+    }
+    if (p === "/api/telegram/test") {
+      const chatId = String(body.chatId || saved.chatId || "").trim();
+      if (!chatId) return send(res, 400, { error: "Pilih grup dulu (klik Deteksi grup & topik)." });
+      const c = { token, chatId, threadId: parseInt(body.threadId, 10) || 0 };
+      const tz = tzName(d);
+      const r = await tgSend(c, `✅ <b>Tes notifikasi</b>\nPanel VPN ACS terhubung. Notifikasi VPN terputus akan dikirim ke sini.\n<i>${fmtClock(Date.now(), tz, true)} ${TIMEZONES[tz].label}</i>`, false);
+      if (!r.ok) return send(res, 400, { error: r.error });
+      logActivity(req, "Tes notifikasi Telegram", body.chatTitle || chatId);
+      return send(res, 200, { ok: true });
+    }
+  }
+  if (p === "/api/telegram" && method === "PUT") {
+    const d = loadData();
+    d.settings = d.settings || {};
+    const old = d.settings.telegram || {};
+    const t = Object.assign({}, old);
+    if (body.clear) {
+      delete d.settings.telegram;
+      saveData(d);
+      tgQueue.length = 0;
+      logActivity(req, "Telegram dihapus", "Token dan grup dihapus dari panel");
+      return send(res, 200, { ok: true });
+    }
+    const token = String(body.token || "").trim();
+    if (token) {
+      if (!/^\d{5,}:[A-Za-z0-9_-]{30,}$/.test(token)) return send(res, 400, { error: "Format token salah. Contoh: 123456789:AAH…  (salin dari @BotFather)" });
+      t.token = token;
+    }
+    if (body.botName !== undefined) t.botName = String(body.botName || "").slice(0, 64);
+    if (body.chatId !== undefined) {
+      const cid = String(body.chatId || "").trim();
+      if (cid && !/^-?\d+$/.test(cid)) return send(res, 400, { error: "ID grup tidak valid." });
+      t.chatId = cid;
+      t.chatTitle = String(body.chatTitle || "").slice(0, 128);
+      t.threadId = parseInt(body.threadId, 10) || 0;
+      t.threadName = t.threadId ? String(body.threadName || "").slice(0, 128) : "";
+    }
+    const hm = (v) => v === "" || /^([01]\d|2[0-3]):[0-5]\d$/.test(v);
+    const qs = String(body.quietStart || "");
+    const qe = String(body.quietEnd || "");
+    if (!hm(qs) || !hm(qe)) return send(res, 400, { error: "Jam tenang harus berformat JJ:MM, contoh 23:00." });
+    if (!!qs !== !!qe) return send(res, 400, { error: "Isi jam mulai dan jam selesai jam tenang, atau kosongkan keduanya." });
+    const delay = parseInt(body.delayMin, 10);
+    if (!(delay >= 1 && delay <= 1440)) return send(res, 400, { error: "Jeda sebelum lapor harus 1–1440 menit." });
+    const remind = parseInt(body.remindMin, 10);
+    if (!(remind === 0 || (remind >= 10 && remind <= 1440))) return send(res, 400, { error: "Pengingat harus 0 (mati) atau 10–1440 menit." });
+    t.enabled = body.enabled !== false;
+    t.delayMin = delay;
+    t.remindMin = remind;
+    t.notifyRecovery = body.notifyRecovery !== false;
+    t.quietStart = qs;
+    t.quietEnd = qe;
+    if (t.enabled && !t.token) return send(res, 400, { error: "Isi token bot dulu." });
+    if (t.enabled && !t.chatId) return send(res, 400, { error: "Pilih grup tujuan dulu (klik Deteksi grup & topik)." });
+    if (body.timezone !== undefined && TIMEZONES[body.timezone]) d.settings.timezone = body.timezone;
+    d.settings.telegram = t;
+    saveData(d);
+    logActivity(req, "Pengaturan Telegram disimpan", `${t.enabled ? "Aktif" : "Nonaktif"} · ${t.chatTitle || t.chatId || "-"}${t.threadName ? " / " + t.threadName : ""} · jeda ${t.delayMin} menit`);
+    return send(res, 200, { ok: true });
+  }
+
+  // --- Cloudflare ---
+  if (p === "/api/cloudflare/start" && method === "POST") {
+    const d = loadData();
+    const saved = (d.settings && d.settings.cloudflare) || {};
+    const domain = String(body.domain || "").trim().toLowerCase().replace(/\.$/, "");
+    if (!isHostname(domain)) return send(res, 400, { error: "Domain tidak valid. Contoh: vpn.domainanda.com" });
+    const token = String(body.token || "").trim() || saved.token || "";
+    if (!token) return send(res, 400, { error: "Isi API token Cloudflare." });
+    if (!/^[A-Za-z0-9_-]{20,}$/.test(token)) return send(res, 400, { error: "Format token tidak valid. Pakai API Token (bukan Global API Key)." });
+    if (CF_JOB && !CF_JOB.done) await cfRollback(CF_JOB);
+    CF_JOB = { id: crypto.randomBytes(8).toString("hex"), domain, token, https: body.https !== false, tz: tzName(d), steps: cfSteps(body.https !== false), idx: 0, ctx: {}, created: Date.now(), done: false };
+    return send(res, 200, { jobId: CF_JOB.id, steps: CF_JOB.steps });
+  }
+  if (p === "/api/cloudflare/step" && method === "POST") {
+    const job = CF_JOB;
+    if (!job || job.id !== body.jobId || job.done) return send(res, 400, { error: "Proses sudah berakhir. Mulai ulang." });
+    const step = job.steps[job.idx];
+    if (!step || step.key !== body.key) return send(res, 400, { error: "Urutan langkah tidak sesuai." });
+    let r;
+    try {
+      r = await cfRunStep(job, step.key);
+    } catch (e) {
+      r = { ok: false, detail: "Terjadi kesalahan: " + e.message };
+    }
+    if (r.ok === false) {
+      const notes = await cfRollback(job);
+      r.rolledBack = true;
+      r.rollbackNote = "Dibatalkan, pengaturan tetap seperti semula" + (notes.length ? ` (${notes.join(", ")})` : "") + ".";
+      logActivity(req, "Cloudflare gagal", `${job.domain}: ${step.label} — ${r.detail}`);
+    } else {
+      job.idx++;
+      if (step.key === "apply") {
+        job.done = true;
+        logActivity(req, "Cloudflare diterapkan", `${job.domain} → ${job.ctx.ip}${job.https ? " + HTTPS" : ""}`);
+      }
+    }
+    return send(res, 200, Object.assign({ key: step.key }, r));
+  }
+  if (p === "/api/cloudflare/cancel" && method === "POST") {
+    if (CF_JOB && CF_JOB.id === body.jobId && !CF_JOB.done) await cfRollback(CF_JOB);
+    return send(res, 200, { ok: true });
+  }
+  if (p === "/api/cloudflare/remove" && method === "POST") {
+    const d = loadData();
+    const s = d.settings || {};
+    if (!s.cloudflare) return send(res, 400, { error: "Cloudflare belum dipakai." });
+    const dom = s.cloudflare.domain;
+    s.publicIp = s.publicIpBeforeCf && s.publicIpBeforeCf !== dom ? s.publicIpBeforeCf : "";
+    delete s.cloudflare;
+    delete s.publicIpBeforeCf;
+    d.settings = s;
+    saveData(d);
+    httpsDisable();
+    try {
+      fs.unlinkSync(CF_INI);
+    } catch (e) {
+      // abaikan
+    }
+    logActivity(req, "Cloudflare dilepas", `${dom} tidak dipakai lagi, kembali ke ${s.publicIp || "IP otomatis"}`);
+    return send(res, 200, { ok: true });
   }
 
   // --- Tambah lokasi ---
   if (p === "/api/sites" && method === "POST") {
-    const body = await readBody(req);
     const d = loadData();
     const err = validateSite(d, body, null);
     if (err) return send(res, 400, { error: err });
@@ -920,15 +1880,17 @@ async function handleApi(req, res, url) {
       virtualSubnet,
       forwards: [],
       createdAt: new Date().toISOString(),
+      installedAt: null,
     };
     d.sites.push(site);
     saveData(d);
+    logActivity(req, "Lokasi ditambah", `${site.name} · ONT ${site.realSubnet} → virtual ${site.virtualSubnet}`);
     await applyAll(d);
     const st = settings(d);
-    return send(res, 200, { ok: true, site: siteView(site, st, await onlinePeers()) });
+    return send(res, 200, { ok: true, site: siteView(site, st, await onlinePeers(), loadHistory()) });
   }
 
-  // --- Ubah / hapus / tes lokasi ---
+  // --- Port forwarding ---
   const mf = p.match(/^\/api\/sites\/([a-f0-9]{12})\/forwards(\/([a-f0-9]{8}))?$/);
   if (mf) {
     const d = loadData();
@@ -936,25 +1898,27 @@ async function handleApi(req, res, url) {
     if (!site) return send(res, 404, { error: "Lokasi tidak ditemukan." });
     site.forwards = site.forwards || [];
     if (!mf[3] && method === "POST") {
-      const body = await readBody(req);
       const r = validateForward(d, site, body);
       if (r.error) return send(res, 400, { error: r.error });
       site.forwards.push(r.fwd);
       saveData(d);
+      logActivity(req, "Remote ditambah", `${site.name}: ${r.fwd.label} · port publik ${r.fwd.publicPort} → ${fwdTarget(site, r.fwd)}:${r.fwd.targetPort}`);
       await applyAll(d);
       return send(res, 200, { ok: true });
     }
     if (mf[3] && method === "DELETE") {
-      const before = site.forwards.length;
-      site.forwards = site.forwards.filter((f) => f.id !== mf[3]);
-      if (site.forwards.length === before) return send(res, 404, { error: "Port forwarding tidak ditemukan." });
+      const f = site.forwards.find((x) => x.id === mf[3]);
+      if (!f) return send(res, 404, { error: "Port forwarding tidak ditemukan." });
+      site.forwards = site.forwards.filter((x) => x.id !== mf[3]);
       saveData(d);
+      logActivity(req, "Remote dihapus", `${site.name}: ${f.label} · port publik ${f.publicPort}`);
       await applyAll(d);
       return send(res, 200, { ok: true });
     }
   }
 
-  const m = p.match(/^\/api\/sites\/([a-f0-9]{12})(\/(test|test-plan|test-step|reset-password))?$/);
+  // --- Ubah / hapus / tes / riwayat lokasi ---
+  const m = p.match(/^\/api\/sites\/([a-f0-9]{12})(\/(test|test-plan|test-step|reset-password|history))?$/);
   if (m) {
     const d = loadData();
     const site = d.sites.find((s) => s.id === m[1]);
@@ -962,7 +1926,6 @@ async function handleApi(req, res, url) {
     const action = m[3];
 
     if (!action && method === "PUT") {
-      const body = await readBody(req);
       const err = validateSite(d, body, site);
       if (err) return send(res, 400, { error: err });
       const sub = parseCidr(body.realSubnet);
@@ -974,34 +1937,46 @@ async function handleApi(req, res, url) {
         newVirt = allocVirtual(d, sub.prefix, site.id);
         if (!newVirt) return send(res, 400, { error: "Rentang IP virtual otomatis penuh. Isi IP virtual secara manual." });
       }
+      const changes = [];
+      const newName = String(body.name).trim();
+      if (newName !== site.name) changes.push(`nama ${site.name} → ${newName}`);
+      if (sub.text !== site.realSubnet) changes.push(`subnet ONT ${site.realSubnet} → ${sub.text}`);
       if (newVirt !== site.virtualSubnet) {
+        changes.push(`IP virtual ${site.virtualSubnet} → ${newVirt}`);
         removed.push(site.virtualSubnet);
         site.virtualSubnet = newVirt;
       }
-      site.name = String(body.name).trim();
-      site.note = String(body.note || "").trim().slice(0, 120);
+      const newNote = String(body.note || "").trim().slice(0, 120);
+      if (newNote !== (site.note || "")) changes.push("catatan");
+      site.name = newName;
+      site.note = newNote;
       site.realSubnet = sub.text;
       saveData(d);
+      logActivity(req, "Lokasi diubah", `${site.name}${changes.length ? ": " + changes.join(", ") : " (tanpa perubahan)"}`);
       await applyAll(d, removed);
       return send(res, 200, { ok: true });
     }
     if (!action && method === "DELETE") {
       d.sites = d.sites.filter((s) => s.id !== site.id);
       saveData(d);
+      logActivity(req, "Lokasi dihapus", `${site.name} · ${site.virtualSubnet}`);
       await applyAll(d, [site.virtualSubnet]);
       return send(res, 200, { ok: true });
     }
     if (action === "reset-password" && method === "POST") {
       site.password = randomPassword(16);
       saveData(d);
+      logActivity(req, "Password VPN diganti", site.name);
       await applyAll(d);
       return send(res, 200, { ok: true });
+    }
+    if (action === "history" && method === "GET") {
+      return send(res, 200, siteHistory(site, loadHistory(), Date.now(), tzName(d)));
     }
     if (action === "test-plan" && method === "GET") {
       return send(res, 200, { steps: testPlan(site) });
     }
     if (action === "test-step" && method === "POST") {
-      const body = await readBody(req);
       const step = testPlan(site).find((x) => x.key === body.key);
       if (!step) return send(res, 400, { error: "Langkah tes tidak dikenal." });
       const r = await runTestStep(site, step.key, settings(d));
@@ -1021,17 +1996,24 @@ async function handleApi(req, res, url) {
 
   // --- Pengaturan ---
   if (p === "/api/settings" && method === "PUT") {
-    const body = await readBody(req);
     const d = loadData();
     d.settings = d.settings || {};
+    const logs = [];
     if (body.publicIp !== undefined) {
       const v = String(body.publicIp).trim().toLowerCase();
-      const isHost = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(v);
-      if (v && ipToInt(v) === null && !isHost)
+      if (v && ipToInt(v) === null && !isHostname(v))
         return send(res, 400, { error: "Alamat VPS tidak valid. Isi IP publik (103.20.30.40) atau domain (vpn.domain.com)." });
+      if (v !== (d.settings.publicIp || "")) logs.push(["Alamat VPS diubah", `${d.settings.publicIp || "(otomatis)"} → ${v || "(otomatis)"}`]);
       d.settings.publicIp = v;
     }
-    if (body.useIpsec !== undefined) d.settings.useIpsec = !!body.useIpsec;
+    if (body.useIpsec !== undefined && !!body.useIpsec !== !!d.settings.useIpsec) {
+      logs.push(["IPsec " + (body.useIpsec ? "diaktifkan" : "dimatikan"), ""]);
+      d.settings.useIpsec = !!body.useIpsec;
+    }
+    if (body.timezone !== undefined && TIMEZONES[body.timezone] && body.timezone !== tzName(d)) {
+      logs.push(["Zona waktu diubah", TIMEZONES[body.timezone].label]);
+      d.settings.timezone = body.timezone;
+    }
     let tunnelChanged = false;
     if (body.tunnelNet !== undefined && String(body.tunnelNet).trim() !== tun(d).net) {
       const t = parseCidr(body.tunnelNet);
@@ -1039,7 +2021,7 @@ async function handleApi(req, res, url) {
       if (!t.aligned) return send(res, 400, { error: `Tulis dari alamat awalnya. Mungkin maksud Anda ${t.text}` });
       if (t.prefix < 16 || t.prefix > 28) return send(res, 400, { error: "Ukuran jaringan VPN harus antara /16 sampai /28." });
       const priv = [parseCidr("10.0.0.0/8"), parseCidr("172.16.0.0/12"), parseCidr("192.168.0.0/16"), parseCidr("100.64.0.0/10")];
-      if (!priv.some((p) => t.net >= p.net && t.net + t.size <= p.net + p.size))
+      if (!priv.some((x) => t.net >= x.net && t.net + t.size <= x.net + x.size))
         return send(res, 400, { error: "Jaringan VPN harus memakai IP privat (10.x, 172.16-31.x, 192.168.x, atau 100.64-127.x)." });
       if (overlap(t, parseCidr(VIRTUAL_POOL))) return send(res, 400, { error: `Bentrok dengan rentang IP virtual otomatis ${VIRTUAL_POOL}.` });
       for (const o of d.sites) {
@@ -1066,6 +2048,7 @@ async function handleApi(req, res, url) {
         used.add(n);
         site.tunnelIp = intToIp(n);
       }
+      logs.push(["Jaringan VPN diganti", `${oldT.net} → ${t.text}`]);
       d.settings.tunnelNet = t.text;
       tunnelChanged = true;
     }
@@ -1073,8 +2056,10 @@ async function handleApi(req, res, url) {
       if (!checkPassword(body.oldPassword || "", d.admin)) return send(res, 400, { error: "Password lama salah." });
       if (String(body.newPassword).length < 8) return send(res, 400, { error: "Password baru minimal 8 karakter." });
       d.admin = hashPassword(body.newPassword);
+      logs.push(["Password admin diganti", ""]);
     }
     saveData(d);
+    for (const [a, x] of logs) logActivity(req, a, x);
     if (tunnelChanged) {
       syncXl2tpd(d);
       await applyAll(d);
@@ -1087,17 +2072,19 @@ async function handleApi(req, res, url) {
   return send(res, 404, { error: "Tidak ditemukan." });
 }
 
-const server = http.createServer(async (req, res) => {
+async function appHandler(req, res) {
   try {
     const url = new URL(req.url, "http://localhost");
     if (url.pathname.startsWith("/api/")) return await handleApi(req, res, url);
     if (url.pathname === "/" || url.pathname === "/index.html") {
-      res.writeHead(200, {
+      const h = {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
         "X-Frame-Options": "DENY",
         "X-Content-Type-Options": "nosniff",
-      });
+      };
+      if (req.socket.encrypted) h["Strict-Transport-Security"] = "max-age=86400";
+      res.writeHead(200, h);
       return res.end(indexHtml());
     }
     send(res, 404, "Tidak ditemukan");
@@ -1105,7 +2092,8 @@ const server = http.createServer(async (req, res) => {
     console.error(e);
     send(res, 500, { error: "Terjadi kesalahan di server: " + e.message });
   }
-});
+}
+const httpServer = http.createServer(appHandler);
 
 if (process.argv[2] === "--set-password") {
   const pw = process.argv[3] || "";
@@ -1123,6 +2111,21 @@ if (process.argv[2] === "--set-password") {
   (async () => {
     const d = loadData();
     if (!d.admin) console.error("Password admin belum diset. Jalankan: node server.js --set-password PASSWORD");
+    // Lokasi dari versi lama dianggap sudah terpasang (bukan "menunggu pemasangan")
+    if (!d.v2) {
+      for (const s of d.sites || []) if (s.installedAt === undefined) s.installedAt = s.createdAt || new Date().toISOString();
+      d.v2 = true;
+      saveData(d);
+    }
+    const cf = d.settings && d.settings.cloudflare;
+    if (cf && cf.https) {
+      try {
+        await httpsEnable(cf.domain);
+        console.log(`HTTPS aktif untuk ${cf.domain}`);
+      } catch (e) {
+        console.error("HTTPS tidak bisa diaktifkan, panel tetap http:", e.message);
+      }
+    }
     try {
       if (syncXl2tpd(d)) {
         console.log("xl2tpd.conf disesuaikan dengan jaringan VPN panel, restart xl2tpd");
@@ -1132,9 +2135,11 @@ if (process.argv[2] === "--set-password") {
     } catch (e) {
       console.error("Gagal sinkron awal:", e.message);
     }
+    setTimeout(monitorTick, Math.min(5000, TICK_MS));
+    setInterval(monitorTick, TICK_MS);
   })();
-  // Pasang ulang aturan firewall panel jika terhapus (mis. iptables dimuat ulang saat boot)
   setInterval(async () => {
+    // Pasang ulang aturan firewall panel jika terhapus (mis. iptables dimuat ulang saat boot)
     try {
       const chk = await ipt(["-t", "nat", "-C", "PREROUTING", "-j", "VPNACS_PRE"]);
       const chk2 = await ipt(["-C", "FORWARD", "-j", "VPNACS_FWD"]);
@@ -1145,8 +2150,15 @@ if (process.argv[2] === "--set-password") {
     } catch (e) {
       console.error("Cek firewall gagal:", e.message);
     }
+    // Proses Cloudflare yang ditinggal lebih dari 10 menit dibatalkan
+    if (CF_JOB && !CF_JOB.done && Date.now() - CF_JOB.created > 10 * 60 * 1000) {
+      await cfRollback(CF_JOB);
+      logActivity(null, "Cloudflare dibatalkan", `${CF_JOB.domain}: proses ditinggal lebih dari 10 menit`);
+    }
   }, 60 * 1000);
-  server.listen(PORT, HOST, () => console.log(`Panel VPN ACS berjalan di http://${HOST}:${PORT}`));
+  setInterval(certReloadCheck, 3600 * 1000);
+  const front = net.createServer(frontHandler);
+  front.listen(PORT, HOST, () => console.log(`Panel VPN ACS berjalan di port ${PORT}`));
 }
 SERVEREOF
 
@@ -1265,6 +2277,11 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .pill.ok{background:var(--ok-soft);color:var(--ok)}
   .pill.bad{background:var(--warn-soft);color:var(--warn)}
   .pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+  .dot.wait{background:var(--muted);box-shadow:0 0 0 3px var(--subtle)}
+  .pill.wait{background:var(--subtle);color:var(--muted);border:1px solid var(--line)}
+  .pill.info{background:var(--primary-soft);color:var(--primary)}
+  .up{font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap;min-width:56px;text-align:right}
+  .up.warn{color:var(--warn)}.up.bad{color:var(--bad)}
 
   /* Daftar baris */
   .rows{list-style:none;margin:0;padding:0}
@@ -1277,7 +2294,8 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .row .grow{flex:1;min-width:0}
   .row .meta{font-family:var(--mono);font-size:12.5px;color:var(--muted);white-space:nowrap}
   .row .chev{color:var(--muted)}
-  .row.warn .ic{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;background:var(--warn-soft);color:var(--warn);flex:none}
+  .row.warn .ic,.row.info .ic{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;background:var(--warn-soft);color:var(--warn);flex:none}
+  .row.info .ic{background:var(--primary-soft);color:var(--primary)}
   .empty{padding:36px 20px;text-align:center;color:var(--muted)}
   .empty .big{width:44px;height:44px;margin:0 auto 10px;border-radius:12px;display:grid;place-items:center;background:var(--ok-soft);color:var(--ok)}
   .empty h3{color:var(--text);font-size:15px;font-weight:600;margin-bottom:4px}
@@ -1361,10 +2379,26 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .tst-sum{padding:14px 20px;border-top:1px solid var(--line);display:flex;align-items:center;gap:10px;font-weight:550}
   .tst-sum.ok{color:var(--ok)}.tst-sum.fail{color:var(--bad)}
 
+  /* Riwayat */
+  .stats{display:grid;grid-template-columns:repeat(3,1fr)}
+  .stat{padding:16px 20px;border-right:1px solid var(--line)}
+  .stat:last-child{border-right:0}
+  .stat span{font-size:12.5px;color:var(--muted);font-weight:500}
+  .stat b{display:block;font-size:26px;font-weight:650;letter-spacing:-.03em;margin-top:4px;font-variant-numeric:tabular-nums}
+  .stat b.warn{color:var(--warn)}.stat b.bad{color:var(--bad)}
+  .bars{display:flex;gap:3px;height:38px}
+  .bars i{flex:1;border-radius:3px;background:var(--ok);opacity:.85;transition:opacity .12s,transform .12s;cursor:default}
+  .bars i:hover{opacity:1;transform:scaleY(1.1)}
+  .bars i.minor{background:var(--warn)}.bars i.major{background:var(--bad)}.bars i.nodata{background:var(--line)}
+  .bar-axis{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:8px}
+  .legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12px;color:var(--muted);margin-top:12px}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+  .bar-tip{min-height:20px;font-size:12.5px;color:var(--text-2);margin-top:10px}
+
   /* Form */
   label{display:block;font-size:13px;font-weight:500;margin:14px 0 6px}
   .help{font-size:12.5px;color:var(--muted);margin-top:6px}
-  input[type=text],input[type=password],select{width:100%;height:38px;padding:0 12px;border:1px solid var(--line-2);border-radius:var(--r-sm);background:var(--surface);font-size:14px;outline:none;transition:border-color .12s,box-shadow .12s}
+  input[type=text],input[type=password],input[type=number],input[type=time],select{width:100%;height:38px;padding:0 12px;border:1px solid var(--line-2);border-radius:var(--r-sm);background:var(--surface);font-size:14px;outline:none;transition:border-color .12s,box-shadow .12s}
   input:focus,select:focus{border-color:var(--primary);box-shadow:0 0 0 3px var(--ring)}
   input[readonly]{background:var(--subtle)}
   input::placeholder{color:var(--muted)}
@@ -1375,7 +2409,12 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .seg{display:flex;gap:6px;flex-wrap:wrap}
   .seg label{margin:0;display:flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid var(--line-2);border-radius:var(--r-sm);cursor:pointer;font-weight:500}
   .seg label:has(input:checked){border-color:var(--primary);background:var(--primary-soft)}
-  .form-actions{display:flex;gap:8px;margin-top:18px}
+  .form-actions{display:flex;gap:8px;margin-top:18px;flex-wrap:wrap}
+  .form-actions .sp{flex:1}
+  .sec-t{font-size:13px;font-weight:600;color:var(--text);margin:20px 0 2px;padding-top:16px;border-top:1px solid var(--line)}
+  .sec-t:first-child{margin-top:0;padding-top:0;border-top:0}
+  .check+.help{margin:-8px 0 8px 25px}
+  select:disabled,input:disabled{background:var(--subtle);color:var(--muted)}
 
   /* Tabel kecil */
   table.t{width:100%;border-collapse:collapse;font-size:13.5px}
@@ -1454,6 +2493,8 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
     .dl{grid-template-columns:1fr}
     .dl>div:nth-child(odd){border-right:0}
     .howto{grid-template-columns:1fr}
+    .stat{padding:12px 14px}.stat b{font-size:20px}
+    .up{display:none}
     .f2{grid-template-columns:1fr}
     .toolbar{flex-wrap:wrap}
     .search{max-width:none;flex-basis:100%}
@@ -1489,6 +2530,7 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
     <button class="nav" data-go="#/"><span data-ic="home"></span>Dashboard</button>
     <button class="nav" data-go="#/lokasi"><span data-ic="router"></span>Lokasi<span class="cnt" id="navCount">0</span></button>
     <div class="nav-sec">Lainnya</div>
+    <button class="nav" data-go="#/log"><span data-ic="list"></span>Log aktivitas</button>
     <button class="nav" data-go="#/panduan"><span data-ic="book"></span>Panduan</button>
     <button class="nav" data-go="#/pengaturan"><span data-ic="gear"></span>Pengaturan</button>
     <div class="grow"></div>
@@ -1546,6 +2588,12 @@ const ICONS = {
   play: '<path d="M7 5l12 7-12 7z"/>',
   wifi_off: '<path d="M2 2l20 20M8.5 16.5a5 5 0 0 1 7 0M5 12.9a10 10 0 0 1 5.2-2.8M19 12.9a10 10 0 0 0-2-1.4M12 20h.01"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  list: '<path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/>',
+  bell: '<path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>',
+  send: '<path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  ext: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
 };
 const ic = (n, cls = "i") => `<svg class="${cls}" ${SV}>${ICONS[n] || ""}</svg>`;
 function paintIcons(root = document) { root.querySelectorAll("[data-ic]").forEach((el) => { el.innerHTML = ic(el.dataset.ic); el.removeAttribute("data-ic"); }); }
@@ -1578,6 +2626,25 @@ function copyText(text, msg) {
 }
 const copyBtn = (text, msg) => `<button class="copy" title="Salin" data-copy="${esc(text)}" data-msg="${esc(msg || "")}">${ic("copy", "")}</button>`;
 const site = (id) => STATE.sites.find((s) => s.id === id);
+const ST = { up: ["ok", "Tersambung"], down: ["bad", "Terputus"], pending: ["wait", "Menunggu pemasangan"] };
+const stOf = (x) => ST[x.state] || ST.down;
+function tzId() { return STATE.settings.timezone || "Asia/Makassar"; }
+function tzLabel() { const z = (STATE.settings.timezones || []).find((t) => t.id === tzId()); return z ? z.label : ""; }
+function fmtT(t, full) {
+  if (!t) return "—";
+  const o = { timeZone: tzId(), hour: "2-digit", minute: "2-digit", hour12: false };
+  if (full) { o.day = "numeric"; o.month = "short"; }
+  try { return new Date(t).toLocaleString("id-ID", o); } catch (e) { return new Date(t).toLocaleString(); }
+}
+function fmtDur(ms) {
+  const mins = Math.round(ms / 60000);
+  if (mins < 1) return "< 1 menit";
+  const d = Math.floor(mins / 1440), h = Math.floor((mins % 1440) / 60), m = mins % 60, p = [];
+  if (d) p.push(d + " hari"); if (h) p.push(h + " jam"); if (m && !d) p.push(m + " menit");
+  return p.slice(0, 2).join(" ");
+}
+function pct(v) { if (v == null) return "—"; return (v >= 99.995 ? "100" : v.toFixed(v >= 99 ? 2 : 1)).replace(".", ",") + "%"; }
+const pctCls = (v) => (v == null || v >= 99 ? "" : v >= 95 ? "warn" : "bad");
 function genieOk(v) { if (!v) return false; const x = v.toLowerCase(); return ["all", "true", "1", "yes"].includes(x) || v.split(",").map((t) => t.trim()).includes("10.100.0.0/14"); }
 
 /* ================= Tema & navigasi ================= */
@@ -1633,11 +2700,12 @@ function route() {
   document.body.classList.remove("nav-open");
   closeModal();
   const v = $("#view");
-  if (parts[0] === "lokasi" && parts[1] === "terputus") { LIST.f = "off"; LIST.q = ""; history.replaceState(null, "", "#/lokasi"); viewList(v); }
+  if (parts[0] === "lokasi" && (parts[1] === "terputus" || parts[1] === "menunggu")) { LIST.f = parts[1] === "terputus" ? "off" : "wait"; LIST.q = ""; history.replaceState(null, "", "#/lokasi"); viewList(v); }
   else if (parts[0] === "lokasi" && parts[1]) { viewDetail(v, parts[1], parts[2] || "ringkasan"); }
   else if (parts[0] === "lokasi") { viewList(v); }
   else if (parts[0] === "panduan") { viewGuide(v); }
-  else if (parts[0] === "pengaturan") { viewSettings(v); }
+  else if (parts[0] === "pengaturan") { viewSettings(v, parts[1] || "umum"); }
+  else if (parts[0] === "log") { viewLog(v); }
   else { viewDashboard(v); }
   paintIcons(v);
   window.scrollTo(0, 0);
@@ -1652,36 +2720,45 @@ function issues() {
   const s = STATE.settings, list = [];
   if (!s.publicIp) list.push({ t: "Alamat VPS belum diisi", d: "Script MikroTik membutuhkan alamat VPS.", go: "#/pengaturan" });
   if (s.genieCidr !== null && !genieOk(s.genieCidr)) list.push({ t: "Patch IP virtual GenieACS belum aktif", d: "Summon ke ONT akan gagal.", go: "#/pengaturan" });
-  const off = STATE.sites.filter((x) => !x.online);
-  if (off.length === 1) list.push({ t: `${off[0].name} terputus`, d: "MikroTik belum tersambung ke VPS. Jalankan tes koneksi.", go: `#/lokasi/${off[0].id}/tes` });
+  const off = STATE.sites.filter((x) => x.state === "down");
+  if (off.length === 1) list.push({ t: `${off[0].name} terputus`, d: off[0].downSince ? `Sejak ${fmtT(off[0].downSince, true)} (${fmtDur(Date.now() - off[0].downSince)}). Jalankan tes koneksi.` : "Jalankan tes koneksi.", go: `#/lokasi/${off[0].id}/tes` });
   else if (off.length > 1) {
     const names = off.map((x) => x.name);
     list.push({ t: `${off.length} lokasi terputus`, d: names.slice(0, 4).join(", ") + (names.length > 4 ? ` dan ${names.length - 4} lainnya` : ""), go: "#/lokasi/terputus" });
   }
+  const tg = s.telegram || {};
+  if (tg.active && tg.lastError) list.push({ t: "Notifikasi Telegram gagal terkirim", d: tg.lastError, go: "#/pengaturan/telegram" });
+  const cf = s.cloudflare;
+  if (cf && cf.https && cf.certExpiry && cf.certExpiry - Date.now() < 14 * 864e5) list.push({ t: "Sertifikat HTTPS hampir habis", d: `Berlaku sampai ${fmtT(cf.certExpiry, true)}. Perpanjangan otomatis mungkin gagal.`, go: "#/pengaturan/domain" });
   for (const x of STATE.sites) {
     if (x.inGenie === false) list.push({ t: `${x.name}: IP virtual di luar patch GenieACS`, d: `${x.virtualSubnet} tidak dikenali GenieACS, Summon akan gagal.`, go: `#/lokasi/${x.id}` });
   }
+  const pend = STATE.sites.filter((x) => x.state === "pending");
+  if (pend.length === 1) list.push({ k: "info", t: `${pend[0].name} menunggu pemasangan`, d: "Script MikroTik belum dipasang atau belum pernah tersambung.", go: `#/lokasi/${pend[0].id}/script` });
+  else if (pend.length > 1) list.push({ k: "info", t: `${pend.length} lokasi menunggu pemasangan`, d: pend.map((x) => x.name).slice(0, 4).join(", ") + (pend.length > 4 ? ` dan ${pend.length - 4} lainnya` : ""), go: "#/lokasi/menunggu" });
   return list;
 }
 function viewDashboard(v) {
   crumb([["Dashboard"]]);
-  const S = STATE.sites, on = S.filter((x) => x.online).length, fw = S.reduce((a, x) => a + x.forwards.length, 0);
+  const S = STATE.sites, inst = S.filter((x) => x.state !== "pending").length, on = S.filter((x) => x.state === "up").length;
+  const off = S.filter((x) => x.state === "down").length, pend = S.length - inst, fw = S.reduce((a, x) => a + x.forwards.length, 0);
   const iss = issues();
-  const recent = [...S].sort((a, b) => (a.online === b.online ? a.name.localeCompare(b.name, "id") : a.online ? 1 : -1)).slice(0, 6);
+  const order = { down: 0, pending: 1, up: 2 };
+  const recent = [...S].sort((a, b) => order[a.state] - order[b.state] || a.name.localeCompare(b.name, "id")).slice(0, 6);
   v.innerHTML = `
     <div class="ph"><div><h1>Dashboard</h1><p>Ringkasan jaringan VPN ACS.</p></div>
       <div class="acts"><button class="btn pri" data-act="add">${ic("plus")}Tambah lokasi</button></div></div>
     <div class="kpis">
-      <div class="kpi"><span>Lokasi</span><b>${S.length}</b><small>MikroTik terdaftar</small></div>
-      <div class="kpi"><span><i class="dot ok"></i>Tersambung</span><b>${on}</b><small>${S.length ? Math.round((on / S.length) * 100) : 0}% dari semua lokasi</small></div>
-      <div class="kpi"><span><i class="dot bad"></i>Terputus</span><b>${S.length - on}</b><small>${S.length - on ? "perlu dicek" : "tidak ada"}</small></div>
+      <div class="kpi"><span>Lokasi</span><b>${S.length}</b><small>${pend ? `${pend} menunggu pemasangan` : "MikroTik terdaftar"}</small></div>
+      <div class="kpi"><span><i class="dot ok"></i>Tersambung</span><b>${on}</b><small>${inst ? Math.round((on / inst) * 100) : 0}% dari lokasi terpasang</small></div>
+      <div class="kpi"><span><i class="dot bad"></i>Terputus</span><b>${off}</b><small>${off ? "perlu dicek" : "tidak ada"}</small></div>
       <div class="kpi"><span>Remote aktif</span><b>${fw}</b><small>port forwarding</small></div>
     </div>
     <div class="grid2">
       <div class="stack">
         <div class="card">
           <div class="ch"><h2>Perlu perhatian</h2>${iss.length ? `<span class="muted">${iss.length} item</span>` : ""}</div>
-          ${iss.length ? `<ul class="rows">${iss.slice(0, 6).map((x) => `<li><a class="row warn" href="${x.go}"><span class="ic">${ic("alert")}</span><span class="grow"><span class="nm">${esc(x.t)}</span><span class="sb" style="display:block">${esc(x.d)}</span></span><span class="chev">${ic("chev")}</span></a></li>`).join("")}</ul>`
+          ${iss.length ? `<ul class="rows">${iss.slice(0, 6).map((x) => `<li><a class="row ${x.k || "warn"}" href="${x.go}"><span class="ic">${ic(x.k === "info" ? "clock" : "alert")}</span><span class="grow"><span class="nm">${esc(x.t)}</span><span class="sb" style="display:block">${esc(x.d)}</span></span><span class="chev">${ic("chev")}</span></a></li>`).join("")}</ul>`
             : `<div class="empty"><div class="big">${ic("check")}</div><h3>Semua normal</h3><p>Semua lokasi tersambung dan pengaturan lengkap.</p></div>`}
         </div>
         <div class="card">
@@ -1699,15 +2776,20 @@ function viewDashboard(v) {
 function serverKv() {
   const s = STATE.settings;
   const g = s.genieCidr === null ? "Tidak ada" : genieOk(s.genieCidr) ? "Aktif" : "Belum aktif";
-  return [["Alamat VPS", s.publicIp || "—"], ["URL ACS ONT", s.acsUrl || "—"], ["Jaringan VPN", s.tunnelNet || "—"], ["IPsec", s.useIpsec ? "Aktif" : "Tidak dipakai"], ["Patch GenieACS", g]]
+  const tg = s.telegram || {};
+  const tgs = !tg.tokenSet ? "Belum diatur" : !tg.enabled ? "Nonaktif" : tg.lastError ? "Gagal kirim" : "Aktif";
+  const https = s.cloudflare && s.cloudflare.https ? "Aktif" : "Tidak";
+  return [["Alamat VPS", s.publicIp || "—"], ["URL ACS ONT", s.acsUrl || "—"], ["Jaringan VPN", s.tunnelNet || "—"], ["Patch GenieACS", g], ["Notifikasi Telegram", tgs], ["HTTPS panel", https]]
     .map(([k, val]) => `<div class="kv"><span>${k}</span><b>${esc(val)}</b></div>`).join("");
 }
 function rowHtml(x) {
+  const [c, t] = stOf(x);
   return `<li><a class="row" href="#/lokasi/${x.id}">
-    <span class="dot ${x.online ? "ok" : "bad"}"></span>
+    <span class="dot ${c}"></span>
     <span class="grow"><span class="nm">${esc(x.name)}</span>${x.note ? `<span class="sb" style="display:block">${esc(x.note)}</span>` : ""}</span>
     <span class="meta">${esc(x.virtualSubnet)}</span>
-    <span class="pill ${x.online ? "ok" : "bad"}">${x.online ? "Tersambung" : "Terputus"}</span>
+    <span class="up ${pctCls(x.uptime7)}" title="${x.uptime7 == null ? "" : "Uptime 7 hari"}">${x.uptime7 == null ? "" : pct(x.uptime7)}</span>
+    <span class="pill ${c}">${t}</span>
     <span class="chev">${ic("chev")}</span></a></li>`;
 }
 
@@ -1725,6 +2807,7 @@ function viewList(v) {
           <button class="chip ${LIST.f === "all" ? "on" : ""}" data-filter="all">Semua</button>
           <button class="chip ${LIST.f === "on" ? "on" : ""}" data-filter="on">Tersambung</button>
           <button class="chip ${LIST.f === "off" ? "on" : ""}" data-filter="off">Terputus</button>
+          ${STATE.sites.some((x) => x.state === "pending") || LIST.f === "wait" ? `<button class="chip ${LIST.f === "wait" ? "on" : ""}" data-filter="wait">Menunggu</button>` : ""}
         </div>
       </div>
       <ul class="rows" id="listRows"></ul>
@@ -1735,7 +2818,7 @@ function viewList(v) {
 function fillList() {
   const q = LIST.q.trim().toLowerCase();
   const rows = STATE.sites
-    .filter((x) => LIST.f === "all" || (LIST.f === "on" ? x.online : !x.online))
+    .filter((x) => LIST.f === "all" || x.state === { on: "up", off: "down", wait: "pending" }[LIST.f])
     .filter((x) => !q || [x.name, x.note, x.realSubnet, x.virtualSubnet, x.tunnelIp].join(" ").toLowerCase().includes(q))
     .sort((a, b) => a.name.localeCompare(b.name, "id"));
   const el = $("#listRows");
@@ -1745,14 +2828,14 @@ function fillList() {
 }
 
 /* ================= Detail lokasi ================= */
-const TABS = [["ringkasan", "Ringkasan"], ["remote", "Remote"], ["script", "Script MikroTik"], ["tes", "Tes koneksi"]];
+const TABS = [["ringkasan", "Ringkasan"], ["riwayat", "Riwayat"], ["remote", "Remote"], ["script", "Script MikroTik"], ["tes", "Tes koneksi"]];
 function viewDetail(v, id, tab) {
   const x = site(id);
   if (!x) { crumb([["Lokasi", "#/lokasi"], ["Tidak ditemukan"]]); v.innerHTML = `<div class="card"><div class="empty"><h3>Lokasi tidak ditemukan</h3><p><a href="#/lokasi">Kembali ke daftar lokasi</a></p></div></div>`; return; }
   crumb([["Lokasi", "#/lokasi"], [x.name]]);
   v.innerHTML = `
     <div class="dh">
-      <div><h1>${esc(x.name)} <span class="pill ${x.online ? "ok" : "bad"}">${x.online ? "Tersambung" : "Terputus"}</span></h1>
+      <div><h1>${esc(x.name)} <span class="pill ${stOf(x)[0]}">${stOf(x)[1]}</span></h1>
         <p>${x.note ? esc(x.note) + " · " : ""}IP virtual ${esc(x.virtualSubnet)}</p></div>
       <div class="acts" style="display:flex;gap:8px">
         <a class="btn" href="#/lokasi/${x.id}/tes">${ic("play")}Tes koneksi</a>
@@ -1770,12 +2853,14 @@ function viewDetail(v, id, tab) {
   if (tab === "remote") tabRemote(b, x);
   else if (tab === "script") tabScript(b, x);
   else if (tab === "tes") tabTest(b, x);
+  else if (tab === "riwayat") tabHistory(b, x);
   else tabSummary(b, x);
 }
 function tabSummary(b, x) {
   b.innerHTML = `
     ${x.inGenie === false ? `<div class="note warn">${ic("alert")}<div><b>IP virtual di luar rentang patch GenieACS</b>Summon ke ONT di lokasi ini akan gagal. Jalankan ulang <code>genieacs-virtualip.sh</code> dengan rentang yang mencakup ${esc(x.virtualSubnet)}.</div></div>` : ""}
-    ${!x.online ? `<div class="note info">${ic("info")}<div><b>MikroTik belum tersambung</b>Pasang script di MikroTik lewat tab <a href="#/lokasi/${x.id}/script">Script MikroTik</a>, lalu jalankan <a href="#/lokasi/${x.id}/tes">Tes koneksi</a>.</div></div>` : ""}
+    ${x.state === "pending" ? `<div class="note info">${ic("clock")}<div><b>Menunggu pemasangan</b>Lokasi ini belum pernah tersambung. Pasang script lewat tab <a href="#/lokasi/${x.id}/script">Script MikroTik</a>. Riwayat dan notifikasi Telegram mulai berjalan setelah MikroTik tersambung pertama kali.</div></div>` : ""}
+    ${x.state === "down" ? `<div class="note warn">${ic("alert")}<div><b>Terputus${x.downSince ? ` sejak ${esc(fmtT(x.downSince, true))} (${fmtDur(Date.now() - x.downSince)})` : ""}</b>Jalankan <a href="#/lokasi/${x.id}/tes">Tes koneksi</a> untuk melihat penyebabnya.</div></div>` : ""}
     <div class="card">
       <div class="ch"><h2>Jaringan</h2></div>
       <dl class="dl" style="margin:0">
@@ -1843,13 +2928,46 @@ function fwdForm(x) {
 }
 function tabScript(b, x) {
   b.innerHTML = `
-    ${x.online ? "" : `<ol class="howto">
+    ${x.state !== "pending" ? "" : `<ol class="howto">
       <li><b><i>1</i>Salin script</b>Klik tombol Salin di kotak script.</li>
       <li><b><i>2</i>Tempel di MikroTik</b>Winbox → New Terminal → klik kanan → Paste → Enter.</li>
       <li><b><i>3</i>Tes koneksi</b>Buka tab <a href="#/lokasi/${x.id}/tes">Tes koneksi</a> untuk memastikan semuanya jalan.</li></ol>`}
     <div class="card"><div class="ch"><h2>Script pemasangan</h2><span class="muted" style="font-size:12.5px">Aman dijalankan ulang</span></div>
       <div class="cb"><div class="codebox"><pre class="code">${esc(x.script)}</pre><button class="btn sm" data-copy="${esc(x.script)}" data-msg="Script tersalin. Tempel di Winbox → New Terminal">${ic("copy")}Salin</button></div>
       <details class="more"><summary>Script untuk menghapus dari MikroTik</summary><div class="codebox"><pre class="code">${esc(x.removeScript)}</pre><button class="btn sm" data-copy="${esc(x.removeScript)}" data-msg="Script hapus tersalin">${ic("copy")}Salin</button></div></details></div></div>`;
+}
+
+/* ---------- Riwayat koneksi ---------- */
+function tabHistory(b, x) {
+  b.innerHTML = `<div class="card"><div class="empty"><p>Memuat riwayat…</p></div></div>`;
+  api(`/api/sites/${x.id}/history`).then((h) => {
+    if (!$("#tabBody") || !location.hash.includes(x.id + "/riwayat")) return;
+    if (h.pending) {
+      b.innerHTML = `<div class="card"><div class="empty"><div class="big" style="background:var(--subtle);color:var(--muted)">${ic("clock")}</div><h3>Belum ada riwayat</h3><p>Riwayat mulai dicatat setelah MikroTik tersambung pertama kali.<br><a href="#/lokasi/${x.id}/script">Pasang script MikroTik</a></p></div></div>`;
+      return;
+    }
+    const U = h.uptime, days = h.days;
+    const tip = (d) => d.status === "nodata" ? `${d.label}: belum terpasang` : d.down ? `${d.label}: putus ${fmtDur(d.down)} (${d.count}×) · uptime ${pct(d.pct)}` : `${d.label}: normal, tidak ada putus`;
+    const total = h.events.length, open = h.events.find((e) => e.open);
+    b.innerHTML = `
+      <div class="card"><div class="stats">
+        ${[["24 jam", U.d1], ["7 hari", U.d7], ["30 hari", U.d30]].map(([k, val]) => `<div class="stat"><span>Uptime ${k}</span><b class="${pctCls(val)}">${pct(val)}</b></div>`).join("")}
+      </div></div>
+      <div class="card"><div class="ch"><h2>30 hari terakhir</h2><span class="muted" style="font-size:12.5px">1 batang = 1 hari</span></div><div class="cb">
+        <div class="bars" id="bars">${days.map((d, i) => `<i class="${d.status}" data-i="${i}" title="${esc(tip(d))}"></i>`).join("")}</div>
+        <div class="bar-axis"><span>${esc(days[0].label)}</span><span>Hari ini</span></div>
+        <div class="bar-tip" id="barTip"></div>
+        <div class="legend"><span><i style="background:var(--ok)"></i>Normal</span><span><i style="background:var(--warn)"></i>Putus &lt; 30 menit</span><span><i style="background:var(--bad)"></i>Putus ≥ 30 menit</span><span><i style="background:var(--line)"></i>Belum terpasang</span></div>
+      </div></div>
+      <div class="card"><div class="ch"><h2>Kejadian putus</h2><span class="muted" style="font-size:12.5px">${total ? `${total} kejadian · 90 hari` : ""}</span></div>
+        ${total ? `<table class="t"><thead><tr><th>Mulai putus</th><th>Tersambung lagi</th><th class="r">Lama</th></tr></thead><tbody>
+          ${h.events.slice(0, 50).map((e) => `<tr><td>${esc(fmtT(e.s, true))}</td><td>${e.open ? `<span class="pill bad">Masih terputus</span>` : esc(fmtT(e.e, true))}</td><td class="r mono">${fmtDur(e.dur)}</td></tr>`).join("")}
+          </tbody></table>` : `<div class="empty"><div class="big">${ic("check")}</div><h3>Tidak ada kejadian putus</h3><p>VPN lokasi ini stabil sejak tercatat.</p></div>`}
+      </div>
+      <p class="help" style="margin-top:12px">Dicatat sejak ${esc(fmtT(h.installedAt ? Date.parse(h.installedAt) : 0, true))} · diperiksa tiap 30 detik · waktu dalam ${esc(h.tz)}${open ? "" : ""}.</p>`;
+    const bars = $("#bars");
+    if (bars) bars.addEventListener("mouseover", (e) => { const i = e.target.dataset && e.target.dataset.i; if (i != null) $("#barTip").textContent = tip(days[+i]); });
+  }).catch((e) => { b.innerHTML = `<div class="card"><div class="empty"><p>${esc(e.message)}</p></div></div>`; });
 }
 
 /* ---------- Tes koneksi bertahap ---------- */
@@ -2000,25 +3118,42 @@ function viewGuide(v) {
       <details><summary>Summon di GenieACS masih gagal</summary><p>Pastikan langkah "Patch GenieACS" di Tes koneksi lolos, dan ONT sudah Inform sekali setelah VPN tersambung.</p></details>
       <details><summary>Remote Winbox tidak bisa masuk</summary><p>Pasang ulang script MikroTik terbaru (berisi aturan "remote dari VPS"), cek IP → Services → winbox aktif, dan pastikan provider VPS tidak memblokir port tersebut.</p></details>
       <details><summary>Bolehkah IP virtual sama dengan ZeroTier?</summary><p>Boleh. Yang tidak boleh: dua lokasi memakai IP virtual yang sama, atau IP virtual sama dengan subnet lokal mana pun.</p></details>
+      <details><summary>Apa arti status "Menunggu pemasangan"?</summary><p>Lokasi sudah dibuat di panel tetapi MikroTik-nya belum pernah tersambung. Lokasi ini tidak dihitung terputus dan tidak dikirim notifikasi Telegram. Statusnya berubah sendiri saat MikroTik tersambung pertama kali.</p></details>
+      <details><summary>Notifikasi Telegram tidak masuk</summary><p>Buka Pengaturan → Notifikasi Telegram, klik Kirim pesan tes. Jika gagal, pesan kesalahannya menjelaskan penyebabnya (token salah, bot bukan admin, topik terhapus). Ingat: notifikasi baru dikirim setelah VPN putus melewati jeda yang diatur.</p></details>
+      <details><summary>Setelah HTTPS aktif, panel tidak bisa dibuka lewat IP</summary><p>Itu normal. Buka lewat <code>https://domain:${esc(String(s.port || 8088))}</code>; alamat http dan IP akan dialihkan otomatis ke sana. Jika domain bermasalah, lepas domain di Pengaturan → Domain &amp; HTTPS.</p></details>
       <details><summary>Aman menjalankan script MikroTik berulang kali?</summary><p>Aman. Script menghapus pengaturan lama bertanda "VPN ACS" terlebih dulu; pengaturan lain tidak disentuh.</p></details>
     </div>`;
 }
 
 /* ================= Pengaturan ================= */
-function viewSettings(v) {
-  crumb([["Pengaturan"]]);
+const SET_TABS = [["umum", "Umum"], ["telegram", "Notifikasi Telegram"], ["domain", "Domain & HTTPS"]];
+function viewSettings(v, tab) {
+  if (!SET_TABS.some(([k]) => k === tab)) tab = "umum";
+  crumb([["Pengaturan", "#/pengaturan"], [SET_TABS.find(([k]) => k === tab)[1]]]);
+  v.innerHTML = `
+    <div class="ph"><div><h1>Pengaturan</h1><p>Pengaturan VPS, notifikasi, dan domain panel.</p></div></div>
+    <nav class="tabs">${SET_TABS.map(([k, t]) => `<a class="tab ${k === tab ? "on" : ""}" href="#/pengaturan/${k}">${t}</a>`).join("")}</nav>
+    <div id="setBody"></div>`;
+  const b = $("#setBody");
+  if (tab === "telegram") setTelegram(b);
+  else if (tab === "domain") setDomain(b);
+  else setGeneral(b);
+}
+function setGeneral(b) {
   const s = STATE.settings;
   const g = s.genieCidr === null ? { c: "info", t: "GenieACS tidak ditemukan di VPS ini", d: "Abaikan jika GenieACS dipasang di server lain." }
     : genieOk(s.genieCidr) ? { c: "ok", t: "Patch IP virtual aktif", d: `GENIEACS_CR_USE_REMOTE_ADDRESS = ${s.genieCidr}` }
     : { c: "warn", t: "Patch IP virtual belum aktif", d: `Nilai sekarang: ${s.genieCidr || "(kosong)"}. Jalankan genieacs-virtualip.sh.` };
-  v.innerHTML = `
-    <div class="ph"><div><h1>Pengaturan</h1><p>Data VPS yang dipakai untuk membuat script MikroTik.</p></div></div>
+  b.innerHTML = `
     <div class="card"><div class="ch"><h2>VPS</h2></div><form class="cb" id="vpsForm" style="padding-top:4px">
       <label for="sIp">Alamat VPS</label>
       <input id="sIp" type="text" placeholder="103.20.30.40 atau vpn.domain.com" value="${esc(s.publicIp || "")}">
-      <div class="help">Dipakai sebagai <i>connect-to</i> di MikroTik.</div>
-      <label class="check"><input id="sIpsec" type="checkbox" ${s.useIpsec ? "checked" : ""}>Pakai IPsec (enkripsi)</label>
-      <div class="help" style="margin-top:0">Setelah diubah, pasang ulang script di semua MikroTik.</div>
+      <div class="help">Dipakai sebagai <i>connect-to</i> di MikroTik.${s.cloudflare ? ` Saat ini diatur lewat <a href="#/pengaturan/domain">Domain &amp; HTTPS</a>.` : ""}</div>
+      <label for="sTz">Zona waktu</label>
+      <select id="sTz">${(s.timezones || []).map((z) => `<option value="${z.id}" ${z.id === tzId() ? "selected" : ""}>${z.label} (${z.id})</option>`).join("")}</select>
+      <div class="help">Untuk jam di riwayat, log aktivitas, dan pesan Telegram.</div>
+      <label class="check" style="margin-top:16px"><input id="sIpsec" type="checkbox" ${s.useIpsec ? "checked" : ""}>Pakai IPsec (enkripsi)</label>
+      <div class="help">Setelah diubah, pasang ulang script di semua MikroTik.</div>
       <div id="pskBox" class="${s.useIpsec ? "" : "hidden"}"><label>Kunci IPsec (PSK)</label><input type="text" readonly value="${esc(s.psk || "")}"></div>
       <div class="err" id="vpsErr"></div>
       <div class="form-actions"><button class="btn pri">Simpan</button></div>
@@ -2049,7 +3184,7 @@ function viewSettings(v) {
   $("#vpsForm").onsubmit = async (e) => {
     e.preventDefault(); $("#vpsErr").textContent = "";
     const changed = $("#sIpsec").checked !== !!s.useIpsec;
-    try { await api("/api/settings", { method: "PUT", body: { publicIp: $("#sIp").value, useIpsec: $("#sIpsec").checked } }); await load(); route(); toast(changed ? "Disimpan. Pasang ulang script di semua MikroTik." : "Pengaturan disimpan"); }
+    try { await api("/api/settings", { method: "PUT", body: { publicIp: $("#sIp").value, useIpsec: $("#sIpsec").checked, timezone: $("#sTz").value } }); await load(); route(); toast(changed ? "Disimpan. Pasang ulang script di semua MikroTik." : "Pengaturan disimpan"); }
     catch (err) { $("#vpsErr").textContent = err.message; }
   };
   $("#tunForm").onsubmit = (e) => {
@@ -2068,6 +3203,273 @@ function viewSettings(v) {
     try { await api("/api/settings", { method: "PUT", body: { oldPassword: $("#pOld").value, newPassword: $("#pNew").value } }); $("#pOld").value = ""; $("#pNew").value = ""; toast("Password diganti"); }
     catch (err) { $("#pwErr").textContent = err.message; }
   };
+}
+
+/* ---------- Telegram ---------- */
+let TGDET = null; // hasil deteksi grup & topik
+function setTelegram(b) {
+  const t = STATE.settings.telegram || {};
+  const st = !t.tokenSet ? { c: "info", i: "info", h: "Belum diatur", d: "Ikuti langkah di bawah untuk mengirim notifikasi VPN terputus ke grup Telegram." }
+    : !t.enabled ? { c: "warn", i: "alert", h: "Notifikasi nonaktif", d: "Centang \"Aktifkan notifikasi\" lalu simpan." }
+    : t.lastError ? { c: "bad", i: "alert", h: "Pengiriman terakhir gagal", d: t.lastError }
+    : { c: "ok", i: "check", h: "Notifikasi aktif", d: `Dikirim ke ${t.chatTitle || t.chatId}${t.threadName ? " › " + t.threadName : ""}${t.lastOk ? ` · terakhir terkirim ${fmtT(t.lastOk, true)}` : ""}` };
+  const quiet = !!(t.quietStart && t.quietEnd);
+  b.innerHTML = `
+    <div class="note ${st.c}">${ic(st.i)}<div><b>${esc(st.h)}</b>${esc(st.d)}</div></div>
+    <div class="card"><div class="ch"><h2>Bot &amp; grup tujuan</h2></div><div class="cb" style="padding-top:6px">
+      <details class="more" style="margin:4px 0 6px"><summary>Cara menyiapkan bot dan grup</summary>
+        <ol class="ol" style="margin-top:12px">
+          <li><b>Buat bot</b>Di Telegram buka <b>@BotFather</b> → kirim <code>/newbot</code> → ikuti petunjuk → salin token yang diberikan.</li>
+          <li><b>Siapkan grup</b>Buat grup → Info grup → Edit → aktifkan <b>Topik (Topics)</b> → buat topik, misalnya "🔴 VPN".</li>
+          <li><b>Masukkan bot</b>Tambahkan bot ke grup, lalu jadikan <b>admin</b>.</li>
+          <li><b>Kirim pesan di topik tujuan</b>Kirim pesan apa saja (misalnya "tes") di topik tersebut, lalu klik <b>Deteksi grup &amp; topik</b> di bawah.</li>
+        </ol></details>
+      <label for="tgTok">Token bot</label>
+      <input id="tgTok" type="password" autocomplete="off" placeholder="${t.tokenSet ? `Tersimpan (${esc(t.tokenMask)}) — kosongkan jika tidak diganti` : "contoh: 123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}">
+      <div class="form-actions" style="margin-top:10px"><button class="btn" id="tgDetect">${ic("search")}Deteksi grup &amp; topik</button><span class="help" id="tgBot" style="margin:auto 0">${t.botName ? "Bot: @" + esc(t.botName) : ""}</span></div>
+      <div class="f2">
+        <div><label for="tgChat">Grup</label><select id="tgChat"></select></div>
+        <div><label for="tgThread">Topik</label><select id="tgThread"></select></div>
+      </div>
+      <div class="help">Grup atau topik tidak muncul? Pastikan bot sudah admin, kirim pesan di topik itu, lalu klik Deteksi lagi.</div>
+    </div></div>
+    <div class="card"><div class="ch"><h2>Aturan notifikasi</h2></div><div class="cb" style="padding-top:6px">
+      <label class="check" style="margin-top:10px"><input id="tgOn" type="checkbox" ${t.enabled !== false ? "checked" : ""}>Aktifkan notifikasi VPN terputus</label>
+      <div class="help">Lokasi berstatus "Menunggu pemasangan" tidak pernah dikirim notifikasi.</div>
+      <div class="f2">
+        <div><label for="tgDelay">Jeda sebelum lapor (menit)</label><input id="tgDelay" type="number" min="1" max="1440" value="${t.delayMin || 3}">
+          <div class="help">VPN harus putus selama ini dulu, supaya putus sebentar tidak dilaporkan.</div></div>
+        <div><label for="tgRemind">Ingatkan lagi jika masih putus (menit)</label><input id="tgRemind" type="number" min="0" max="1440" value="${t.remindMin ?? 60}">
+          <div class="help">Isi 0 untuk mematikan. Minimal 10.</div></div>
+      </div>
+      <label class="check" style="margin-top:16px"><input id="tgRec" type="checkbox" ${t.notifyRecovery !== false ? "checked" : ""}>Kirim juga saat tersambung lagi (beserta lama putusnya)</label>
+      <label class="check" style="margin-top:12px"><input id="tgQuiet" type="checkbox" ${quiet ? "checked" : ""}>Jam tenang (pesan tetap terkirim tanpa bunyi)</label>
+      <div class="f2 ${quiet ? "" : "hidden"}" id="tgQuietBox">
+        <div><label for="tgQs">Mulai</label><input id="tgQs" type="time" value="${esc(t.quietStart || "22:00")}"></div>
+        <div><label for="tgQe">Selesai</label><input id="tgQe" type="time" value="${esc(t.quietEnd || "06:00")}"></div>
+      </div>
+      <div class="help">Zona waktu: ${esc(tzLabel())} (ubah di tab <a href="#/pengaturan/umum">Umum</a>).</div>
+      <div class="err" id="tgErr"></div>
+      <div class="form-actions">
+        <button class="btn pri" id="tgSave">Simpan</button>
+        <button class="btn" id="tgTest">${ic("send")}Kirim pesan tes</button>
+        <span class="sp"></span>
+        ${t.tokenSet ? `<button class="btn ghost danger" id="tgClear">${ic("trash")}Hapus Telegram</button>` : ""}
+      </div>
+    </div></div>`;
+  const chatSel = $("#tgChat"), thrSel = $("#tgThread");
+  const chats = () => {
+    const list = TGDET ? TGDET.chats.slice() : [];
+    if (t.chatId && !list.some((c) => c.id === t.chatId)) list.unshift({ id: t.chatId, title: t.chatTitle || t.chatId, isForum: !!t.threadId, topics: t.threadId ? [{ id: t.threadId, name: t.threadName }] : [], saved: true });
+    return list;
+  };
+  const fillChats = (want) => {
+    const list = chats();
+    if (!list.length) { chatSel.innerHTML = `<option value="">— klik Deteksi dulu —</option>`; chatSel.disabled = true; fillThreads(); return; }
+    chatSel.disabled = false;
+    chatSel.innerHTML = list.map((c) => `<option value="${esc(c.id)}">${esc(c.title)}${c.isForum ? "" : " (tanpa topik)"}</option>`).join("");
+    chatSel.value = list.some((c) => c.id === want) ? want : list[0].id;
+    fillThreads(t.chatId === chatSel.value ? t.threadId : 0);
+  };
+  const fillThreads = (want) => {
+    const c = chats().find((x) => x.id === chatSel.value);
+    if (!c) { thrSel.innerHTML = `<option value="0">—</option>`; thrSel.disabled = true; return; }
+    if (!c.isForum) { thrSel.innerHTML = `<option value="0">Grup tanpa topik</option>`; thrSel.disabled = true; return; }
+    const tp = c.topics.slice();
+    if (want && !tp.some((x) => x.id === want)) tp.push({ id: want, name: t.threadName || `Topik #${want}` });
+    thrSel.disabled = false;
+    thrSel.innerHTML = `<option value="0">Umum (General)</option>` + tp.map((x) => `<option value="${x.id}">${esc(x.name)}</option>`).join("");
+    thrSel.value = String(want || (tp[0] ? tp[0].id : 0));
+  };
+  chatSel.onchange = () => fillThreads(0);
+  fillChats(t.chatId);
+  $("#tgQuiet").onchange = () => $("#tgQuietBox").classList.toggle("hidden", !$("#tgQuiet").checked);
+  const body = () => {
+    const c = chats().find((x) => x.id === chatSel.value);
+    const th = parseInt(thrSel.value, 10) || 0;
+    return {
+      token: $("#tgTok").value.trim(),
+      botName: TGDET ? TGDET.bot.username : undefined,
+      chatId: chatSel.disabled ? "" : chatSel.value,
+      chatTitle: c ? c.title : "",
+      threadId: th,
+      threadName: th ? thrSel.options[thrSel.selectedIndex].text : "",
+      enabled: $("#tgOn").checked,
+      delayMin: $("#tgDelay").value,
+      remindMin: $("#tgRemind").value,
+      notifyRecovery: $("#tgRec").checked,
+      quietStart: $("#tgQuiet").checked ? $("#tgQs").value : "",
+      quietEnd: $("#tgQuiet").checked ? $("#tgQe").value : "",
+    };
+  };
+  const busy = (btn, on, html) => { btn.disabled = on; if (html) btn.innerHTML = html; };
+  $("#tgDetect").onclick = async () => {
+    const btn = $("#tgDetect"); $("#tgErr").textContent = ""; busy(btn, true, ic("search") + "Mendeteksi…");
+    try {
+      TGDET = await api("/api/telegram/detect", { method: "POST", body: { token: $("#tgTok").value.trim() } });
+      $("#tgBot").textContent = "Bot: @" + TGDET.bot.username;
+      fillChats(chatSel.value || t.chatId);
+      toast(TGDET.chats.length ? `${TGDET.chats.length} grup ditemukan` : "Belum ada grup. Masukkan bot ke grup dan kirim pesan di sana.");
+    } catch (e) { $("#tgErr").textContent = e.message; }
+    busy(btn, false, ic("search") + "Deteksi grup &amp; topik");
+  };
+  $("#tgTest").onclick = async () => {
+    const btn = $("#tgTest"); $("#tgErr").textContent = ""; busy(btn, true);
+    try { await api("/api/telegram/test", { method: "POST", body: body() }); toast("Pesan tes terkirim. Cek grup Telegram."); }
+    catch (e) { $("#tgErr").textContent = e.message; }
+    busy(btn, false);
+  };
+  $("#tgSave").onclick = async () => {
+    const btn = $("#tgSave"); $("#tgErr").textContent = ""; busy(btn, true);
+    try { await api("/api/telegram", { method: "PUT", body: body() }); await load(); route(); toast("Pengaturan Telegram disimpan"); }
+    catch (e) { $("#tgErr").textContent = e.message; busy(btn, false); }
+  };
+  const clr = $("#tgClear");
+  if (clr) clr.onclick = () => {
+    modal("Hapus pengaturan Telegram?", `<p>Token bot dan grup tujuan dihapus dari panel. Notifikasi berhenti dikirim.</p>`,
+      `<button class="btn" data-act="closemodal">Batal</button><button class="btn danger" id="ok">Hapus</button>`);
+    $("#ok").onclick = async () => { await api("/api/telegram", { method: "PUT", body: { clear: true } }); TGDET = null; await load(); route(); toast("Pengaturan Telegram dihapus"); };
+  };
+}
+
+/* ---------- Domain & HTTPS (Cloudflare) ---------- */
+let CF = null; // proses verifikasi yang sedang berjalan
+function stepsHtml(plan, res, current) {
+  return plan.map((s, i) => {
+    const r = res[s.key];
+    const st = !r ? (current === s.key ? "run" : "wait") : r.ok === true ? "ok" : r.ok === false ? "fail" : "skip";
+    const icon = st === "ok" ? ic("check", "") : st === "fail" ? ic("x", "") : st === "skip" ? ic("minus", "") : st === "run" ? "" : i + 1;
+    return `<li class="step ${st}"><span class="sic">${icon}</span><span class="stx"><b>${esc(s.label)}</b><small>${esc(s.desc)}</small>
+      ${r ? `<div class="sres">${esc(r.detail || "")}${r.hint && r.ok === false ? `<span class="hint">${esc(r.hint)}</span>` : ""}</div>` : st === "run" ? `<div class="sres muted">Memeriksa…</div>` : ""}</span>
+      ${r && r.ms != null ? `<span class="tm">${(r.ms / 1000).toFixed(1)} dtk</span>` : ""}</li>`;
+  }).join("");
+}
+function setDomain(b) {
+  const c = STATE.settings.cloudflare, port = STATE.settings.port || 8088;
+  const onHttps = location.protocol === "https:";
+  b.innerHTML = `
+    ${c ? `<div class="card"><div class="ch"><h2>Domain aktif</h2><span class="pill ok">Terhubung</span></div>
+      <div class="kv"><span>Domain</span><b>${esc(c.domain)}</b></div>
+      <div class="kv"><span>Mengarah ke</span><b>${esc(c.ip || "—")} · DNS only</b></div>
+      <div class="kv"><span>HTTPS panel</span><b>${c.https ? (c.httpsActive ? "Aktif" : "Belum aktif") + (c.certExpiry ? ` · berlaku s/d ${esc(fmtT(c.certExpiry, true))}` : "") : "Tidak dipakai"}</b></div>
+      <div class="kv"><span>Diterapkan</span><b>${esc(fmtT(Date.parse(c.appliedAt), true))}</b></div>
+      ${c.https && c.httpsActive && !onHttps ? `<div class="cb" style="border-top:1px solid var(--line)"><a class="btn pri" href="https://${esc(c.domain)}:${port}/">${ic("lock")}Buka panel lewat HTTPS</a></div>` : ""}
+      <div class="cb" style="border-top:1px solid var(--line);display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" id="cfAgain">${ic("refresh")}Verifikasi ulang</button>
+        <span style="flex:1"></span>
+        <button class="btn ghost danger" id="cfRemove">Lepas domain</button>
+      </div></div>` : ""}
+    <div class="card" id="cfFormCard"><div class="ch"><h2>${c ? "Ganti domain" : "Hubungkan domain Cloudflare"}</h2></div><form class="cb" id="cfForm" style="padding-top:6px">
+      <p class="help" style="margin-top:4px">Panel membuat record DNS yang mengarah ke VPS ini, lalu mengganti alamat VPS di script MikroTik menjadi domain. Setiap langkah diperiksa dulu. <b>Jika ada yang gagal, semua dibatalkan dan pengaturan tetap seperti semula.</b></p>
+      <label for="cfDom">Domain / subdomain</label>
+      <input id="cfDom" type="text" placeholder="contoh: vpn.domainanda.com" value="${esc(c ? c.domain : "")}">
+      <label for="cfTok">API Token Cloudflare</label>
+      <input id="cfTok" type="password" autocomplete="off" placeholder="${c ? "Tersimpan — kosongkan untuk memakai token yang sama" : "Tempel token dari Cloudflare"}">
+      <details class="more"><summary>Cara membuat API Token</summary><ol class="ol" style="margin-top:12px">
+        <li><b>Buka API Tokens</b>Cloudflare → ikon profil → <b>My Profile</b> → <b>API Tokens</b> → <b>Create Token</b>.</li>
+        <li><b>Pilih template "Edit zone DNS"</b>Klik Use template.</li>
+        <li><b>Batasi ke domain Anda</b>Zone Resources: Include → Specific zone → pilih domain.</li>
+        <li><b>Buat dan salin</b>Continue to summary → Create Token → salin token (hanya ditampilkan sekali). Jangan pakai Global API Key.</li>
+      </ol></details>
+      <label class="check" style="margin-top:16px"><input id="cfHttps" type="checkbox" ${!c || c.https ? "checked" : ""}>Pasang HTTPS untuk panel (sertifikat Let's Encrypt gratis, diperpanjang otomatis)</label>
+      <div class="help">Panel akan dibuka lewat <span class="mono">https://domain:${port}</span>. VPN, GenieACS, dan Winbox tidak terpengaruh.</div>
+      <div class="note info" style="margin:14px 0 0">${ic("info")}<div><b>Record dibuat dalam mode DNS only (awan abu-abu)</b>Proxy Cloudflare (awan oranye) tidak bisa meneruskan VPN L2TP dan Winbox, jadi panel otomatis mematikannya untuk domain ini.</div></div>
+      <div class="err" id="cfErr"></div>
+      <div class="form-actions"><button class="btn pri" id="cfGo">${ic("play")}Verifikasi &amp; terapkan</button></div>
+    </form></div>
+    <div class="card hidden" id="cfRun">
+      <div class="tst-head"><div><h2 id="cfTitle">Memverifikasi</h2><p id="cfSub"></p></div></div>
+      <div class="prog"><i id="cfProg"></i></div>
+      <ol class="steps" id="cfSteps"></ol>
+      <div id="cfSum"></div>
+    </div>`;
+  $("#cfForm").onsubmit = (e) => { e.preventDefault(); runCf($("#cfDom").value.trim(), $("#cfTok").value.trim(), $("#cfHttps").checked); };
+  if (c) {
+    $("#cfAgain").onclick = () => runCf(c.domain, "", c.https);
+    $("#cfRemove").onclick = () => {
+      modal("Lepas domain?", `<p>Alamat VPS kembali ke <b>${esc(c.publicIpBefore || "IP publik (otomatis)")}</b> dan HTTPS panel dimatikan. Record DNS di Cloudflare tidak dihapus, jadi MikroTik yang memakai domain tetap tersambung.</p><div class="err" id="rmErr"></div>`,
+        `<button class="btn" data-act="closemodal">Batal</button><button class="btn danger" id="ok">Lepas domain</button>`);
+      $("#ok").onclick = async () => {
+        try { await api("/api/cloudflare/remove", { method: "POST" }); }
+        catch (e) { $("#rmErr").textContent = e.message; return; }
+        if (location.protocol === "https:") { const ip = c.publicIpBefore || location.hostname; location.href = `http://${ip}:${port}/#/pengaturan/domain`; return; }
+        await load(); route(); toast("Domain dilepas");
+      };
+    };
+  }
+  if (CF && CF.plan) drawCf();
+}
+function drawCf() {
+  const card = $("#cfRun"); if (!card || !CF) return;
+  card.classList.remove("hidden");
+  $("#cfSteps").innerHTML = stepsHtml(CF.plan, CF.res, CF.current);
+  const n = Object.keys(CF.res).length;
+  $("#cfProg").style.width = (CF.plan.length ? (n / CF.plan.length) * 100 : 0) + "%";
+  $("#cfTitle").textContent = CF.running ? "Memverifikasi" : CF.ok ? "Berhasil diterapkan" : "Dibatalkan";
+  $("#cfSub").textContent = CF.running ? `${CF.domain} · langkah ${Math.min(n + 1, CF.plan.length)} dari ${CF.plan.length}` : CF.domain;
+  if (CF.running) { $("#cfSum").innerHTML = ""; return; }
+  if (CF.ok) {
+    $("#cfSum").innerHTML = CF.url
+      ? `<div class="tst-sum ok" style="flex-wrap:wrap">${ic("check")}<span style="flex:1">Panel sekarang memakai HTTPS. Buka alamat baru lalu login lagi.</span><a class="btn pri" href="${esc(CF.url)}#/pengaturan/domain">${ic("lock")}Buka ${esc(CF.url.replace(/\/$/, ""))}</a></div>`
+      : `<div class="tst-sum ok">${ic("check")}Alamat VPS sekarang ${esc(CF.domain)}. Script MikroTik baru otomatis memakai domain ini.</div>`;
+  } else {
+    $("#cfSum").innerHTML = `<div class="tst-sum fail">${ic("alert")}${esc(CF.note || "Dibatalkan, pengaturan tetap seperti semula.")}</div>`;
+  }
+}
+async function runCf(domain, token, withHttps) {
+  if (CF && CF.running) return;
+  $("#cfErr").textContent = "";
+  let r;
+  try { r = await api("/api/cloudflare/start", { method: "POST", body: { domain, token, https: withHttps } }); }
+  catch (e) { $("#cfErr").textContent = e.message; return; }
+  CF = { domain, plan: r.steps, jobId: r.jobId, res: {}, running: true, ok: false };
+  $("#cfGo").disabled = true; const again = $("#cfAgain"); if (again) again.disabled = true;
+  drawCf(); $("#cfRun").scrollIntoView({ behavior: "smooth", block: "start" });
+  for (const s of CF.plan) {
+    CF.current = s.key; drawCf();
+    const t0 = performance.now();
+    let x;
+    try { x = await api("/api/cloudflare/step", { method: "POST", body: { jobId: CF.jobId, key: s.key } }); }
+    catch (e) { x = { ok: false, detail: e.message }; }
+    const el = performance.now() - t0; if (el < 450) await new Promise((z) => setTimeout(z, 450 - el));
+    x.ms = performance.now() - t0; CF.res[s.key] = x; CF.current = null;
+    if (x.ok === false) { CF.note = x.rollbackNote; break; }
+    if (s.key === "apply") { CF.ok = true; CF.url = x.url; }
+  }
+  CF.running = false; drawCf();
+  const go = $("#cfGo"); if (go) go.disabled = false; const ag = $("#cfAgain"); if (ag) ag.disabled = false;
+  // Setelah HTTPS aktif, akses http dialihkan, jadi data tidak dimuat ulang di halaman ini
+  if (CF.ok && !CF.url) { await load(); const keep = CF; route(); CF = keep; drawCf(); }
+}
+
+/* ================= Log aktivitas ================= */
+let LOGQ = "";
+function viewLog(v) {
+  crumb([["Log aktivitas"]]);
+  v.innerHTML = `
+    <div class="ph"><div><h1>Log aktivitas</h1><p>Catatan perubahan di panel dan kejadian penting. Disimpan 90 hari.</p></div></div>
+    <div class="card">
+      <div class="toolbar"><div class="search">${ic("search", "")}<input id="lq" type="text" placeholder="Cari aktivitas, lokasi, atau IP" value="${esc(LOGQ)}"></div><span class="muted" id="logCount" style="margin-left:auto;font-size:12.5px"></span></div>
+      <div id="logBody"><div class="empty"><p>Memuat…</p></div></div>
+    </div>
+    <p class="help" style="margin-top:12px">Password dan token tidak pernah dicatat. Waktu dalam ${esc(tzLabel())}.</p>`;
+  let tm;
+  $("#lq").addEventListener("input", (e) => { LOGQ = e.target.value; clearTimeout(tm); tm = setTimeout(fillLog, 250); });
+  fillLog();
+}
+async function fillLog() {
+  const el = $("#logBody"); if (!el) return;
+  let r;
+  try { r = await api("/api/activity?q=" + encodeURIComponent(LOGQ.trim())); } catch (e) { el.innerHTML = `<div class="empty"><p>${esc(e.message)}</p></div>`; return; }
+  if (!$("#logBody")) return;
+  $("#logCount").textContent = r.total > r.items.length ? `${r.items.length} dari ${r.total} terbaru` : `${r.total} catatan`;
+  if (!r.items.length) { el.innerHTML = `<div class="empty"><p>${LOGQ ? "Tidak ada yang cocok." : "Belum ada aktivitas."}</p></div>`; return; }
+  const bad = /gagal|diblokir|dibatalkan/i;
+  el.innerHTML = `<table class="t"><thead><tr><th style="width:140px">Waktu</th><th>Aktivitas</th><th class="hide-sm" style="width:150px">Dari</th></tr></thead><tbody>
+    ${r.items.map((x) => `<tr><td class="muted" style="white-space:nowrap">${esc(fmtT(x.t, true))}</td>
+      <td><b style="font-weight:550;${bad.test(x.a) ? "color:var(--bad)" : ""}">${esc(x.a)}</b>${x.d ? `<div class="muted" style="font-size:12.5px;word-break:break-word">${esc(x.d)}</div>` : ""}</td>
+      <td class="hide-sm mono muted">${x.ip === "sistem" ? "Sistem" : esc(x.ip)}</td></tr>`).join("")}
+  </tbody></table>`;
 }
 
 /* ================= Aksi global ================= */
@@ -2115,7 +3517,8 @@ paintIcons();
   setInterval(async () => {
     if ($("#appView").classList.contains("hidden") || $("#mbg") || (TEST && TEST.running)) return;
     const h = location.hash;
-    try { await load(); if (!/\/(tes|remote)$/.test(h) && !document.activeElement.matches("input")) route(); } catch (e) {}
+    if (CF && CF.running) return;
+    try { await load(); if (!/\/(tes|remote)$|^#\/(pengaturan|log)/.test(h) && !document.activeElement.matches("input,select")) route(); } catch (e) {}
   }, 30000);
 })();
 </script>
@@ -2155,7 +3558,12 @@ sleep 2
 systemctl is-active --quiet vpn-acs || fail "Panel gagal berjalan. Cek: journalctl -u vpn-acs -n 50"
 
 PUBIP="$(hostname -I | awk '{print $1}')"
+HTTPS_DOM="$("$NODE_BIN" -e 'try{const c=require(process.argv[1]).settings.cloudflare;if(c&&c.https)console.log(c.domain)}catch(e){}' "$APP_DIR/data.json" 2>/dev/null)"
 echo
 ok "Panel VPN ACS berjalan"
-echo -e "   Buka di browser: ${GREEN}http://${PUBIP}:${PANEL_PORT}${NC}"
-echo "   (Jika IP di atas bukan IP publik, pakai IP publik VPS Anda)"
+if [ -n "$HTTPS_DOM" ]; then
+  echo -e "   Buka di browser: ${GREEN}https://${HTTPS_DOM}:${PANEL_PORT}${NC}"
+else
+  echo -e "   Buka di browser: ${GREEN}http://${PUBIP}:${PANEL_PORT}${NC}"
+  echo "   (Jika IP di atas bukan IP publik, pakai IP publik VPS Anda)"
+fi

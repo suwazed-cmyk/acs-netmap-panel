@@ -105,6 +105,13 @@ hapus_layanan_panel() {
     cp "$DATA" "/root/backup-vpnacs-$STAMP.json"
     chmod 600 "/root/backup-vpnacs-$STAMP.json"
     ok "Data panel dibackup ke /root/backup-vpnacs-$STAMP.json"
+    # Sertifikat HTTPS panel (jika dipakai) ikut dihapus supaya perpanjangan otomatis tidak gagal terus
+    local dom
+    dom="$(node -e 'try{const c=require(process.argv[1]).settings.cloudflare;if(c&&c.https)console.log(c.domain)}catch(e){}' "$DATA" 2>/dev/null)"
+    if [ -n "$dom" ] && command -v certbot >/dev/null 2>&1; then
+      certbot delete --cert-name "$dom" --non-interactive >/dev/null 2>&1 && ok "Sertifikat HTTPS $dom dihapus" || warn "Sertifikat HTTPS $dom tidak bisa dihapus otomatis (certbot delete --cert-name $dom)"
+      warn "Record DNS $dom di Cloudflare tidak dihapus. Hapus manual di dashboard Cloudflare jika tidak dipakai."
+    fi
   fi
   rm -rf "$APP_DIR"
   rm -f "$SYSCTL_FILE"
