@@ -107,7 +107,7 @@ cd /root/suwazed-panel
 bash pasang-parameter.sh
 ```
 - Pilih mode akses WAN ONT (disarankan **1 / buka-web**).
-- Kredensial ACS: tekan Enter untuk dibuat acak. Hasilnya disimpan di `/root/genieacs-kredensial-acs.txt`.
+- Kredensial ACS: tekan Enter untuk memakai `admin`/`admin` (atau isi sendiri). Hasilnya disimpan di `/root/genieacs-kredensial-acs.txt`.
 - Parameter lama otomatis di-backup. Untuk kembali: `bash pasang-parameter.sh daftar-backup`, lalu `bash pasang-parameter.sh rollback /root/backup-parameter-...`
 
 ### 6. Panel VPN ACS

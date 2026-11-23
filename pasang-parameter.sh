@@ -89,7 +89,7 @@ ok "Mode akses WAN: $MODE"
 
 echo
 echo -e "${GREEN}== Kredensial ACS yang ditulis ke ONT ==${NC}"
-echo "Hanya huruf, angka, titik, minus, garis bawah. Tekan Enter untuk dibuat otomatis (acak)."
+echo "Hanya huruf, angka, titik, minus, garis bawah. Tekan Enter untuk memakai nilai default (admin)."
 gen() { node -e 'const c="ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";let s="";for(const b of require("crypto").randomBytes(16))s+=c[b%c.length];console.log(s)'; }
 ask() {
   local label="$1" def="$2" v
@@ -98,10 +98,10 @@ ask() {
   [[ "$v" =~ ^[A-Za-z0-9._-]{3,64}$ ]] || fail "$label tidak valid"
   echo "$v"
 }
-ACS_USER="$(ask 'ACS Username' 'acs')"
-ACS_PASS="$(ask 'ACS Password' "$(gen)")"
-CR_USER="$(ask 'Connection Request Username' 'genieacs')"
-CR_PASS="$(ask 'Connection Request Password' "$(gen)")"
+ACS_USER="$(ask 'ACS Username' 'admin')"
+ACS_PASS="$(ask 'ACS Password' 'admin')"
+CR_USER="$(ask 'Connection Request Username' 'admin')"
+CR_PASS="$(ask 'Connection Request Password' 'admin')"
 
 echo
 echo -e "${GREEN}== Backup parameter lama ==${NC}"

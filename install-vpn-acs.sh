@@ -1118,153 +1118,248 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
 <title>Panel VPN ACS</title>
 <style>
   :root{
-    --bg:#f4f6f9; --card:#fff; --ink:#1b2430; --muted:#6b7684; --line:#e3e7ec;
-    --brand:#2563eb; --brand-ink:#fff; --brand-soft:#e8efff;
-    --ok:#16a34a; --ok-soft:#e7f6ec; --bad:#dc2626; --bad-soft:#fdecec; --warn:#b45309; --warn-soft:#fff4e0;
-    --radius:12px; --shadow:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.06);
-    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    color-scheme:light;
+    --bg:#f4f6fc;--surface:#fff;--surface-2:#f7f9fd;--surface-3:#edf1f8;
+    --text:#0d1526;--text-2:#3d4a60;--muted:#6b7990;--border:#e3e8f2;--border-strong:#cfd8e6;--sidebar:#fff;
+    --primary:#4f46e5;--primary-2:#7c3aed;--primary-soft:#eef2ff;--primary-ring:rgba(79,70,229,.18);
+    --ok:#059669;--ok-soft:#ecfdf5;--ok-border:#a7f3d0;
+    --warn:#b45309;--warn-soft:#fffbeb;--warn-border:#fde68a;
+    --danger:#e11d48;--danger-soft:#fff1f2;--danger-border:#fecdd3;
+    --info:#0369a1;--info-soft:#f0f9ff;--info-border:#bae6fd;
+    --code-bg:#0b1220;--code-fg:#dbe4f3;
+    --shadow-xs:0 1px 2px rgba(13,21,38,.05);--shadow-sm:0 4px 12px -4px rgba(13,21,38,.10);--shadow-lg:0 24px 60px -18px rgba(13,21,38,.28);
+    --glow-1:rgba(79,70,229,.10);--glow-2:rgba(6,182,212,.08);
+    --radius:14px;--radius-sm:10px;--sidebar-w:264px;
+    --font:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Consolas,"Liberation Mono",monospace;
   }
-  *{box-sizing:border-box}
-  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--ink);font-size:15px;line-height:1.5}
-  button{font:inherit;cursor:pointer}
-  input,textarea{font:inherit}
+  [data-theme="dark"]{
+    color-scheme:dark;
+    --bg:#070b14;--surface:#0e1524;--surface-2:#121b2e;--surface-3:#1a2438;
+    --text:#e8edf7;--text-2:#a9b4c7;--muted:#7f8ca3;--border:#1e2a40;--border-strong:#2b3952;--sidebar:#0a101c;
+    --primary:#818cf8;--primary-2:#a78bfa;--primary-soft:#1b2140;--primary-ring:rgba(129,140,248,.25);
+    --ok:#34d399;--ok-soft:#0c2a22;--ok-border:#115e4a;
+    --warn:#fbbf24;--warn-soft:#2a2110;--warn-border:#6b4d12;
+    --danger:#fb7185;--danger-soft:#2c1119;--danger-border:#6b2131;
+    --info:#38bdf8;--info-soft:#0b2536;--info-border:#12506b;
+    --shadow-xs:0 1px 2px rgba(0,0,0,.40);--shadow-sm:0 4px 14px -4px rgba(0,0,0,.55);--shadow-lg:0 24px 60px -18px rgba(0,0,0,.75);
+    --glow-1:rgba(129,140,248,.12);--glow-2:rgba(34,211,238,.06);
+  }
+  *,*::before,*::after{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;min-height:100dvh;background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(900px 520px at 88% -12%,var(--glow-1),transparent 62%),radial-gradient(720px 520px at -8% 18%,var(--glow-2),transparent 60%)}
+  h1,h2,h3,p{margin:0}
+  button,input,select,textarea{font:inherit}
+  button{cursor:pointer}
+  code{font-family:var(--mono);font-size:.92em;background:var(--surface-3);padding:1px 6px;border-radius:6px}
   .hidden{display:none!important}
-  .wrap{max-width:1040px;margin:0 auto;padding:0 18px}
+  svg.i{width:18px;height:18px;flex:none}
 
-  /* Header */
-  header{background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
-  header .wrap{display:flex;align-items:center;gap:16px;height:60px}
-  .logo{display:flex;align-items:center;gap:10px;font-weight:700;font-size:17px}
-  .logo i{width:30px;height:30px;border-radius:8px;background:var(--brand);display:grid;place-items:center;color:#fff;font-style:normal;font-size:15px}
-  nav{display:flex;gap:4px;margin-left:12px}
-  nav button{background:none;border:0;padding:8px 14px;border-radius:8px;color:var(--muted);font-weight:600}
-  nav button.on{background:var(--brand-soft);color:var(--brand)}
+  /* ---------- Layout ---------- */
+  .app{display:flex;min-height:100dvh}
+  .sidebar{position:fixed;inset:0 auto 0 0;z-index:40;width:var(--sidebar-w);display:flex;flex-direction:column;gap:6px;padding:18px 14px 16px;background:var(--sidebar);border-right:1px solid var(--border);overflow-y:auto;transition:transform .25s cubic-bezier(.4,0,.2,1)}
+  .brand{display:flex;align-items:center;gap:11px;padding:6px 10px 18px;color:var(--text);text-decoration:none}
+  .brand-mark{width:38px;height:38px;flex:none;border-radius:12px;display:grid;place-items:center;color:#fff;background:linear-gradient(135deg,var(--primary),var(--primary-2));box-shadow:0 10px 22px -10px var(--primary)}
+  .brand-mark svg{width:20px;height:20px}
+  .brand-name{display:block;font-size:15px;font-weight:750;letter-spacing:-.015em;line-height:1.2;white-space:nowrap}
+  .brand-sub{display:block;margin-top:2px;font-size:10px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;color:var(--muted)}
+  .nav-label{padding:14px 12px 6px;font-size:10px;font-weight:750;letter-spacing:.11em;text-transform:uppercase;color:var(--muted)}
+  .nav-item{position:relative;display:flex;align-items:center;gap:11px;width:100%;padding:9px 12px;border:0;border-radius:10px;background:none;color:var(--text-2);font-size:13.5px;font-weight:600;text-align:left;transition:background .15s,color .15s}
+  .nav-item svg{width:18px;height:18px;flex:none;opacity:.85}
+  .nav-item:hover{background:var(--surface-2);color:var(--text)}
+  .nav-item.on{background:var(--primary-soft);color:var(--primary)}
+  .nav-item.on svg{opacity:1}
+  .nav-item.on::before{content:"";position:absolute;left:-14px;top:50%;width:3px;height:20px;border-radius:0 3px 3px 0;background:var(--primary);transform:translateY(-50%)}
   .spacer{flex:1}
-  .btn{border:1px solid var(--line);background:var(--card);color:var(--ink);padding:9px 16px;border-radius:9px;font-weight:600;display:inline-flex;align-items:center;gap:8px}
-  .btn:hover{background:#f7f8fa}
-  .btn.primary{background:var(--brand);border-color:var(--brand);color:var(--brand-ink)}
-  .btn.primary:hover{filter:brightness(1.07)}
-  .btn.danger{color:var(--bad);border-color:#f3c4c4}
-  .btn.danger:hover{background:var(--bad-soft)}
-  .btn.sm{padding:6px 11px;font-size:13.5px;border-radius:8px}
-  .btn.big{padding:12px 20px;font-size:16px}
-  .btn:disabled{opacity:.55;cursor:default}
+  .side-foot{display:flex;flex-direction:column;gap:6px;padding-top:12px;border-top:1px solid var(--border)}
+  .side-user{display:flex;align-items:center;gap:10px;padding:8px 10px}
+  .avatar{width:34px;height:34px;flex:none;border-radius:10px;display:grid;place-items:center;border:1px solid var(--border);background:linear-gradient(135deg,var(--primary-soft),var(--surface-3));color:var(--primary);font-size:13px;font-weight:750}
+  .side-user b{display:block;font-size:13px}
+  .side-user small{display:block;color:var(--muted);font-size:11.5px}
+  .main-wrap{flex:1;min-width:0;margin-left:var(--sidebar-w);display:flex;flex-direction:column;min-height:100dvh}
+  .topbar{display:none;position:sticky;top:0;z-index:30;align-items:center;gap:8px;padding:9px 14px;background:var(--sidebar);border-bottom:1px solid var(--border)}
+  .topbar .brand{padding:0;flex:1;gap:9px}
+  .topbar .brand-mark{width:32px;height:32px;border-radius:10px}
+  .topbar .brand-name{font-size:14px}
+  .topbar .brand-sub{display:none}
+  .sidebar-backdrop{position:fixed;inset:0;z-index:35;background:rgba(2,6,23,.5);backdrop-filter:blur(2px);opacity:0;visibility:hidden;transition:opacity .2s,visibility .2s}
+  body.nav-open .sidebar-backdrop{opacity:1;visibility:visible}
+  .main{width:100%;max-width:1240px;margin:0 auto;padding:30px 34px 64px;flex:1}
+  .page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;flex-wrap:wrap;margin-bottom:24px}
+  .page-head h1{font-size:26px;font-weight:780;letter-spacing:-.03em;line-height:1.15}
+  .page-head .sub{margin-top:6px;color:var(--muted);font-size:13.5px;max-width:680px}
+  .page-head-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  .eyebrow{display:inline-flex;align-items:center;gap:6px;margin-bottom:8px;font-size:11px;font-weight:750;letter-spacing:.09em;text-transform:uppercase;color:var(--primary)}
+  h2{font-size:15.5px;font-weight:720;letter-spacing:-.01em;margin:0 0 12px}
+  h3{font-size:14px;font-weight:700;margin:18px 0 8px}
+  .sub{color:var(--muted)}
 
-  main{padding:24px 0 60px}
-  h1{font-size:22px;margin:0 0 4px}
-  h2{font-size:18px;margin:0 0 12px}
-  h3{font-size:15.5px;margin:18px 0 8px}
-  .sub{color:var(--muted);margin:0 0 20px}
+  /* ---------- Tombol ---------- */
+  .btn{--btn-bg:var(--surface);--btn-bd:var(--border-strong);--btn-fg:var(--text);display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:9px 14px;border:1px solid var(--btn-bd);border-radius:10px;background:var(--btn-bg);color:var(--btn-fg);font-size:13px;font-weight:650;line-height:1;white-space:nowrap;text-decoration:none;cursor:pointer;user-select:none;transition:transform .12s,box-shadow .15s,background .15s,border-color .15s,color .15s}
+  .btn:hover{border-color:var(--primary);box-shadow:var(--shadow-sm)}
+  .btn:active{transform:translateY(1px)}
+  .btn.primary,.btn-primary{--btn-bg:linear-gradient(135deg,var(--primary),var(--primary-2));--btn-bd:transparent;--btn-fg:#fff;box-shadow:0 8px 18px -10px var(--primary)}
+  .btn.primary:hover,.btn-primary:hover{filter:brightness(1.06);border-color:transparent}
+  .btn.danger,.btn-danger-soft{--btn-bg:var(--danger-soft);--btn-bd:var(--danger-border);--btn-fg:var(--danger)}
+  .btn.danger:hover{border-color:var(--danger)}
+  .btn-ghost{--btn-bg:transparent;--btn-bd:transparent;--btn-fg:var(--text-2)}
+  .btn-ghost:hover{background:var(--surface-2);box-shadow:none;border-color:transparent}
+  .btn.sm{padding:7px 11px;font-size:12.5px;border-radius:9px}
+  .btn.big{padding:12px 20px;font-size:14px}
+  .btn-icon{width:36px;height:36px;padding:0}
+  .btn:disabled{opacity:.55;cursor:default;transform:none}
 
-  .alert{border-radius:10px;padding:12px 14px;margin:0 0 14px;display:flex;gap:10px;align-items:flex-start;font-size:14.5px}
+  /* ---------- Alert ---------- */
+  .alert{border:1px solid;border-radius:var(--radius-sm);padding:11px 14px;margin:0 0 14px;display:flex;gap:10px;align-items:flex-start;font-size:13.5px}
   .alert b{display:block}
-  .alert.warn{background:var(--warn-soft);color:#7a3e05}
-  .alert.bad{background:var(--bad-soft);color:#8f1c1c}
-  .alert.ok{background:var(--ok-soft);color:#14532d}
-  .alert.info{background:var(--brand-soft);color:#1e3a8a}
+  .alert.warn{background:var(--warn-soft);border-color:var(--warn-border);color:var(--warn)}
+  .alert.bad{background:var(--danger-soft);border-color:var(--danger-border);color:var(--danger)}
+  .alert.ok{background:var(--ok-soft);border-color:var(--ok-border);color:var(--ok)}
+  .alert.info{background:var(--info-soft);border-color:var(--info-border);color:var(--info)}
+  .alert code{background:transparent;border:1px solid currentColor;opacity:.9}
 
-  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:18px}
-  .stat{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;box-shadow:var(--shadow)}
-  .stat small{color:var(--muted);font-weight:600}
-  .stat div{font-size:24px;font-weight:700}
+  /* ---------- Statistik ---------- */
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:18px}
+  .stat{display:flex;align-items:flex-start;gap:13px;padding:16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-xs);transition:transform .15s,box-shadow .15s}
+  .stat:hover{transform:translateY(-1px);box-shadow:var(--shadow-sm)}
+  .stat-icon{width:40px;height:40px;flex:none;border-radius:11px;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent)}
+  .stat-icon svg{width:20px;height:20px}
+  .stat-label{display:block;font-size:12px;font-weight:600;color:var(--muted)}
+  .stat-value{display:block;margin-top:3px;font-size:27px;font-weight:750;letter-spacing:-.035em;line-height:1.1;font-variant-numeric:tabular-nums}
+  .stat.primary{--accent:var(--primary);--accent-soft:var(--primary-soft)}
+  .stat.ok{--accent:var(--ok);--accent-soft:var(--ok-soft)}
+  .stat.muted{--accent:var(--muted);--accent-soft:var(--surface-3)}
 
-  .toolbar{display:flex;align-items:center;gap:12px;margin-bottom:14px}
-
-  .sites{display:grid;gap:12px}
-  .site{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;box-shadow:var(--shadow)}
-  .site-top{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-  .site-name{font-weight:700;font-size:16.5px}
-  .badge{font-size:12.5px;font-weight:700;padding:3px 10px;border-radius:999px;display:inline-flex;align-items:center;gap:6px}
-  .badge::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor}
+  /* ---------- Kartu lokasi ---------- */
+  .sites{display:grid;gap:14px}
+  .card,.site{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-xs)}
+  .card{padding:20px 22px;margin-bottom:16px}
+  .site{overflow:hidden}
+  .site-top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:15px 18px;border-bottom:1px solid var(--border)}
+  .icon-badge{width:34px;height:34px;flex:none;border-radius:10px;display:grid;place-items:center;background:var(--primary-soft);color:var(--primary)}
+  .icon-badge svg{width:18px;height:18px}
+  .site-name{font-weight:720;font-size:15px;letter-spacing:-.01em}
+  .site-note{color:var(--muted);font-size:12.5px}
+  .badge{display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border-radius:999px;font-size:11.5px;font-weight:700;line-height:1.2;white-space:nowrap}
+  .badge::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
   .badge.on{background:var(--ok-soft);color:var(--ok)}
-  .badge.off{background:#eef0f3;color:#7b8794}
-  .site-note{color:var(--muted);font-size:13.5px}
-  .site-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:14px 0}
-  .kv small{display:block;color:var(--muted);font-size:12.5px;font-weight:600}
-  .kv span{font-family:var(--mono);font-size:14px}
-  .site-actions{display:flex;gap:8px;flex-wrap:wrap}
-
-  .empty{background:var(--card);border:2px dashed var(--line);border-radius:var(--radius);padding:40px 20px;text-align:center}
+  .badge.on::before{box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 25%,transparent)}
+  .badge.off{background:var(--surface-3);color:var(--muted)}
+  .site-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:14px 18px}
+  .kv small{display:block;color:var(--muted);font-size:10.5px;font-weight:750;letter-spacing:.07em;text-transform:uppercase}
+  .kv span{font-family:var(--mono);font-size:13.5px}
+  .warnline{margin:0 18px 12px;padding:8px 12px;border-radius:9px;background:var(--warn-soft);color:var(--warn);font-size:12.5px;font-weight:600}
+  .remote{margin:0 18px 14px;padding:12px;border-radius:var(--radius-sm);background:var(--surface-2);border:1px solid var(--border)}
+  .remote-h{font-size:10.5px;font-weight:750;letter-spacing:.07em;color:var(--muted);margin-bottom:8px}
+  .rchips{display:flex;flex-wrap:wrap;gap:8px}
+  .rchip{display:inline-flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--border);border-radius:9px;padding:5px 6px 5px 10px;font-size:13px}
+  .rchip code{background:none;padding:0}
+  .rchip button{border:0;background:var(--primary-soft);color:var(--primary);font-weight:700;border-radius:6px;padding:3px 8px;font-size:12px}
+  .site-actions{display:flex;gap:8px;flex-wrap:wrap;padding:12px 18px;border-top:1px solid var(--border);background:var(--surface-2)}
+  .toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .empty{background:var(--surface);border:1px dashed var(--border-strong);border-radius:var(--radius);padding:44px 20px;text-align:center}
   .empty p{color:var(--muted);max-width:460px;margin:8px auto 18px}
 
-  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:20px 22px;box-shadow:var(--shadow);margin-bottom:16px}
+  /* ---------- Form ---------- */
+  label{display:block;font-weight:650;font-size:12.5px;color:var(--text-2);margin:14px 0 6px}
+  .hint{color:var(--muted);font-size:12.5px;margin-top:6px}
+  input[type=text],input[type=password],select{width:100%;padding:9px 12px;border:1px solid var(--border-strong);border-radius:9px;background:var(--surface);color:var(--text);font-size:13.5px;outline:none;transition:border-color .15s,box-shadow .15s}
+  input[type=text]:focus,input[type=password]:focus,select:focus{border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-ring)}
+  input::placeholder{color:var(--muted);opacity:.8}
+  input[readonly]{background:var(--surface-2)}
+  input[type=checkbox],input[type=radio]{accent-color:var(--primary)}
+  .row{display:flex;gap:8px}.row input{flex:1}
+  .error{color:var(--danger);font-weight:600;font-size:13px;margin-top:10px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
+  .radio{display:flex;gap:16px;flex-wrap:wrap;margin-top:4px}
+  .radio label{display:flex;align-items:center;gap:7px;font-weight:500;margin:0;cursor:pointer;color:var(--text)}
+  .addbox{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:4px 16px 16px;margin-top:16px}
 
-  label{display:block;font-weight:600;margin:14px 0 6px}
-  .hint{color:var(--muted);font-size:13.5px;margin-top:6px}
-  input[type=text],input[type=password]{width:100%;padding:11px 12px;border:1px solid #cfd6de;border-radius:9px;background:#fff;outline:none}
-  input:focus{border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-soft)}
-  .row{display:flex;gap:8px}
-  .row input{flex:1}
-  .error{color:var(--bad);font-weight:600;margin-top:12px;min-height:1px}
-
-  /* Modal */
-  .modal-bg{position:fixed;inset:0;background:rgba(15,23,42,.45);display:flex;align-items:flex-start;justify-content:center;padding:40px 14px;overflow:auto;z-index:20}
-  .modal{background:var(--card);border-radius:14px;max-width:720px;width:100%;box-shadow:0 20px 50px rgba(0,0,0,.25)}
-  .modal-h{display:flex;align-items:center;padding:16px 20px;border-bottom:1px solid var(--line)}
-  .modal-h h2{margin:0;font-size:17px}
-  .modal-h .x{margin-left:auto;background:none;border:0;font-size:22px;color:var(--muted);line-height:1}
+  /* ---------- Modal ---------- */
+  .modal-bg{position:fixed;inset:0;background:rgba(2,6,23,.55);backdrop-filter:blur(3px);display:flex;align-items:flex-start;justify-content:center;padding:40px 14px;overflow:auto;z-index:60}
+  .modal{background:var(--surface);border:1px solid var(--border);border-radius:16px;max-width:720px;width:100%;box-shadow:var(--shadow-lg)}
+  .modal-h{display:flex;align-items:center;padding:15px 20px;border-bottom:1px solid var(--border)}
+  .modal-h h2{margin:0;font-size:16px}
+  .modal-h .x{margin-left:auto;background:none;border:0;font-size:22px;color:var(--muted);line-height:1;border-radius:8px;width:32px;height:32px}
+  .modal-h .x:hover{background:var(--surface-2)}
   .modal-b{padding:18px 20px}
-  .modal-f{padding:14px 20px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px}
+  .modal-f{padding:13px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px;background:var(--surface-2);border-radius:0 0 16px 16px}
 
+  /* ---------- Konten ---------- */
   .steps{counter-reset:s;list-style:none;padding:0;margin:0}
   .steps>li{counter-increment:s;position:relative;padding:0 0 18px 44px}
-  .steps>li::before{content:counter(s);position:absolute;left:0;top:-2px;width:30px;height:30px;border-radius:50%;background:var(--brand);color:#fff;font-weight:700;display:grid;place-items:center}
+  .steps>li::before{content:counter(s);position:absolute;left:0;top:-2px;width:30px;height:30px;border-radius:10px;background:linear-gradient(135deg,var(--primary),var(--primary-2));color:#fff;font-weight:750;display:grid;place-items:center;box-shadow:0 8px 18px -10px var(--primary)}
   .steps>li .st{display:block;font-weight:700;margin-bottom:4px}
-
-  pre.code{background:#0f172a;color:#e2e8f0;font-family:var(--mono);font-size:12.5px;padding:14px;border-radius:10px;overflow:auto;max-height:280px;white-space:pre;margin:8px 0}
+  pre.code{background:var(--code-bg);color:var(--code-fg);font-family:var(--mono);font-size:12.5px;padding:14px;border-radius:var(--radius-sm);overflow:auto;max-height:280px;white-space:pre;margin:8px 0}
   .copy-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-  .copied{color:var(--ok);font-weight:700;font-size:14px}
-  table.info{width:100%;border-collapse:collapse;font-size:14px;margin-top:6px}
-  table.info td{padding:8px 10px;border-bottom:1px solid var(--line)}
+  .copied{color:var(--ok);font-weight:700;font-size:13px}
+  table.info,table.fw{width:100%;border-collapse:separate;border-spacing:0;font-size:13.5px;margin-top:6px;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden}
+  table.info td,table.fw td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
+  table.info tr:last-child td,table.fw tr:last-child td{border-bottom:0}
   table.info td:first-child{color:var(--muted);width:44%}
   table.info td:last-child{font-family:var(--mono)}
-
-  .check{list-style:none;padding:0;margin:0}
-  .check li{display:flex;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
-  .check .ic{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-weight:800;flex:none}
-  .check .ic.ok{background:var(--ok-soft);color:var(--ok)}
-  .check .ic.no{background:var(--bad-soft);color:var(--bad)}
-  .check .ic.skip{background:#eef0f3;color:#7b8794}
-  .remote{border-top:1px dashed var(--line);margin-top:2px;padding-top:12px;margin-bottom:12px}
-  .remote-h{font-size:12.5px;font-weight:700;color:var(--muted);margin-bottom:6px}
-  .rchips{display:flex;flex-wrap:wrap;gap:8px}
-  .rchip{display:inline-flex;align-items:center;gap:8px;background:#f5f7fa;border:1px solid var(--line);border-radius:9px;padding:5px 6px 5px 10px;font-size:13.5px}
-  .rchip b{font-weight:700}
-  .rchip code{font-family:var(--mono);font-size:13px}
-  .rchip button{border:0;background:var(--brand-soft);color:var(--brand);font-weight:700;border-radius:6px;padding:3px 8px;font-size:12.5px}
-  .warnline{color:var(--warn);font-size:13px;font-weight:600;margin-top:-4px;margin-bottom:10px}
-  table.fw{width:100%;border-collapse:collapse;font-size:14px}
-  table.fw th{text-align:left;font-size:12.5px;color:var(--muted);font-weight:700;padding:6px 8px;border-bottom:1px solid var(--line)}
-  table.fw td{padding:9px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+  table.fw th{padding:9px 12px;border-bottom:1px solid var(--border);background:var(--surface-2);color:var(--muted);font-size:10.5px;font-weight:750;letter-spacing:.07em;text-align:left;text-transform:uppercase;white-space:nowrap}
   table.fw td.m{font-family:var(--mono);font-size:13px}
-  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
-  select{width:100%;padding:10px 12px;border:1px solid #cfd6de;border-radius:9px;background:#fff;font:inherit}
-  .radio{display:flex;gap:16px;flex-wrap:wrap;margin-top:4px}
-  .radio label{display:flex;align-items:center;gap:7px;font-weight:500;margin:0;cursor:pointer}
-  .addbox{background:#f8fafc;border:1px solid var(--line);border-radius:10px;padding:4px 16px 16px;margin-top:16px}
-  @media (max-width:760px){ .grid2{grid-template-columns:1fr} table.fw .hide-sm{display:none} }
+  .check{list-style:none;padding:0;margin:0}
+  .check li{display:flex;gap:12px;padding:11px 0;border-bottom:1px solid var(--border)}
+  .check li:last-child{border-bottom:0}
+  .check .ic{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;font-weight:800;flex:none}
+  .check .ic.ok{background:var(--ok-soft);color:var(--ok)}
+  .check .ic.no{background:var(--danger-soft);color:var(--danger)}
+  .check .ic.skip{background:var(--surface-3);color:var(--muted)}
   .check small{display:block;color:var(--muted)}
-
-  .faq details{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 16px;margin-bottom:8px}
-  .faq summary{font-weight:600;cursor:pointer}
-  .faq p{margin:10px 0 2px;color:#334155}
-  .diagram{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0 4px}
-  .node{background:var(--brand-soft);color:#1e3a8a;padding:8px 12px;border-radius:9px;font-weight:600;font-size:14px}
+  .faq details{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 16px;margin-bottom:8px;box-shadow:var(--shadow-xs)}
+  .faq summary{font-weight:650;cursor:pointer}
+  .faq p{margin:10px 0 2px;color:var(--text-2)}
+  .diagram{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0 12px}
+  .node{background:var(--primary-soft);color:var(--primary);padding:7px 12px;border-radius:9px;font-weight:650;font-size:13px}
   .arrow{color:var(--muted);font-weight:700}
+  .card p+p{margin-top:8px}
 
-  /* Login */
-  .login{min-height:100vh;display:grid;place-items:center;padding:20px}
-  .login .card{width:100%;max-width:380px;padding:28px}
-  .login .logo{justify-content:center;margin-bottom:6px;font-size:19px}
+  /* ---------- Halaman login ---------- */
+  .login{min-height:100dvh;display:grid;grid-template-columns:1.1fr 1fr}
+  .login-hero{position:relative;overflow:hidden;color:#fff;padding:44px 48px;display:flex;flex-direction:column;background:radial-gradient(700px 500px at 85% 10%,rgba(124,58,237,.55),transparent 60%),radial-gradient(700px 500px at 10% 100%,rgba(13,148,136,.55),transparent 60%),linear-gradient(160deg,#1e1b4b,#312e81 45%,#155e75)}
+  .login-hero::after{content:"";position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.04) 1px,transparent 1px);background-size:32px 32px;pointer-events:none}
+  .login-hero .brand{color:#fff;padding:0}
+  .login-hero .brand-mark{background:rgba(255,255,255,.12);box-shadow:none;border:1px solid rgba(255,255,255,.15)}
+  .login-hero .brand-sub{color:rgba(255,255,255,.65)}
+  .login-hero .hero-body{margin:auto 0;max-width:460px}
+  .login-hero .kicker{font-size:11px;font-weight:750;letter-spacing:.11em;text-transform:uppercase;color:rgba(255,255,255,.65);margin-bottom:14px}
+  .login-hero h1{font-size:44px;font-weight:800;letter-spacing:-.04em;line-height:1.05}
+  .login-hero p{margin-top:14px;color:rgba(255,255,255,.75);font-size:15px}
+  .login-hero .foot{font-size:12px;color:rgba(255,255,255,.55)}
+  .login-side{display:grid;place-items:center;padding:32px 24px}
+  .login-box{width:100%;max-width:390px}
+  .login-box .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:34px;color:var(--text-2);font-size:13.5px}
+  .login-box h1{font-size:26px;font-weight:780;letter-spacing:-.03em}
+  .login-box .sub{margin:6px 0 20px;font-size:13.5px}
+  .login-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-sm);padding:18px}
+  .login-card label{margin-top:0}
+  .login-card .btn{width:100%;margin-top:14px}
+  .login-box .note{text-align:center;color:var(--muted);font-size:12px;margin-top:22px}
 
-  .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:11px 18px;border-radius:10px;font-weight:600;z-index:50;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+  .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:11px 18px;border-radius:10px;font-weight:650;z-index:80;box-shadow:var(--shadow-lg)}
 
+  /* ---------- Responsif ---------- */
+  @media (max-width:980px){
+    .sidebar{transform:translateX(-100%)}
+    body.nav-open .sidebar{transform:none;box-shadow:var(--shadow-lg)}
+    .main-wrap{margin-left:0}
+    .topbar{display:flex}
+    .main{padding:22px 18px 56px}
+    .login{grid-template-columns:1fr}
+    .login-hero{display:none}
+  }
   @media (max-width:760px){
     .site-grid{grid-template-columns:repeat(2,1fr)}
-    .stats{grid-template-columns:repeat(3,1fr)}
-    nav{margin-left:0}
-    header .wrap{height:auto;flex-wrap:wrap;padding-top:10px;padding-bottom:10px}
-    .logo span.t{display:none}
+    .stats{grid-template-columns:repeat(3,1fr);gap:8px}
+    .stat{padding:12px;gap:8px;flex-direction:column}
+    .stat-icon{width:32px;height:32px}
+    .stat-value{font-size:22px}
+    .grid2{grid-template-columns:1fr}
+    table.fw .hide-sm{display:none}
+    .page-head h1{font-size:22px}
   }
 </style>
 </head>
@@ -1272,56 +1367,85 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
 
 <!-- ============ LOGIN ============ -->
 <div id="loginView" class="login hidden">
-  <div class="card">
-    <div class="logo"><i>⇄</i> Panel VPN ACS</div>
-    <p class="sub" style="text-align:center">Masukkan password admin panel</p>
-    <form id="loginForm">
-      <label for="lp">Password</label>
-      <input id="lp" type="password" autocomplete="current-password" autofocus>
-      <div class="error" id="loginErr"></div>
-      <button class="btn primary big" style="width:100%;justify-content:center;margin-top:10px">Masuk</button>
-    </form>
+  <div class="login-hero">
+    <div class="brand"><span class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg></span><span><span class="brand-name">VPN ACS</span><span class="brand-sub">Control Panel</span></span></div>
+    <div class="hero-body">
+      <div class="kicker">GenieACS · MikroTik</div>
+      <h1>Kendali ONT.<br>Dari mana saja.</h1>
+      <p>VPN L2TP, IP virtual, dan remote MikroTik untuk GenieACS dalam satu panel.</p>
+    </div>
+    <div class="foot">L2TP · NETMAP · TR-069</div>
+  </div>
+  <div class="login-side">
+    <div class="login-box">
+      <div class="top"><span>Akses terbatas</span><button type="button" class="btn btn-ghost btn-icon theme-toggle" aria-label="Ganti tema"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button></div>
+      <h1>Masuk ke panel</h1>
+      <p class="sub">Masukkan password admin panel.</p>
+      <form id="loginForm" class="login-card">
+        <label for="lp">Password panel</label>
+        <input id="lp" type="password" autocomplete="current-password" placeholder="Masukkan password" autofocus>
+        <div class="error" id="loginErr"></div>
+        <button class="btn primary"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg> Masuk</button>
+      </form>
+      <p class="note">Administrator access only</p>
+    </div>
   </div>
 </div>
 
 <!-- ============ APLIKASI ============ -->
-<div id="appView" class="hidden">
-  <header>
-    <div class="wrap">
-      <div class="logo"><i>⇄</i> <span class="t">Panel VPN ACS</span></div>
-      <nav>
-        <button data-tab="sites" class="on">Lokasi</button>
-        <button data-tab="guide">Panduan</button>
-        <button data-tab="settings">Pengaturan</button>
-      </nav>
-      <div class="spacer"></div>
-      <button class="btn sm" id="logoutBtn">Keluar</button>
+<div id="appView" class="app hidden">
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg></span><span><span class="brand-name">VPN ACS</span><span class="brand-sub">Control Panel</span></span></div>
+    <div class="nav-label">Menu</div>
+    <button class="nav-item on" data-tab="sites" type="button"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 16.5h.01M11 16.5h.01M8 9a6 6 0 0 1 8 0M5.5 6.5a10 10 0 0 1 13 0"/></svg> Lokasi MikroTik</button>
+    <button class="nav-item" data-tab="guide" type="button"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2V5z"/><path d="M4 19a2 2 0 0 1 2-2h13"/></svg> Panduan</button>
+    <button class="nav-item" data-tab="settings" type="button"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg> Pengaturan</button>
+    <div class="spacer"></div>
+    <div class="side-foot">
+      <div class="side-user"><span class="avatar">A</span><span><b>Admin</b><small>GenieACS · L2TP</small></span></div>
+      <button class="nav-item theme-toggle" type="button"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg> Mode gelap / terang</button>
+      <button class="nav-item" id="logoutBtn" type="button"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg> Keluar</button>
     </div>
-  </header>
+  </aside>
+  <div class="sidebar-backdrop" id="navBackdrop"></div>
+  <div class="main-wrap">
+    <header class="topbar">
+      <button class="btn btn-ghost btn-icon" id="navToggle" type="button" aria-label="Menu"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+      <div class="brand"><span class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg></span><span><span class="brand-name">VPN ACS</span><span class="brand-sub">Control Panel</span></span></div>
+      <button class="btn btn-ghost btn-icon theme-toggle" type="button" aria-label="Ganti tema"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
+    </header>
 
-  <main class="wrap">
+  <main class="main">
     <div id="alerts"></div>
 
     <!-- Tab Lokasi -->
     <section id="tab-sites">
-      <h1>Lokasi MikroTik</h1>
-      <p class="sub">Setiap lokasi = satu MikroTik yang tersambung ke VPS lewat VPN, supaya GenieACS bisa mengirim perintah (Summon) ke ONT di lokasi itu.</p>
-      <div class="stats">
-        <div class="stat"><small>Total lokasi</small><div id="stTotal">0</div></div>
-        <div class="stat"><small>Tersambung</small><div id="stOn" style="color:var(--ok)">0</div></div>
-        <div class="stat"><small>Terputus</small><div id="stOff" style="color:#7b8794">0</div></div>
+      <div class="page-head">
+        <div>
+          <div class="eyebrow">VPN L2TP · GenieACS</div>
+          <h1>Lokasi MikroTik</h1>
+          <p class="sub">Setiap lokasi = satu MikroTik yang tersambung ke VPS lewat VPN, supaya GenieACS bisa mengirim perintah (Summon) ke ONT di lokasi itu.</p>
+        </div>
+        <div class="page-head-actions">
+          <button class="btn" id="refreshBtn">↻ Muat ulang status</button>
+          <button class="btn primary" id="addBtn">＋ Tambah Lokasi</button>
+        </div>
       </div>
-      <div class="toolbar">
-        <button class="btn primary" id="addBtn">＋ Tambah Lokasi</button>
-        <button class="btn" id="refreshBtn">↻ Muat ulang status</button>
+      <div class="stats">
+        <div class="stat primary"><span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></span><div><span class="stat-label">Total lokasi</span><span class="stat-value" id="stTotal">0</span></div></div>
+        <div class="stat ok"><span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span><div><span class="stat-label">Tersambung</span><span class="stat-value" id="stOn">0</span></div></div>
+        <div class="stat muted"><span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l20 20M8.5 16.5a5 5 0 0 1 7 0M5 12.9a10 10 0 0 1 5.2-2.8M19 12.9a10 10 0 0 0-2-1.4M12 20h.01"/></svg></span><div><span class="stat-label">Terputus</span><span class="stat-value" id="stOff">0</span></div></div>
       </div>
       <div class="sites" id="siteList"></div>
     </section>
 
     <!-- Tab Panduan -->
     <section id="tab-guide" class="hidden">
-      <h1>Panduan</h1>
-      <p class="sub">Penjelasan singkat dengan bahasa sederhana.</p>
+      <div class="page-head"><div>
+        <div class="eyebrow">Bantuan</div>
+        <h1>Panduan</h1>
+        <p class="sub">Penjelasan singkat dengan bahasa sederhana.</p>
+      </div></div>
 
       <div class="card">
         <h2>Cara kerjanya</h2>
@@ -1377,8 +1501,11 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
 
     <!-- Tab Pengaturan -->
     <section id="tab-settings" class="hidden">
-      <h1>Pengaturan</h1>
-      <p class="sub">Data VPS yang dipakai untuk membuat script MikroTik.</p>
+      <div class="page-head"><div>
+        <div class="eyebrow">Sistem</div>
+        <h1>Pengaturan</h1>
+        <p class="sub">Data VPS yang dipakai untuk membuat script MikroTik.</p>
+      </div></div>
 
       <div class="card">
         <h2>VPS</h2>
@@ -1436,6 +1563,7 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
       </div>
     </section>
   </main>
+  </div>
 </div>
 
 <div id="modalRoot"></div>
@@ -1474,6 +1602,22 @@ function copyText(text) {
   return Promise.resolve();
 }
 
+/* ---------- Tema & menu HP ---------- */
+function applyTheme(t) { document.documentElement.setAttribute("data-theme", t); }
+(function () {
+  let t = null;
+  try { t = localStorage.getItem("vpnacs-theme"); } catch (e) {}
+  if (!t) t = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  applyTheme(t);
+})();
+document.querySelectorAll(".theme-toggle").forEach((b) => b.addEventListener("click", () => {
+  const t = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
+  applyTheme(t);
+  try { localStorage.setItem("vpnacs-theme", t); } catch (e) {}
+}));
+$("#navToggle").addEventListener("click", () => document.body.classList.toggle("nav-open"));
+$("#navBackdrop").addEventListener("click", () => document.body.classList.remove("nav-open"));
+
 /* ---------- Login ---------- */
 function showLogin() { $("#appView").classList.add("hidden"); $("#loginView").classList.remove("hidden"); $("#lp").focus(); }
 function showApp() { $("#loginView").classList.add("hidden"); $("#appView").classList.remove("hidden"); }
@@ -1490,8 +1634,9 @@ $("#loginForm").addEventListener("submit", async (e) => {
 $("#logoutBtn").addEventListener("click", async () => { await api("/api/logout", { method: "POST" }).catch(() => {}); showLogin(); });
 
 /* ---------- Tab ---------- */
-document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => {
-  document.querySelectorAll("nav button").forEach((x) => x.classList.toggle("on", x === b));
+document.querySelectorAll(".nav-item[data-tab]").forEach((b) => b.addEventListener("click", () => {
+  document.body.classList.remove("nav-open");
+  document.querySelectorAll(".nav-item[data-tab]").forEach((x) => x.classList.toggle("on", x === b));
   ["sites", "guide", "settings"].forEach((t) => $("#tab-" + t).classList.toggle("hidden", t !== b.dataset.tab));
 }));
 
@@ -1520,6 +1665,7 @@ function renderSites() {
   $("#siteList").innerHTML = list.map((s) => `
     <div class="site">
       <div class="site-top">
+        <span class="icon-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 16.5h.01M11 16.5h.01M8 9a6 6 0 0 1 8 0M5.5 6.5a10 10 0 0 1 13 0"/></svg></span>
         <span class="site-name">${esc(s.name)}</span>
         <span class="badge ${s.online ? "on" : "off"}">${s.online ? "Tersambung" : "Terputus"}</span>
         ${s.note ? `<span class="site-note">${esc(s.note)}</span>` : ""}

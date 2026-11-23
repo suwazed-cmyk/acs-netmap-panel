@@ -9,7 +9,7 @@ Pasang dengan `bash pasang-parameter.sh` dari folder utama repo. Yang diganti ha
 | Bagian | Asli (beryindo) | Versi ini |
 |---|---|---|
 | Preset + provision `useradmin` | Aktif; mencoba mengganti user admin web ONT ke `userjkb`/`userjkb`, dan error karena variabel `superuser` tidak didefinisikan | **Dihapus** (fault lama ikut dibersihkan) |
-| Provision `inform`: kredensial ACS & Connection Request | `acs` / `acsadmin12345` (tertulis di repo publik) | Diisi saat pemasangan (default acak) |
+| Provision `inform`: kredensial ACS & Connection Request | `acs` / `acsadmin12345` | Diisi saat pemasangan (default `admin`/`admin`) |
 | Provision `inform`: URL ACS | Tidak diubah (baris dinonaktifkan) | Tetap tidak diubah |
 | Provision `default`: akses WAN ONT | Selalu membuka HTTP + SSH + Telnet (Huawei), HTTP (ZTE), remote web (FiberHome) | Saklar 3 mode: `buka-web` (HTTP saja, SSH/Telnet ditutup), `tutup`, `biarkan` |
 | Virtual parameter `RXPowerInt` | Tidak ada | **Baru.** Redaman dibulatkan sebagai angka, untuk filter/grafik |
