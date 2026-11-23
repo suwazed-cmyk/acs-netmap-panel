@@ -177,6 +177,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
+const VERSION = "1.3.0";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
 const VIRTUAL_POOL = "10.100.0.0/14";
@@ -610,9 +611,9 @@ function siteView(s, st, peers, h, now) {
 // ---------- Validasi ----------
 function validateSite(d, input, existing) {
   const name = String(input.name || "").trim();
-  if (name.length < 2 || name.length > 40) return "Nama lokasi 2-40 karakter.";
+  if (name.length < 2 || name.length > 40) return "Nama server 2-40 karakter.";
   if (d.sites.some((s) => s !== existing && s.name.toLowerCase() === name.toLowerCase()))
-    return "Nama lokasi sudah dipakai.";
+    return "Nama server sudah dipakai.";
   const sub = parseCidr(input.realSubnet);
   if (!sub) return "Subnet ONT tidak valid. Contoh yang benar: 10.0.0.0/24";
   if (sub.prefix < 16 || sub.prefix > 29) return "Ukuran subnet ONT harus antara /16 sampai /29.";
@@ -622,7 +623,7 @@ function validateSite(d, input, existing) {
   if (overlap(sub, T.cidr)) return `Subnet ONT tidak boleh bentrok dengan jaringan VPN ${T.net}.`;
   const others = d.sites.filter((s) => s !== existing);
   if (others.some((o) => overlap(sub, parseCidr(o.virtualSubnet))))
-    return "Subnet ONT bentrok dengan IP virtual lokasi lain.";
+    return "Subnet ONT bentrok dengan IP virtual server lain.";
   const vtext = String(input.virtualSubnet || "").trim();
   if (vtext) {
     const v = parseCidr(vtext);
@@ -633,9 +634,9 @@ function validateSite(d, input, existing) {
     if (overlap(v, T.cidr)) return `IP virtual tidak boleh bentrok dengan jaringan VPN ${T.net}.`;
     if (overlap(v, sub)) return "IP virtual tidak boleh sama dengan subnet ONT asli.";
     const clash = others.find((o) => overlap(v, parseCidr(o.virtualSubnet)));
-    if (clash) return `IP virtual ${v.text} sudah dipakai lokasi "${clash.name}" (${clash.virtualSubnet}). Pilih yang lain.`;
+    if (clash) return `IP virtual ${v.text} sudah dipakai server "${clash.name}" (${clash.virtualSubnet}). Pilih yang lain.`;
     const clashReal = others.find((o) => overlap(v, parseCidr(o.realSubnet)));
-    if (clashReal) return `IP virtual ${v.text} bentrok dengan subnet ONT asli lokasi "${clashReal.name}" (${clashReal.realSubnet}).`;
+    if (clashReal) return `IP virtual ${v.text} bentrok dengan subnet ONT asli server "${clashReal.name}" (${clashReal.realSubnet}).`;
   }
   if (existing && (existing.forwards || []).some((f) => f.target === "lan" && !inSubnet(f.lanIp, sub)))
     return "Ada port forwarding ke perangkat di luar subnet ONT baru. Hapus port forwarding itu dulu.";
@@ -670,7 +671,7 @@ function validateForward(d, site, b) {
     if (ipToInt(lanIp) === null) return { error: "IP perangkat tidak valid. Contoh: 10.0.0.25" };
     const real = parseCidr(site.realSubnet);
     if (!inSubnet(lanIp, real))
-      return { error: `IP perangkat harus di dalam subnet ONT lokasi ini (${site.realSubnet}).` };
+      return { error: `IP perangkat harus di dalam subnet ONT server ini (${site.realSubnet}).` };
   }
   const used = usedPublicPorts(d);
   const protos = proto === "both" ? ["tcp", "udp"] : [proto];
@@ -686,7 +687,7 @@ function validateForward(d, site, b) {
     if (RESERVED_PORTS.has(publicPort)) return { error: `Port ${publicPort} sudah dipakai layanan VPS. Pilih port lain.` };
     if (!free(publicPort)) {
       const owner = d.sites.find((s) => (s.forwards || []).some((f) => f.publicPort === publicPort));
-      return { error: `Port publik ${publicPort} sudah dipakai${owner ? ` di lokasi "${owner.name}"` : ""}. Pilih port lain atau kosongkan untuk otomatis.` };
+      return { error: `Port publik ${publicPort} sudah dipakai${owner ? ` di server "${owner.name}"` : ""}. Pilih port lain atau kosongkan untuk otomatis.` };
     }
   }
   const dupe = (site.forwards || []).find(
@@ -748,7 +749,7 @@ async function runTestStep(site, key, st) {
     if (iface) return { ok: true, detail: `Tersambung lewat ${iface}` };
     return site.installedAt
       ? { ok: false, detail: "MikroTik belum tersambung ke VPS", hint: "Pastikan script MikroTik sudah dipasang, MikroTik punya internet, dan alamat VPS di Pengaturan benar." }
-      : { ok: false, detail: "Lokasi ini belum pernah tersambung (menunggu pemasangan)", hint: "Salin script dari tab Script MikroTik, tempel di Winbox → New Terminal, lalu tes lagi." };
+      : { ok: false, detail: "Server ini belum pernah tersambung (menunggu pemasangan)", hint: "Salin script dari tab Script MikroTik, tempel di Winbox → New Terminal, lalu tes lagi." };
   }
   if (key === "ping-mt") {
     const r = await run("ping", ["-c", "2", "-W", "1", site.tunnelIp]);
@@ -772,7 +773,7 @@ async function runTestStep(site, key, st) {
     if (g === null) return { ok: null, detail: "Dilewati: GenieACS tidak ada di VPS ini" };
     return g
       ? { ok: true, detail: `Termasuk rentang ${st.genieCidr}` }
-      : { ok: false, detail: `Di luar rentang patch (${st.genieCidr || "kosong"})`, hint: "Jalankan ulang genieacs-virtualip.sh dengan VIRTUAL_CIDR yang mencakup IP virtual lokasi ini." };
+      : { ok: false, detail: `Di luar rentang patch (${st.genieCidr || "kosong"})`, hint: "Jalankan ulang genieacs-virtualip.sh dengan VIRTUAL_CIDR yang mencakup IP virtual server ini." };
   }
   if (key.startsWith("fwd:")) {
     const f = (site.forwards || []).find((x) => "fwd:" + x.id === key);
@@ -1070,7 +1071,7 @@ function siteLabel(s) {
 function listLines(items, fn) {
   const max = 30;
   const lines = items.slice(0, max).map(fn);
-  if (items.length > max) lines.push(`… dan ${items.length - max} lokasi lainnya`);
+  if (items.length > max) lines.push(`… dan ${items.length - max} server lainnya`);
   return lines.join("\n");
 }
 function msgDown(list, now, tz) {
@@ -1121,7 +1122,7 @@ async function monitorTick() {
         if (!online) continue;
         s.installedAt = new Date(now).toISOString();
         dataChanged = true;
-        logActivity(null, "Lokasi tersambung pertama kali", s.name);
+        logActivity(null, "Server tersambung pertama kali", s.name);
       }
       let r = h.sites[s.id];
       if (!r) {
@@ -1277,7 +1278,7 @@ async function cfRunStep(job, key) {
     return {
       ok: false,
       detail: "Token ditolak Cloudflare: " + cfErr(r),
-      hint: 'Buat token di Cloudflare → My Profile → API Tokens → Create Token → template "Edit zone DNS" → Zone Resources: pilih domain Anda. Salin token-nya (bukan Global API Key).',
+      hint: 'Buat token di Cloudflare → My Profile → API Tokens → Create Token → template "Edit zone DNS" → tambahkan izin Zone → Zone → Read → Zone Resources: pilih domain Anda. Salin token-nya (bukan Global API Key).',
     };
   }
   if (key === "zone") {
@@ -1293,8 +1294,8 @@ async function cfRunStep(job, key) {
     if (!zone)
       return {
         ok: false,
-        detail: lastErr && cfPermErr(lastErr) ? "Token tidak boleh membaca domain ini" : "Domain tidak ditemukan di akun Cloudflare ini",
-        hint: "Pastikan domain sudah ditambahkan di Cloudflare dan token diberi akses ke domain tersebut (Zone Resources → Include → Specific zone → domain Anda).",
+        detail: lastErr && cfPermErr(lastErr) ? `Token tidak boleh membaca domain ini (${cfErr(lastErr)})` : "Domain tidak ditemukan di akun Cloudflare ini",
+        hint: "Edit token di Cloudflare: Permissions harus berisi Zone → Zone → Read dan Zone → DNS → Edit, dan Zone Resources → Include → Specific zone → domain Anda. Klik Update token, tunggu 1 menit, lalu coba lagi.",
       };
     if (zone.status !== "active")
       return { ok: false, detail: `Domain belum aktif di Cloudflare (status: ${zone.status})`, hint: "Ganti nameserver domain (di tempat Anda membeli domain) ke nameserver Cloudflare, lalu tunggu sampai statusnya Active." };
@@ -1676,6 +1677,7 @@ async function handleApi(req, res, url) {
         autoPortStart: FWD_AUTO_START,
         reservedPorts: Array.from(RESERVED_PORTS),
         port: PORT,
+        version: VERSION,
         timezone: tz,
         timezones: Object.entries(TIMEZONES).map(([id, v]) => ({ id, label: v.label })),
         telegram: {
@@ -1701,7 +1703,17 @@ async function handleApi(req, res, url) {
           ? { domain: cf.domain, zoneName: cf.zoneName, ip: cf.ip, https: !!cf.https, httpsActive: HTTPS_ON, appliedAt: cf.appliedAt, certExpiry: cf.https ? certExpiry(cf.domain) : null, publicIpBefore: d.settings.publicIpBeforeCf || "" }
           : null,
       },
-      sites: d.sites.map((s) => siteView(s, st, peers, h, now)),
+      sites: d.sites.map((s) => {
+        const v = siteView(s, st, peers, h, now);
+        // Ringkasan uptime untuk dashboard
+        const hs = siteHistory(s, h, now, tz);
+        if (!hs.pending) {
+          v.uptime = hs.uptime;
+          v.days = hs.days.map((x) => x.status);
+          v.incidents30 = hs.events.filter((e) => e.s >= now - 30 * DAY_MS).length;
+        }
+        return v;
+      }),
     });
   }
 
@@ -1850,7 +1862,7 @@ async function handleApi(req, res, url) {
     return send(res, 200, { ok: true });
   }
 
-  // --- Tambah lokasi ---
+  // --- Tambah server ---
   if (p === "/api/sites" && method === "POST") {
     const d = loadData();
     const err = validateSite(d, body, null);
@@ -1859,12 +1871,12 @@ async function handleApi(req, res, url) {
     const tunnelIp = allocTunnelIp(d);
     if (!tunnelIp) {
       const T = tun(d);
-      return send(res, 400, { error: `Slot VPN penuh (maksimal ${T.last - T.first + 1} lokasi untuk ${T.net}). Perbesar jaringan VPN di Pengaturan.` });
+      return send(res, 400, { error: `Slot VPN penuh (maksimal ${T.last - T.first + 1} server untuk ${T.net}). Perbesar jaringan VPN di Pengaturan.` });
     }
     const custom = String(body.virtualSubnet || "").trim();
     const virtualSubnet = custom ? parseCidr(custom).text : allocVirtual(d, sub.prefix);
     if (!virtualSubnet) return send(res, 400, { error: "Rentang IP virtual otomatis penuh. Isi IP virtual secara manual." });
-    let base = String(body.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 20) || "lokasi";
+    let base = String(body.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 20) || "server";
     let username = "acs-" + base;
     let i = 2;
     const manualUsers = manualChapEntries().users;
@@ -1884,7 +1896,7 @@ async function handleApi(req, res, url) {
     };
     d.sites.push(site);
     saveData(d);
-    logActivity(req, "Lokasi ditambah", `${site.name} · ONT ${site.realSubnet} → virtual ${site.virtualSubnet}`);
+    logActivity(req, "Server ditambah", `${site.name} · ONT ${site.realSubnet} → virtual ${site.virtualSubnet}`);
     await applyAll(d);
     const st = settings(d);
     return send(res, 200, { ok: true, site: siteView(site, st, await onlinePeers(), loadHistory()) });
@@ -1895,7 +1907,7 @@ async function handleApi(req, res, url) {
   if (mf) {
     const d = loadData();
     const site = d.sites.find((s) => s.id === mf[1]);
-    if (!site) return send(res, 404, { error: "Lokasi tidak ditemukan." });
+    if (!site) return send(res, 404, { error: "Server tidak ditemukan." });
     site.forwards = site.forwards || [];
     if (!mf[3] && method === "POST") {
       const r = validateForward(d, site, body);
@@ -1917,12 +1929,12 @@ async function handleApi(req, res, url) {
     }
   }
 
-  // --- Ubah / hapus / tes / riwayat lokasi ---
+  // --- Ubah / hapus / tes / riwayat server ---
   const m = p.match(/^\/api\/sites\/([a-f0-9]{12})(\/(test|test-plan|test-step|reset-password|history))?$/);
   if (m) {
     const d = loadData();
     const site = d.sites.find((s) => s.id === m[1]);
-    if (!site) return send(res, 404, { error: "Lokasi tidak ditemukan." });
+    if (!site) return send(res, 404, { error: "Server tidak ditemukan." });
     const action = m[3];
 
     if (!action && method === "PUT") {
@@ -1952,14 +1964,14 @@ async function handleApi(req, res, url) {
       site.note = newNote;
       site.realSubnet = sub.text;
       saveData(d);
-      logActivity(req, "Lokasi diubah", `${site.name}${changes.length ? ": " + changes.join(", ") : " (tanpa perubahan)"}`);
+      logActivity(req, "Server diubah", `${site.name}${changes.length ? ": " + changes.join(", ") : " (tanpa perubahan)"}`);
       await applyAll(d, removed);
       return send(res, 200, { ok: true });
     }
     if (!action && method === "DELETE") {
       d.sites = d.sites.filter((s) => s.id !== site.id);
       saveData(d);
-      logActivity(req, "Lokasi dihapus", `${site.name} · ${site.virtualSubnet}`);
+      logActivity(req, "Server dihapus", `${site.name} · ${site.virtualSubnet}`);
       await applyAll(d, [site.virtualSubnet]);
       return send(res, 200, { ok: true });
     }
@@ -2025,12 +2037,12 @@ async function handleApi(req, res, url) {
         return send(res, 400, { error: "Jaringan VPN harus memakai IP privat (10.x, 172.16-31.x, 192.168.x, atau 100.64-127.x)." });
       if (overlap(t, parseCidr(VIRTUAL_POOL))) return send(res, 400, { error: `Bentrok dengan rentang IP virtual otomatis ${VIRTUAL_POOL}.` });
       for (const o of d.sites) {
-        if (overlap(t, parseCidr(o.realSubnet))) return send(res, 400, { error: `Bentrok dengan subnet ONT lokasi "${o.name}" (${o.realSubnet}).` });
-        if (overlap(t, parseCidr(o.virtualSubnet))) return send(res, 400, { error: `Bentrok dengan IP virtual lokasi "${o.name}" (${o.virtualSubnet}).` });
+        if (overlap(t, parseCidr(o.realSubnet))) return send(res, 400, { error: `Bentrok dengan subnet ONT server "${o.name}" (${o.realSubnet}).` });
+        if (overlap(t, parseCidr(o.virtualSubnet))) return send(res, 400, { error: `Bentrok dengan IP virtual server "${o.name}" (${o.virtualSubnet}).` });
       }
       const nt = tunnelCfg(t.text);
       const slots = nt.last - nt.first + 1;
-      if (d.sites.length > slots) return send(res, 400, { error: `Terlalu kecil: hanya ${slots} slot, padahal ada ${d.sites.length} lokasi.` });
+      if (d.sites.length > slots) return send(res, 400, { error: `Terlalu kecil: hanya ${slots} slot, padahal ada ${d.sites.length} server.` });
       // Pertahankan nomor host lama jika masih muat, sisanya diberi nomor baru
       const oldT = tun(d);
       const used = new Set();
@@ -2111,7 +2123,7 @@ if (process.argv[2] === "--set-password") {
   (async () => {
     const d = loadData();
     if (!d.admin) console.error("Password admin belum diset. Jalankan: node server.js --set-password PASSWORD");
-    // Lokasi dari versi lama dianggap sudah terpasang (bukan "menunggu pemasangan")
+    // Server dari versi lama dianggap sudah terpasang (bukan "menunggu pemasangan")
     if (!d.v2) {
       for (const s of d.sites || []) if (s.installedAt === undefined) s.installedAt = s.createdAt || new Date().toISOString();
       d.v2 = true;
@@ -2169,6 +2181,7 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VPN ACS</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231d4ed8'/%3E%3Cpath d='M16 6l8 3v6c0 4.6-3.4 8.6-8 9.6-4.6-1-8-5-8-9.6V9l8-3z' fill='none' stroke='white' stroke-width='2.2' stroke-linejoin='round'/%3E%3Cpath d='M12.5 15.5l2.5 2.5 4.5-4.5' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -2475,6 +2488,59 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .login-box .btn{width:100%;margin-top:18px;height:40px}
   .login-foot{text-align:center;color:var(--muted);font-size:12px;margin-top:18px}
 
+  /* Sidebar footer, menu akun */
+  .side-foot{display:flex;justify-content:space-between;padding:12px 12px 2px;border-top:1px solid rgba(255,255,255,.08);font-size:11.5px;color:rgba(255,255,255,.45)}
+  .user-btn{display:flex;align-items:center;gap:8px;height:38px;padding:0 8px 0 4px;border:1px solid transparent;border-radius:999px;background:none}
+  .user-btn:hover{background:var(--hover)}
+  .user-btn .who{font-size:13.5px;font-weight:550}
+  .user-btn svg{width:15px;height:15px;color:var(--muted)}
+  .menu-h{padding:8px 10px 10px;border-bottom:1px solid var(--line);margin-bottom:5px}
+  .menu-h b{display:block;font-size:13.5px}.menu-h small{color:var(--muted);font-size:12px}
+  .menu-list button svg{width:16px;height:16px;color:var(--muted)}
+  .menu-list button.d svg{color:var(--bad)}
+
+  /* Dialog */
+  .modal.sm{max-width:440px}.modal.lg{max-width:680px}
+  .dlg-b{display:flex;gap:16px;padding:24px 24px 6px}
+  .dlg-b h2{font-size:16.5px;font-weight:650;margin-bottom:4px}
+  .dlg-t{color:var(--text-2);font-size:14px}
+  .dlg-t p+p{margin-top:8px}
+  .dlg-ic{width:42px;height:42px;border-radius:50%;flex:none;display:grid;place-items:center}
+  .dlg-ic svg{width:20px;height:20px}
+  .dlg-ic.bad{background:var(--bad-soft);color:var(--bad)}
+  .dlg-ic.info{background:var(--primary-soft);color:var(--primary)}
+  .dlg-ic.ok{background:var(--ok-soft);color:var(--ok)}
+  .dlg-ic.warn{background:var(--warn-soft);color:var(--warn)}
+  .dlg .mf{padding:18px 24px 20px}
+  .btn.dangerf{background:var(--bad);border-color:var(--bad);color:#fff}
+  .btn.dangerf:hover{filter:brightness(.92);background:var(--bad)}
+  .spin{width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;display:inline-block;animation:spin .7s linear infinite}
+  .mb.flush{padding:0}
+  .modal.lg .mb{max-height:calc(100vh - 230px);overflow:auto}
+  .modal.lg .mf{border-top:1px solid var(--line)}
+  .step.skip .sres{color:var(--muted)}
+  .grid-dash{display:grid;grid-template-columns:minmax(0,1.75fr) minmax(300px,1fr);gap:16px;align-items:start}
+  .modal .steps{padding:4px 22px 8px}
+  .modal .prog{margin:0}
+  .tst-top{padding:0 22px 14px;color:var(--muted);font-size:13px}
+  .modal .tst-sum{border-top:1px solid var(--line)}
+
+  /* Tabel uptime dashboard */
+  table.t tr.click{cursor:pointer;transition:background .12s}
+  table.t tr.click:hover td{background:var(--hover)}
+  .srv{display:flex;align-items:center;gap:10px;min-width:0}
+  .srv b{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+  .srv small{display:block;color:var(--muted);font-size:12px;white-space:nowrap}
+  .mini{display:flex;gap:2px;height:20px;min-width:120px}
+  .mini i{flex:1;border-radius:2px;background:var(--ok);opacity:.85}
+  .mini i.minor{background:var(--warn)}.mini i.major{background:var(--bad)}.mini i.nodata{background:var(--line)}
+  td.pc{font-variant-numeric:tabular-nums;font-weight:550;white-space:nowrap}
+  td.pc.warn{color:var(--warn)}td.pc.bad{color:var(--bad)}
+  a.ext{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:13px;font-weight:500}
+  a.ext svg{width:13px;height:13px}
+  a.ext:hover{text-decoration:underline}
+
+  [data-act=refresh].spinning svg{animation:spin .8s linear infinite}
   .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--text);color:var(--surface);padding:10px 16px;border-radius:8px;font-size:13.5px;font-weight:500;z-index:90;box-shadow:var(--shadow-lg);animation:pop .18s}
 
   @media (max-width:1024px){
@@ -2484,8 +2550,9 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
     #navBtn{display:inline-flex}
     .top{padding:0 14px}
     .main{padding:20px 16px}
-    .grid2{grid-template-columns:1fr}
+    .grid2,.grid-dash{grid-template-columns:1fr}
   }
+  @media (max-width:1280px){ .hide-md{display:none} }
   @media (max-width:720px){
     .kpis{grid-template-columns:1fr 1fr;gap:10px}
     .kpi b{font-size:24px}
@@ -2501,7 +2568,8 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
     .filters{margin-left:0}
     table.t .hide-sm{display:none}
     table.t th,table.t td{padding-left:14px;padding-right:14px}
-    .avatar{display:none}
+    .user-btn .who,.user-btn svg{display:none}
+    .hide-md{display:none}
   }
 </style>
 </head>
@@ -2528,14 +2596,13 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   <aside class="side">
     <div class="brand"><span class="brand-mark" data-ic="shield"></span><span><b>VPN ACS</b><small>Control Panel</small></span></div>
     <button class="nav" data-go="#/"><span data-ic="home"></span>Dashboard</button>
-    <button class="nav" data-go="#/lokasi"><span data-ic="router"></span>Lokasi<span class="cnt" id="navCount">0</span></button>
+    <button class="nav" data-go="#/server"><span data-ic="router"></span>Server<span class="cnt" id="navCount">0</span></button>
     <div class="nav-sec">Lainnya</div>
     <button class="nav" data-go="#/log"><span data-ic="list"></span>Log aktivitas</button>
     <button class="nav" data-go="#/panduan"><span data-ic="book"></span>Panduan</button>
     <button class="nav" data-go="#/pengaturan"><span data-ic="gear"></span>Pengaturan</button>
     <div class="grow"></div>
-    <button class="nav" data-act="theme"><span data-ic="moon"></span>Mode gelap</button>
-    <button class="nav" data-act="logout"><span data-ic="logout"></span>Keluar</button>
+    <div class="side-foot"><span>VPN ACS Panel</span><span id="ver"></span></div>
   </aside>
   <div class="backdrop" data-act="closenav"></div>
   <div class="wrap">
@@ -2543,9 +2610,16 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
       <button class="btn ghost icon" id="navBtn" data-act="opennav" aria-label="Menu"><span data-ic="menu"></span></button>
       <div class="crumb" id="crumb"></div>
       <div class="top-r">
-        <button class="btn ghost icon" data-act="refresh" title="Muat ulang status"><span data-ic="refresh"></span></button>
-        <button class="btn ghost icon" data-act="theme" title="Mode gelap / terang"><span data-ic="moon"></span></button>
-        <span class="avatar">A</span>
+        <button class="btn ghost icon" data-act="refresh" title="Perbarui status"><span data-ic="refresh"></span></button>
+        <div class="menu">
+          <button class="user-btn" data-act="usermenu" aria-label="Menu akun"><span class="avatar">A</span><span class="who">Admin</span><span data-ic="down"></span></button>
+          <div class="menu-list hidden" id="userList">
+            <div class="menu-h"><b>Admin</b><small>Administrator panel</small></div>
+            <button data-act="theme"><span id="themeIc"></span><span id="themeTx">Mode gelap</span></button>
+            <button data-go="#/pengaturan/umum"><span data-ic="gear"></span>Pengaturan</button>
+            <hr><button class="d" data-act="logout"><span data-ic="logout"></span>Keluar</button>
+          </div>
+        </div>
       </div>
     </header>
     <main class="main" id="view"></main>
@@ -2588,6 +2662,8 @@ const ICONS = {
   play: '<path d="M7 5l12 7-12 7z"/>',
   wifi_off: '<path d="M2 2l20 20M8.5 16.5a5 5 0 0 1 7 0M5 12.9a10 10 0 0 1 5.2-2.8M19 12.9a10 10 0 0 0-2-1.4M12 20h.01"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  down: '<path d="M6 9l6 6 6-6"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   list: '<path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/>',
   bell: '<path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>',
   send: '<path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/>',
@@ -2647,8 +2723,13 @@ function pct(v) { if (v == null) return "—"; return (v >= 99.995 ? "100" : v.t
 const pctCls = (v) => (v == null || v >= 99 ? "" : v >= 95 ? "warn" : "bad");
 function genieOk(v) { if (!v) return false; const x = v.toLowerCase(); return ["all", "true", "1", "yes"].includes(x) || v.split(",").map((t) => t.trim()).includes("10.100.0.0/14"); }
 
-/* ================= Tema & navigasi ================= */
-function applyTheme(t) { document.documentElement.setAttribute("data-theme", t); }
+/* ================= Tema ================= */
+function applyTheme(t) {
+  document.documentElement.setAttribute("data-theme", t);
+  const i = document.getElementById("themeIc"), x = document.getElementById("themeTx");
+  if (i) i.innerHTML = ic(t === "dark" ? "sun" : "moon");
+  if (x) x.textContent = t === "dark" ? "Mode terang" : "Mode gelap";
+}
 (function () {
   let t = null;
   try { t = localStorage.getItem("vpnacs-theme"); } catch (e) {}
@@ -2661,23 +2742,54 @@ function toggleTheme() {
   try { localStorage.setItem("vpnacs-theme", t); } catch (e) {}
 }
 
-/* ================= Modal ================= */
-function modal(title, body, footer) {
-  $("#modalRoot").innerHTML = `<div class="mbg" id="mbg"><div class="modal" role="dialog" aria-modal="true">
+/* ================= Dialog ================= */
+function modal(title, body, footer, opts = {}) {
+  $("#modalRoot").innerHTML = `<div class="mbg" id="mbg"><div class="modal ${opts.size || ""}" role="dialog" aria-modal="true">
     <div class="mh"><h2>${title}</h2><button class="btn ghost icon x" data-act="closemodal" aria-label="Tutup">${ic("x")}</button></div>
-    <div class="mb">${body}</div>${footer ? `<div class="mf">${footer}</div>` : `<div style="height:18px"></div>`}</div></div>`;
+    <div class="mb${opts.flush ? " flush" : ""}">${body}</div>${footer ? `<div class="mf">${footer}</div>` : `<div style="height:18px"></div>`}</div></div>`;
   $("#mbg").addEventListener("mousedown", (e) => { if (e.target.id === "mbg") closeModal(); });
-  const f = $("#modalRoot input:not([readonly])"); if (f) f.focus();
+  const f = $("#modalRoot input:not([readonly]):not([type=radio]):not([type=checkbox])"); if (f) f.focus();
 }
-function closeModal() { $("#modalRoot").innerHTML = ""; }
+function closeModal() { $("#modalRoot").innerHTML = ""; if (TEST && !TEST.keep) TEST = null; }
+function busyBtn(btn, on) {
+  if (!btn) return;
+  if (on) { btn.dataset.html = btn.innerHTML; btn.disabled = true; btn.innerHTML = `<span class="spin"></span>${btn.textContent.trim()}`; }
+  else { btn.disabled = false; if (btn.dataset.html) btn.innerHTML = btn.dataset.html; }
+}
+// Dialog konfirmasi: tombol OK menjalankan onOk; galat ditampilkan di dalam dialog
+function confirmDialog({ title, text, ok = "Lanjutkan", danger = false, icon, onOk }) {
+  const kind = danger ? "bad" : "info";
+  $("#modalRoot").innerHTML = `<div class="mbg" id="mbg"><div class="modal dlg sm" role="alertdialog" aria-modal="true">
+    <div class="dlg-b"><span class="dlg-ic ${kind}">${ic(icon || (danger ? "trash" : "info"))}</span>
+      <div style="flex:1;min-width:0"><h2>${title}</h2><div class="dlg-t">${text}</div><div class="err" id="dlgErr"></div></div></div>
+    <div class="mf"><button class="btn" data-act="closemodal">Batal</button><button class="btn ${danger ? "dangerf" : "pri"}" id="dlgOk">${ok}</button></div></div></div>`;
+  $("#mbg").addEventListener("mousedown", (e) => { if (e.target.id === "mbg") closeModal(); });
+  const btn = $("#dlgOk"); btn.focus();
+  btn.onclick = async () => {
+    $("#dlgErr").textContent = ""; busyBtn(btn, true);
+    try { await onOk(); } catch (e) { if ($("#dlgErr")) { $("#dlgErr").textContent = e.message; busyBtn(btn, false); } }
+  };
+}
+// Dialog hasil (berhasil / gagal), tertutup sendiri bila autoClose
+function doneDialog(title, text, kind = "ok", autoClose = true) {
+  $("#modalRoot").innerHTML = `<div class="mbg" id="mbg"><div class="modal dlg sm" role="dialog" aria-modal="true">
+    <div class="dlg-b"><span class="dlg-ic ${kind}">${ic(kind === "ok" ? "check" : kind === "bad" ? "x" : "info")}</span>
+      <div style="flex:1;min-width:0"><h2>${title}</h2>${text ? `<div class="dlg-t">${text}</div>` : ""}</div></div>
+    <div class="mf"><button class="btn pri" data-act="closemodal" id="dlgOk">OK</button></div></div></div>`;
+  $("#mbg").addEventListener("mousedown", (e) => { if (e.target.id === "mbg") closeModal(); });
+  $("#dlgOk").focus();
+  if (autoClose) { const el = $("#mbg"); setTimeout(() => { if ($("#mbg") === el) closeModal(); }, 2600); }
+}
 
 /* ================= Login ================= */
-function showLogin() { $("#appView").classList.add("hidden"); $("#loginView").classList.remove("hidden"); $("#lp").focus(); }
+function showLogin() { $("#appView").classList.add("hidden"); $("#loginView").classList.remove("hidden"); document.title = "Masuk · VPN ACS"; $("#lp").focus(); }
 function showApp() { $("#loginView").classList.add("hidden"); $("#appView").classList.remove("hidden"); }
 $("#loginForm").addEventListener("submit", async (e) => {
   e.preventDefault(); $("#loginErr").textContent = "";
+  const btn = $("#loginForm button"); busyBtn(btn, true);
   try { await api("/api/login", { method: "POST", body: { password: $("#lp").value } }); $("#lp").value = ""; showApp(); await load(); route(); }
   catch (err) { $("#loginErr").textContent = err.message; }
+  busyBtn(btn, false);
 });
 
 /* ================= Data ================= */
@@ -2685,28 +2797,40 @@ async function load() {
   STATE = await api("/api/overview");
   LOADED = true;
   $("#navCount").textContent = STATE.sites.length;
+  $("#ver").textContent = STATE.settings.version ? "v" + STATE.settings.version : "";
 }
 
 /* ================= Router ================= */
-let TEST = null; // status tes yang sedang berjalan
+let TEST = null; // tes koneksi yang sedang tampil
 function route() {
   if (!LOADED) return;
-  const h = location.hash || "#/";
+  let h = location.hash || "#/";
+  if (/^#\/lokasi/.test(h)) { h = h.replace("#/lokasi", "#/server"); history.replaceState(null, "", h); }
   const parts = h.replace(/^#\/?/, "").split("/").filter(Boolean);
   document.querySelectorAll(".nav[data-go]").forEach((n) => {
     const g = n.dataset.go.replace(/^#\/?/, "");
     n.classList.toggle("on", (g === "" && parts.length === 0) || (g && parts[0] === g));
   });
   document.body.classList.remove("nav-open");
+  document.querySelectorAll(".menu-list").forEach((m) => m.classList.add("hidden"));
   closeModal();
   const v = $("#view");
-  if (parts[0] === "lokasi" && (parts[1] === "terputus" || parts[1] === "menunggu")) { LIST.f = parts[1] === "terputus" ? "off" : "wait"; LIST.q = ""; history.replaceState(null, "", "#/lokasi"); viewList(v); }
-  else if (parts[0] === "lokasi" && parts[1]) { viewDetail(v, parts[1], parts[2] || "ringkasan"); }
-  else if (parts[0] === "lokasi") { viewList(v); }
-  else if (parts[0] === "panduan") { viewGuide(v); }
-  else if (parts[0] === "pengaturan") { viewSettings(v, parts[1] || "umum"); }
-  else if (parts[0] === "log") { viewLog(v); }
+  let title = "Dashboard";
+  if (parts[0] === "server" && (parts[1] === "terputus" || parts[1] === "menunggu")) { LIST.f = parts[1] === "terputus" ? "off" : "wait"; LIST.q = ""; history.replaceState(null, "", "#/server"); viewList(v); title = "Server"; }
+  else if (parts[0] === "server" && parts[1]) {
+    let tab = parts[2] || "ringkasan";
+    const wantTest = tab === "tes";
+    if (wantTest) { tab = "ringkasan"; history.replaceState(null, "", `#/server/${parts[1]}`); }
+    viewDetail(v, parts[1], tab);
+    const x = site(parts[1]); title = x ? x.name : "Server";
+    if (wantTest && x) setTimeout(() => openTest(x.id), 50);
+  }
+  else if (parts[0] === "server") { viewList(v); title = "Server"; }
+  else if (parts[0] === "panduan") { viewGuide(v); title = "Panduan"; }
+  else if (parts[0] === "pengaturan") { viewSettings(v, parts[1] || "umum"); title = "Pengaturan"; }
+  else if (parts[0] === "log") { viewLog(v); title = "Log aktivitas"; }
   else { viewDashboard(v); }
+  document.title = `${title} · VPN ACS`;
   paintIcons(v);
   window.scrollTo(0, 0);
 }
@@ -2721,57 +2845,72 @@ function issues() {
   if (!s.publicIp) list.push({ t: "Alamat VPS belum diisi", d: "Script MikroTik membutuhkan alamat VPS.", go: "#/pengaturan" });
   if (s.genieCidr !== null && !genieOk(s.genieCidr)) list.push({ t: "Patch IP virtual GenieACS belum aktif", d: "Summon ke ONT akan gagal.", go: "#/pengaturan" });
   const off = STATE.sites.filter((x) => x.state === "down");
-  if (off.length === 1) list.push({ t: `${off[0].name} terputus`, d: off[0].downSince ? `Sejak ${fmtT(off[0].downSince, true)} (${fmtDur(Date.now() - off[0].downSince)}). Jalankan tes koneksi.` : "Jalankan tes koneksi.", go: `#/lokasi/${off[0].id}/tes` });
+  if (off.length === 1) list.push({ t: `${off[0].name} terputus`, d: off[0].downSince ? `Sejak ${fmtT(off[0].downSince, true)} (${fmtDur(Date.now() - off[0].downSince)}). Klik untuk tes koneksi.` : "Klik untuk tes koneksi.", go: `#/server/${off[0].id}/tes` });
   else if (off.length > 1) {
     const names = off.map((x) => x.name);
-    list.push({ t: `${off.length} lokasi terputus`, d: names.slice(0, 4).join(", ") + (names.length > 4 ? ` dan ${names.length - 4} lainnya` : ""), go: "#/lokasi/terputus" });
+    list.push({ t: `${off.length} server terputus`, d: names.slice(0, 4).join(", ") + (names.length > 4 ? ` dan ${names.length - 4} lainnya` : ""), go: "#/server/terputus" });
   }
   const tg = s.telegram || {};
   if (tg.active && tg.lastError) list.push({ t: "Notifikasi Telegram gagal terkirim", d: tg.lastError, go: "#/pengaturan/telegram" });
   const cf = s.cloudflare;
   if (cf && cf.https && cf.certExpiry && cf.certExpiry - Date.now() < 14 * 864e5) list.push({ t: "Sertifikat HTTPS hampir habis", d: `Berlaku sampai ${fmtT(cf.certExpiry, true)}. Perpanjangan otomatis mungkin gagal.`, go: "#/pengaturan/domain" });
   for (const x of STATE.sites) {
-    if (x.inGenie === false) list.push({ t: `${x.name}: IP virtual di luar patch GenieACS`, d: `${x.virtualSubnet} tidak dikenali GenieACS, Summon akan gagal.`, go: `#/lokasi/${x.id}` });
+    if (x.inGenie === false) list.push({ t: `${x.name}: IP virtual di luar patch GenieACS`, d: `${x.virtualSubnet} tidak dikenali GenieACS, Summon akan gagal.`, go: `#/server/${x.id}` });
   }
   const pend = STATE.sites.filter((x) => x.state === "pending");
-  if (pend.length === 1) list.push({ k: "info", t: `${pend[0].name} menunggu pemasangan`, d: "Script MikroTik belum dipasang atau belum pernah tersambung.", go: `#/lokasi/${pend[0].id}/script` });
-  else if (pend.length > 1) list.push({ k: "info", t: `${pend.length} lokasi menunggu pemasangan`, d: pend.map((x) => x.name).slice(0, 4).join(", ") + (pend.length > 4 ? ` dan ${pend.length - 4} lainnya` : ""), go: "#/lokasi/menunggu" });
+  if (pend.length === 1) list.push({ k: "info", t: `${pend[0].name} menunggu pemasangan`, d: "Script MikroTik belum dipasang atau belum pernah tersambung.", go: `#/server/${pend[0].id}/script` });
+  else if (pend.length > 1) list.push({ k: "info", t: `${pend.length} server menunggu pemasangan`, d: pend.map((x) => x.name).slice(0, 4).join(", ") + (pend.length > 4 ? ` dan ${pend.length - 4} lainnya` : ""), go: "#/server/menunggu" });
   return list;
 }
 function viewDashboard(v) {
   crumb([["Dashboard"]]);
-  const S = STATE.sites, inst = S.filter((x) => x.state !== "pending").length, on = S.filter((x) => x.state === "up").length;
-  const off = S.filter((x) => x.state === "down").length, pend = S.length - inst, fw = S.reduce((a, x) => a + x.forwards.length, 0);
+  const S = STATE.sites, inst = S.filter((x) => x.state !== "pending"), on = S.filter((x) => x.state === "up").length;
+  const off = S.filter((x) => x.state === "down").length, pend = S.length - inst.length;
+  const u7 = inst.map((x) => x.uptime && x.uptime.d7).filter((x) => x != null);
+  const avg = u7.length ? u7.reduce((a, b) => a + b, 0) / u7.length : null;
   const iss = issues();
-  const order = { down: 0, pending: 1, up: 2 };
-  const recent = [...S].sort((a, b) => order[a.state] - order[b.state] || a.name.localeCompare(b.name, "id")).slice(0, 6);
   v.innerHTML = `
-    <div class="ph"><div><h1>Dashboard</h1><p>Ringkasan jaringan VPN ACS.</p></div>
-      <div class="acts"><button class="btn pri" data-act="add">${ic("plus")}Tambah lokasi</button></div></div>
+    <div class="ph"><div><h1>Dashboard</h1><p>Ringkasan koneksi VPN dan uptime setiap server.</p></div>
+      <div class="acts"><button class="btn pri" data-act="add">${ic("plus")}Tambah server</button></div></div>
     <div class="kpis">
-      <div class="kpi"><span>Lokasi</span><b>${S.length}</b><small>${pend ? `${pend} menunggu pemasangan` : "MikroTik terdaftar"}</small></div>
-      <div class="kpi"><span><i class="dot ok"></i>Tersambung</span><b>${on}</b><small>${inst ? Math.round((on / inst) * 100) : 0}% dari lokasi terpasang</small></div>
+      <div class="kpi"><span>Total server</span><b>${S.length}</b><small>${pend ? `${pend} menunggu pemasangan` : "MikroTik terdaftar"}</small></div>
+      <div class="kpi"><span><i class="dot ok"></i>Tersambung</span><b>${on}</b><small>${inst.length ? Math.round((on / inst.length) * 100) : 0}% dari server terpasang</small></div>
       <div class="kpi"><span><i class="dot bad"></i>Terputus</span><b>${off}</b><small>${off ? "perlu dicek" : "tidak ada"}</small></div>
-      <div class="kpi"><span>Remote aktif</span><b>${fw}</b><small>port forwarding</small></div>
+      <div class="kpi"><span>Rata-rata uptime</span><b class="${pctCls(avg)}" style="${avg != null && avg < 99 ? `color:var(--${avg >= 95 ? "warn" : "bad"})` : ""}">${pct(avg)}</b><small>7 hari terakhir</small></div>
     </div>
-    <div class="grid2">
+    <div class="grid-dash">
+      <div class="card">
+        <div class="ch"><h2>Uptime server</h2><span class="muted" style="font-size:12.5px">Klik baris untuk riwayat lengkap</span></div>
+        ${S.length ? uptimeTable(S) : `<div class="empty"><h3>Belum ada server</h3><p>Tambahkan MikroTik pertama untuk mulai.</p><button class="btn pri" style="margin-top:12px" data-act="add">${ic("plus")}Tambah server</button></div>`}
+      </div>
       <div class="stack">
         <div class="card">
-          <div class="ch"><h2>Perlu perhatian</h2>${iss.length ? `<span class="muted">${iss.length} item</span>` : ""}</div>
+          <div class="ch"><h2>Perlu perhatian</h2>${iss.length ? `<span class="muted">${iss.length}</span>` : ""}</div>
           ${iss.length ? `<ul class="rows">${iss.slice(0, 6).map((x) => `<li><a class="row ${x.k || "warn"}" href="${x.go}"><span class="ic">${ic(x.k === "info" ? "clock" : "alert")}</span><span class="grow"><span class="nm">${esc(x.t)}</span><span class="sb" style="display:block">${esc(x.d)}</span></span><span class="chev">${ic("chev")}</span></a></li>`).join("")}</ul>`
-            : `<div class="empty"><div class="big">${ic("check")}</div><h3>Semua normal</h3><p>Semua lokasi tersambung dan pengaturan lengkap.</p></div>`}
+            : `<div class="empty"><div class="big">${ic("check")}</div><h3>Semua normal</h3><p>Semua server tersambung dan pengaturan lengkap.</p></div>`}
         </div>
         <div class="card">
-          <div class="ch"><h2>Lokasi</h2>${S.length ? `<a href="#/lokasi">Lihat semua</a>` : ""}</div>
-          ${S.length ? `<ul class="rows">${recent.map(rowHtml).join("")}</ul>`
-            : `<div class="empty"><h3>Belum ada lokasi</h3><p>Tambahkan MikroTik pertama untuk mulai.</p><button class="btn pri" style="margin-top:12px" data-act="add">${ic("plus")}Tambah lokasi</button></div>`}
+          <div class="ch"><h2>VPS</h2><a href="#/pengaturan">Pengaturan</a></div>
+          ${serverKv()}
         </div>
       </div>
-      <div class="card">
-        <div class="ch"><h2>Server</h2><a href="#/pengaturan">Pengaturan</a></div>
-        ${serverKv()}
-      </div>
     </div>`;
+}
+function uptimeTable(S) {
+  const order = { down: 0, up: 1, pending: 2 };
+  const rows = [...S].sort((a, b) => order[a.state] - order[b.state] || a.name.localeCompare(b.name, "id"));
+  return `<table class="t"><thead><tr><th>Server</th><th class="hide-md">30 hari terakhir</th><th class="r">24 jam</th><th class="r">7 hari</th><th class="r hide-sm">30 hari</th></tr></thead><tbody>
+    ${rows.map((x) => {
+      const [c] = stOf(x);
+      const sub = x.state === "down" ? `Terputus${x.downSince ? " · " + fmtDur(Date.now() - x.downSince) : ""}` : x.state === "pending" ? "Menunggu pemasangan" : x.incidents30 ? `${x.incidents30}× putus (30 hari)` : "Stabil";
+      const name = `<td><div class="srv"><span class="dot ${c}"></span><span style="min-width:0"><b>${esc(x.name)}</b><small${x.state === "down" ? ' style="color:var(--warn)"' : ""}>${esc(sub)}</small></span></div></td>`;
+      if (!x.uptime) return `<tr class="click" data-go="#/server/${x.id}/script">${name}<td class="hide-md"><div class="mini">${"<i class=nodata></i>".repeat(30)}</div></td><td class="r muted">—</td><td class="r muted">—</td><td class="r muted hide-sm">—</td></tr>`;
+      const U = x.uptime;
+      return `<tr class="click" data-go="#/server/${x.id}/riwayat">${name}
+        <td class="hide-md"><div class="mini">${(x.days || []).map((d) => `<i class="${d}"></i>`).join("")}</div></td>
+        <td class="r pc ${pctCls(U.d1)}">${pct(U.d1)}</td><td class="r pc ${pctCls(U.d7)}">${pct(U.d7)}</td><td class="r pc hide-sm ${pctCls(U.d30)}">${pct(U.d30)}</td></tr>`;
+    }).join("")}
+  </tbody></table>`;
 }
 function serverKv() {
   const s = STATE.settings;
@@ -2779,12 +2918,12 @@ function serverKv() {
   const tg = s.telegram || {};
   const tgs = !tg.tokenSet ? "Belum diatur" : !tg.enabled ? "Nonaktif" : tg.lastError ? "Gagal kirim" : "Aktif";
   const https = s.cloudflare && s.cloudflare.https ? "Aktif" : "Tidak";
-  return [["Alamat VPS", s.publicIp || "—"], ["URL ACS ONT", s.acsUrl || "—"], ["Jaringan VPN", s.tunnelNet || "—"], ["Patch GenieACS", g], ["Notifikasi Telegram", tgs], ["HTTPS panel", https]]
+  return [["Alamat", s.publicIp || "—"], ["URL ACS ONT", s.acsUrl || "—"], ["Jaringan VPN", s.tunnelNet || "—"], ["Patch GenieACS", g], ["Notifikasi Telegram", tgs], ["HTTPS panel", https]]
     .map(([k, val]) => `<div class="kv"><span>${k}</span><b>${esc(val)}</b></div>`).join("");
 }
 function rowHtml(x) {
   const [c, t] = stOf(x);
-  return `<li><a class="row" href="#/lokasi/${x.id}">
+  return `<li><a class="row" href="#/server/${x.id}">
     <span class="dot ${c}"></span>
     <span class="grow"><span class="nm">${esc(x.name)}</span>${x.note ? `<span class="sb" style="display:block">${esc(x.note)}</span>` : ""}</span>
     <span class="meta">${esc(x.virtualSubnet)}</span>
@@ -2793,13 +2932,13 @@ function rowHtml(x) {
     <span class="chev">${ic("chev")}</span></a></li>`;
 }
 
-/* ================= Daftar lokasi ================= */
+/* ================= Daftar server ================= */
 let LIST = { q: "", f: "all" };
 function viewList(v) {
-  crumb([["Lokasi"]]);
+  crumb([["Server"]]);
   v.innerHTML = `
-    <div class="ph"><div><h1>Lokasi</h1><p>Setiap lokasi adalah satu MikroTik yang tersambung ke VPS lewat VPN.</p></div>
-      <div class="acts"><button class="btn pri" data-act="add">${ic("plus")}Tambah lokasi</button></div></div>
+    <div class="ph"><div><h1>Server</h1><p>Setiap server adalah satu MikroTik yang tersambung ke VPS lewat VPN.</p></div>
+      <div class="acts"><button class="btn pri" data-act="add">${ic("plus")}Tambah server</button></div></div>
     <div class="card">
       <div class="toolbar">
         <div class="search">${ic("search", "")}<input id="q" type="text" placeholder="Cari nama, subnet, atau IP" value="${esc(LIST.q)}"></div>
@@ -2822,45 +2961,45 @@ function fillList() {
     .filter((x) => !q || [x.name, x.note, x.realSubnet, x.virtualSubnet, x.tunnelIp].join(" ").toLowerCase().includes(q))
     .sort((a, b) => a.name.localeCompare(b.name, "id"));
   const el = $("#listRows");
-  if (!STATE.sites.length) el.innerHTML = `<li><div class="empty"><h3>Belum ada lokasi</h3><p>Tambahkan MikroTik pertama untuk mulai.</p></div></li>`;
-  else if (!rows.length) el.innerHTML = `<li><div class="empty"><p>Tidak ada lokasi yang cocok.</p></div></li>`;
+  if (!STATE.sites.length) el.innerHTML = `<li><div class="empty"><h3>Belum ada server</h3><p>Tambahkan MikroTik pertama untuk mulai.</p></div></li>`;
+  else if (!rows.length) el.innerHTML = `<li><div class="empty"><p>Tidak ada server yang cocok.</p></div></li>`;
   else el.innerHTML = rows.map(rowHtml).join("");
 }
 
-/* ================= Detail lokasi ================= */
-const TABS = [["ringkasan", "Ringkasan"], ["riwayat", "Riwayat"], ["remote", "Remote"], ["script", "Script MikroTik"], ["tes", "Tes koneksi"]];
+/* ================= Detail server ================= */
+const TABS = [["ringkasan", "Ringkasan"], ["riwayat", "Riwayat"], ["remote", "Remote"], ["script", "Script MikroTik"]];
 function viewDetail(v, id, tab) {
   const x = site(id);
-  if (!x) { crumb([["Lokasi", "#/lokasi"], ["Tidak ditemukan"]]); v.innerHTML = `<div class="card"><div class="empty"><h3>Lokasi tidak ditemukan</h3><p><a href="#/lokasi">Kembali ke daftar lokasi</a></p></div></div>`; return; }
-  crumb([["Lokasi", "#/lokasi"], [x.name]]);
+  if (!x) { crumb([["Server", "#/server"], ["Tidak ditemukan"]]); v.innerHTML = `<div class="card"><div class="empty"><h3>Server tidak ditemukan</h3><p><a href="#/server">Kembali ke daftar server</a></p></div></div>`; return; }
+  if (!TABS.some(([k]) => k === tab)) tab = "ringkasan";
+  crumb([["Server", "#/server"], [x.name]]);
   v.innerHTML = `
     <div class="dh">
       <div><h1>${esc(x.name)} <span class="pill ${stOf(x)[0]}">${stOf(x)[1]}</span></h1>
         <p>${x.note ? esc(x.note) + " · " : ""}IP virtual ${esc(x.virtualSubnet)}</p></div>
       <div class="acts" style="display:flex;gap:8px">
-        <a class="btn" href="#/lokasi/${x.id}/tes">${ic("play")}Tes koneksi</a>
+        <button class="btn" data-act="test" data-id="${x.id}">${ic("play")}Tes koneksi</button>
         <div class="menu"><button class="btn icon" data-act="menu" aria-label="Lainnya">${ic("dots")}</button>
           <div class="menu-list hidden" id="menuList">
-            <button data-act="edit" data-id="${x.id}">${ic("edit")}Ubah lokasi</button>
+            <button data-act="edit" data-id="${x.id}">${ic("edit")}Ubah server</button>
             <button data-act="resetpw" data-id="${x.id}">${ic("key")}Buat password VPN baru</button>
-            <hr><button class="d" data-act="del" data-id="${x.id}">${ic("trash")}Hapus lokasi</button>
+            <hr><button class="d" data-act="del" data-id="${x.id}">${ic("trash")}Hapus server</button>
           </div></div>
       </div>
     </div>
-    <nav class="tabs">${TABS.map(([k, t]) => `<a class="tab ${k === tab ? "on" : ""}" href="#/lokasi/${x.id}/${k}">${t}${k === "remote" && x.forwards.length ? ` <span class="muted">${x.forwards.length}</span>` : ""}</a>`).join("")}</nav>
+    <nav class="tabs">${TABS.map(([k, t]) => `<a class="tab ${k === tab ? "on" : ""}" href="#/server/${x.id}/${k}">${t}${k === "remote" && x.forwards.length ? ` <span class="muted">${x.forwards.length}</span>` : ""}</a>`).join("")}</nav>
     <div id="tabBody"></div>`;
   const b = $("#tabBody");
   if (tab === "remote") tabRemote(b, x);
   else if (tab === "script") tabScript(b, x);
-  else if (tab === "tes") tabTest(b, x);
   else if (tab === "riwayat") tabHistory(b, x);
   else tabSummary(b, x);
 }
 function tabSummary(b, x) {
   b.innerHTML = `
-    ${x.inGenie === false ? `<div class="note warn">${ic("alert")}<div><b>IP virtual di luar rentang patch GenieACS</b>Summon ke ONT di lokasi ini akan gagal. Jalankan ulang <code>genieacs-virtualip.sh</code> dengan rentang yang mencakup ${esc(x.virtualSubnet)}.</div></div>` : ""}
-    ${x.state === "pending" ? `<div class="note info">${ic("clock")}<div><b>Menunggu pemasangan</b>Lokasi ini belum pernah tersambung. Pasang script lewat tab <a href="#/lokasi/${x.id}/script">Script MikroTik</a>. Riwayat dan notifikasi Telegram mulai berjalan setelah MikroTik tersambung pertama kali.</div></div>` : ""}
-    ${x.state === "down" ? `<div class="note warn">${ic("alert")}<div><b>Terputus${x.downSince ? ` sejak ${esc(fmtT(x.downSince, true))} (${fmtDur(Date.now() - x.downSince)})` : ""}</b>Jalankan <a href="#/lokasi/${x.id}/tes">Tes koneksi</a> untuk melihat penyebabnya.</div></div>` : ""}
+    ${x.inGenie === false ? `<div class="note warn">${ic("alert")}<div><b>IP virtual di luar rentang patch GenieACS</b>Summon ke ONT di server ini akan gagal. Jalankan ulang <code>genieacs-virtualip.sh</code> dengan rentang yang mencakup ${esc(x.virtualSubnet)}.</div></div>` : ""}
+    ${x.state === "pending" ? `<div class="note info">${ic("clock")}<div><b>Menunggu pemasangan</b>Server ini belum pernah tersambung. Pasang script lewat tab <a href="#/server/${x.id}/script">Script MikroTik</a>. Riwayat dan notifikasi Telegram mulai berjalan setelah MikroTik tersambung pertama kali.</div></div>` : ""}
+    ${x.state === "down" ? `<div class="note warn">${ic("alert")}<div><b>Terputus${x.downSince ? ` sejak ${esc(fmtT(x.downSince, true))} (${fmtDur(Date.now() - x.downSince)})` : ""}</b>Jalankan <a href="#" data-act="test" data-id="${x.id}">tes koneksi</a> untuk melihat penyebabnya.</div></div>` : ""}
     <div class="card">
       <div class="ch"><h2>Jaringan</h2></div>
       <dl class="dl" style="margin:0">
@@ -2873,27 +3012,37 @@ function tabSummary(b, x) {
     <div class="card">
       <div class="ch"><h2>Akun VPN</h2></div>
       <dl class="dl" style="margin:0">
-        <div><dt>Server (connect-to)</dt><dd>${esc(STATE.settings.publicIp || "—")}</dd></div>
+        <div><dt>Alamat VPS (connect-to)</dt><dd>${esc(STATE.settings.publicIp || "—")}</dd></div>
         <div><dt>Username</dt><dd>${esc(x.username)} ${copyBtn(x.username)}</dd></div>
         <div><dt>Password</dt><dd><span id="pwv">••••••••••••</span><button class="copy" data-act="showpw" title="Lihat">${ic("eye", "")}</button>${copyBtn(x.password, "Password tersalin")}</dd></div>
         <div><dt>IPsec</dt><dd>${STATE.settings.useIpsec ? "Aktif" : "Tidak dipakai"}</dd></div>
       </dl>
     </div>`;
 }
+const NON_WEB_PORTS = [21, 22, 23, 8291, 8728, 8729];
+function fwdLink(f) {
+  const web = f.service === "webfig" || f.service === "ontweb" || (f.service === "custom" && !NON_WEB_PORTS.includes(f.targetPort) && f.proto !== "udp");
+  if (!web) return null;
+  return ([443, 8443].includes(f.targetPort) ? "https://" : "http://") + f.remote;
+}
 function tabRemote(b, x) {
-  const P = STATE.settings.presets || {};
   b.innerHTML = `
     <div class="card">
       <div class="ch"><h2>Akses remote</h2><button class="btn sm pri" data-act="addfwd">${ic("plus")}Tambah</button></div>
       ${x.forwards.length ? `<table class="t"><thead><tr><th>Layanan</th><th>Alamat</th><th class="hide-sm">Tujuan</th><th></th></tr></thead><tbody>
-        ${x.forwards.map((f) => `<tr><td><b style="font-weight:550">${esc(f.label)}</b></td>
-          <td><span class="mono">${esc(f.remote)}</span> ${copyBtn(f.remote, "Alamat tersalin")}</td>
+        ${x.forwards.map((f) => {
+          const url = fwdLink(f);
+          const addr = url
+            ? `<a class="ext" href="${esc(url)}" target="_blank" rel="noopener" title="Buka di tab baru">${esc(f.remote)}${ic("ext", "")}</a> ${copyBtn(url, "Alamat tersalin")}`
+            : `<span class="mono">${esc(f.remote)}</span> ${copyBtn(f.remote, "Alamat tersalin")}${f.service === "winbox" ? `<div class="muted" style="font-size:12px">Buka lewat aplikasi Winbox</div>` : ""}`;
+          return `<tr><td><b style="font-weight:550">${esc(f.label)}</b></td><td>${addr}</td>
           <td class="hide-sm muted mono">${f.target === "router" ? "MikroTik" : esc(f.lanIp)}:${f.targetPort}</td>
-          <td class="r"><button class="btn sm ghost" data-act="delfwd" data-fid="${f.id}" title="Hapus">${ic("trash")}</button></td></tr>`).join("")}
+          <td class="r"><button class="btn sm ghost" data-act="delfwd" data-fid="${f.id}" title="Hapus">${ic("trash")}</button></td></tr>`;
+        }).join("")}
       </tbody></table>`
-      : `<div class="empty"><h3>Belum ada akses remote</h3><p>Tambahkan Winbox untuk remote MikroTik ini lewat ${esc(STATE.settings.publicIp || "VPS")}.</p></div>`}
+      : `<div class="empty"><h3>Belum ada akses remote</h3><p>Tambahkan Winbox atau web untuk me-remote server ini lewat ${esc(STATE.settings.publicIp || "VPS")}.</p></div>`}
     </div>
-    <p class="help" style="margin-top:12px">Di Winbox, isi <b>Connect To</b> dengan alamat di atas (lengkap dengan port). Port ini terbuka ke internet, jadi pastikan password MikroTik kuat.</p>`;
+    <p class="help" style="margin-top:12px">Alamat layanan web bisa diklik untuk langsung membuka halamannya. Untuk Winbox, isi <b>Connect To</b> dengan alamat lengkap dengan port. Port ini terbuka ke internet, jadi pastikan password perangkat kuat.</p>`;
 }
 function fwdForm(x) {
   const P = STATE.settings.presets || {};
@@ -2908,7 +3057,7 @@ function fwdForm(x) {
       <div><label for="wPub">Port publik</label><input id="wPub" type="text" inputmode="numeric" placeholder="Otomatis"></div></div>
     <input type="hidden" id="wProto" value="tcp">
     <div class="err" id="wErr"></div>`,
-    `<button class="btn" data-act="closemodal">Batal</button><button class="btn pri" id="wSave">Tambah</button>`);
+    `<button class="btn" data-act="closemodal">Batal</button><button class="btn pri" id="wSave">Simpan</button>`);
   const sync = () => {
     const p = P[$("#wSvc").value] || {};
     $("#wPort").value = p.port || ""; $("#wProto").value = p.proto || "tcp";
@@ -2919,11 +3068,13 @@ function fwdForm(x) {
   const syncT = () => $("#wLanBox").classList.toggle("hidden", document.querySelector("input[name=wTgt]:checked").value !== "lan");
   $("#wSvc").onchange = sync; document.querySelectorAll("input[name=wTgt]").forEach((r) => (r.onchange = syncT)); sync();
   $("#wSave").onclick = async () => {
-    $("#wErr").textContent = ""; $("#wSave").disabled = true;
+    $("#wErr").textContent = ""; busyBtn($("#wSave"), true);
     try {
       await api(`/api/sites/${x.id}/forwards`, { method: "POST", body: { service: $("#wSvc").value, proto: $("#wProto").value, target: document.querySelector("input[name=wTgt]:checked").value, lanIp: $("#wLan").value, targetPort: $("#wPort").value, publicPort: $("#wPub").value, label: $("#wLabel").value } });
-      await load(); route(); toast("Akses remote ditambahkan");
-    } catch (e) { $("#wErr").textContent = e.message; $("#wSave").disabled = false; }
+      await load(); route();
+      const nx = site(x.id), f = nx.forwards[nx.forwards.length - 1];
+      doneDialog("Akses remote ditambahkan", f ? `Alamat: <b class="mono">${esc(f.remote)}</b>` : "", "ok", false);
+    } catch (e) { $("#wErr").textContent = e.message; busyBtn($("#wSave"), false); }
   };
 }
 function tabScript(b, x) {
@@ -2931,7 +3082,7 @@ function tabScript(b, x) {
     ${x.state !== "pending" ? "" : `<ol class="howto">
       <li><b><i>1</i>Salin script</b>Klik tombol Salin di kotak script.</li>
       <li><b><i>2</i>Tempel di MikroTik</b>Winbox → New Terminal → klik kanan → Paste → Enter.</li>
-      <li><b><i>3</i>Tes koneksi</b>Buka tab <a href="#/lokasi/${x.id}/tes">Tes koneksi</a> untuk memastikan semuanya jalan.</li></ol>`}
+      <li><b><i>3</i>Tes koneksi</b>Klik <a href="#" data-act="test" data-id="${x.id}">Tes koneksi</a> untuk memastikan semuanya jalan.</li></ol>`}
     <div class="card"><div class="ch"><h2>Script pemasangan</h2><span class="muted" style="font-size:12.5px">Aman dijalankan ulang</span></div>
       <div class="cb"><div class="codebox"><pre class="code">${esc(x.script)}</pre><button class="btn sm" data-copy="${esc(x.script)}" data-msg="Script tersalin. Tempel di Winbox → New Terminal">${ic("copy")}Salin</button></div>
       <details class="more"><summary>Script untuk menghapus dari MikroTik</summary><div class="codebox"><pre class="code">${esc(x.removeScript)}</pre><button class="btn sm" data-copy="${esc(x.removeScript)}" data-msg="Script hapus tersalin">${ic("copy")}Salin</button></div></details></div></div>`;
@@ -2943,7 +3094,7 @@ function tabHistory(b, x) {
   api(`/api/sites/${x.id}/history`).then((h) => {
     if (!$("#tabBody") || !location.hash.includes(x.id + "/riwayat")) return;
     if (h.pending) {
-      b.innerHTML = `<div class="card"><div class="empty"><div class="big" style="background:var(--subtle);color:var(--muted)">${ic("clock")}</div><h3>Belum ada riwayat</h3><p>Riwayat mulai dicatat setelah MikroTik tersambung pertama kali.<br><a href="#/lokasi/${x.id}/script">Pasang script MikroTik</a></p></div></div>`;
+      b.innerHTML = `<div class="card"><div class="empty"><div class="big" style="background:var(--subtle);color:var(--muted)">${ic("clock")}</div><h3>Belum ada riwayat</h3><p>Riwayat mulai dicatat setelah MikroTik tersambung pertama kali.<br><a href="#/server/${x.id}/script">Pasang script MikroTik</a></p></div></div>`;
       return;
     }
     const U = h.uptime, days = h.days;
@@ -2962,7 +3113,7 @@ function tabHistory(b, x) {
       <div class="card"><div class="ch"><h2>Kejadian putus</h2><span class="muted" style="font-size:12.5px">${total ? `${total} kejadian · 90 hari` : ""}</span></div>
         ${total ? `<table class="t"><thead><tr><th>Mulai putus</th><th>Tersambung lagi</th><th class="r">Lama</th></tr></thead><tbody>
           ${h.events.slice(0, 50).map((e) => `<tr><td>${esc(fmtT(e.s, true))}</td><td>${e.open ? `<span class="pill bad">Masih terputus</span>` : esc(fmtT(e.e, true))}</td><td class="r mono">${fmtDur(e.dur)}</td></tr>`).join("")}
-          </tbody></table>` : `<div class="empty"><div class="big">${ic("check")}</div><h3>Tidak ada kejadian putus</h3><p>VPN lokasi ini stabil sejak tercatat.</p></div>`}
+          </tbody></table>` : `<div class="empty"><div class="big">${ic("check")}</div><h3>Tidak ada kejadian putus</h3><p>VPN server ini stabil sejak tercatat.</p></div>`}
       </div>
       <p class="help" style="margin-top:12px">Dicatat sejak ${esc(fmtT(h.installedAt ? Date.parse(h.installedAt) : 0, true))} · diperiksa tiap 30 detik · waktu dalam ${esc(h.tz)}${open ? "" : ""}.</p>`;
     const bars = $("#bars");
@@ -2970,120 +3121,136 @@ function tabHistory(b, x) {
   }).catch((e) => { b.innerHTML = `<div class="card"><div class="empty"><p>${esc(e.message)}</p></div></div>`; });
 }
 
-/* ---------- Tes koneksi bertahap ---------- */
-function tabTest(b, x) {
-  const running = TEST && TEST.id === x.id && TEST.running;
-  b.innerHTML = `
-    <div class="card" id="tstCard">
-      <div class="tst-head"><div><h2>Tes koneksi</h2><p id="tstSub">Memeriksa jalur dari VPS ke MikroTik, jaringan ONT, GenieACS, dan akses remote.</p></div>
-        <button class="btn pri" id="tstBtn" data-act="runtest" ${running ? "disabled" : ""}>${ic("play")}${TEST && TEST.id === x.id && TEST.done ? "Tes ulang" : "Mulai tes"}</button></div>
-      <div class="prog"><i id="tstProg"></i></div>
-      <ol class="steps" id="tstSteps"><li class="step wait"><span class="sic">…</span><span class="stx"><b>Memuat langkah tes…</b></span></li></ol>
-      <div id="tstSum"></div>
-    </div>`;
-  if (TEST && TEST.id === x.id && TEST.plan) { drawSteps(); return; }
-  api(`/api/sites/${x.id}/test-plan`).then((r) => {
-    TEST = { id: x.id, plan: r.steps, res: {}, running: false, done: false };
-    drawSteps();
-    if (location.hash.endsWith("/tes") && !sessionStorageGet("tested-" + x.id)) runTest();
-  }).catch((e) => { $("#tstSteps").innerHTML = `<li class="step fail"><span class="stx"><b>${esc(e.message)}</b></span></li>`; });
+/* ---------- Tes koneksi (popup) ---------- */
+function openTest(id) {
+  const x = site(id); if (!x) return;
+  modal(`Tes koneksi · ${esc(x.name)}`, `
+    <div class="tst-top" id="tstSub">Memeriksa jalur dari VPS ke MikroTik, jaringan ONT, GenieACS, dan akses remote.</div>
+    <div class="prog"><i id="tstProg"></i></div>
+    <ol class="steps" id="tstSteps"><li class="step wait"><span class="sic">…</span><span class="stx"><b>Memuat langkah tes…</b></span></li></ol>
+    <div id="tstSum"></div>`,
+    `<button class="btn" data-act="closemodal">Tutup</button><button class="btn pri" id="tstBtn" data-act="runtest" disabled>${ic("play")}Tes ulang</button>`,
+    { size: "lg", flush: true });
+  TEST = { id: x.id, plan: null, res: {}, running: false, done: false };
+  runTest();
 }
-function sessionStorageGet(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
-function sessionStorageSet(k, v) { try { sessionStorage.setItem(k, v); } catch (e) {} }
 function drawSteps() {
-  if (!TEST || !$("#tstSteps")) return;
+  if (!TEST || !$("#tstSteps") || !TEST.plan) return;
   const P = TEST.plan;
-  $("#tstSteps").innerHTML = P.map((s, i) => {
-    const r = TEST.res[s.key];
-    const st = !r ? (TEST.current === s.key ? "run" : "wait") : r.ok === true ? "ok" : r.ok === false ? "fail" : "skip";
-    const icon = st === "ok" ? ic("check", "") : st === "fail" ? ic("x", "") : st === "skip" ? ic("minus", "") : st === "run" ? "" : i + 1;
-    return `<li class="step ${st}"><span class="sic">${icon}</span><span class="stx"><b>${esc(s.label)}</b><small>${esc(s.desc)}</small>
-      ${r ? `<div class="sres">${esc(r.detail)}${r.hint && r.ok === false ? `<span class="hint">${esc(r.hint)}</span>` : ""}</div>` : st === "run" ? `<div class="sres muted">Memeriksa…</div>` : ""}</span>
-      ${r && r.ms != null ? `<span class="tm">${(r.ms / 1000).toFixed(1)} dtk</span>` : ""}</li>`;
-  }).join("");
+  $("#tstSteps").innerHTML = stepsHtml(P, TEST.res, TEST.current);
   const doneN = Object.keys(TEST.res).length;
   $("#tstProg").style.width = (P.length ? (doneN / P.length) * 100 : 0) + "%";
   if (TEST.running) $("#tstSub").textContent = `Langkah ${Math.min(doneN + 1, P.length)} dari ${P.length}…`;
+  const btn = $("#tstBtn");
   if (TEST.done) {
     const fail = P.filter((s) => TEST.res[s.key] && TEST.res[s.key].ok === false).length;
     $("#tstSub").textContent = `Selesai · ${P.length} langkah`;
     $("#tstSum").innerHTML = fail
       ? `<div class="tst-sum fail">${ic("alert")}${fail} langkah perlu diperbaiki. Lihat saran di bawah langkah yang gagal.</div>`
-      : `<div class="tst-sum ok">${ic("check")}Semua beres. GenieACS dapat menjangkau ONT di lokasi ini.</div>`;
-    const btn = $("#tstBtn"); if (btn) { btn.disabled = false; btn.innerHTML = ic("play") + "Tes ulang"; }
-  } else $("#tstSum").innerHTML = "";
+      : `<div class="tst-sum ok">${ic("check")}Semua beres. GenieACS dapat menjangkau ONT di server ini.</div>`;
+    if (btn) btn.disabled = false;
+  } else { $("#tstSum").innerHTML = ""; if (btn) btn.disabled = true; }
 }
 async function runTest() {
   if (!TEST || TEST.running) return;
   const id = TEST.id;
   TEST.res = {}; TEST.running = true; TEST.done = false;
-  try { TEST.plan = (await api(`/api/sites/${id}/test-plan`)).steps; } catch (e) {}
-  sessionStorageSet("tested-" + id, "1");
-  const btn = $("#tstBtn"); if (btn) btn.disabled = true;
+  try { TEST.plan = (await api(`/api/sites/${id}/test-plan`)).steps; }
+  catch (e) { if ($("#tstSteps")) $("#tstSteps").innerHTML = `<li class="step fail"><span class="stx"><b>${esc(e.message)}</b></span></li>`; TEST.running = false; return; }
   let vpnDown = false;
   for (const s of TEST.plan) {
-    if (!TEST || TEST.id !== id) return;
+    if (!TEST || TEST.id !== id) return; // dialog ditutup
     TEST.current = s.key; drawSteps();
     const t0 = performance.now();
     let r;
-    if (vpnDown && ["ping-mt", "route", "ping-gw"].includes(s.key)) r = { ok: null, detail: "Dilewati karena VPN belum tersambung" };
-    else if (vpnDown && s.key.startsWith("fwd:")) r = { ok: null, detail: "Dilewati karena VPN belum tersambung" };
+    if (vpnDown && (["ping-mt", "route", "ping-gw"].includes(s.key) || s.key.startsWith("fwd:"))) r = { ok: null, detail: "Dilewati karena VPN belum tersambung" };
     else {
       try { r = await api(`/api/sites/${id}/test-step`, { method: "POST", body: { key: s.key } }); }
       catch (e) { r = { ok: false, detail: e.message }; }
-      const minMs = 450; const el = performance.now() - t0; if (el < minMs) await new Promise((z) => setTimeout(z, minMs - el));
+      const el = performance.now() - t0; if (el < 450) await new Promise((z) => setTimeout(z, 450 - el));
     }
+    if (!TEST || TEST.id !== id) return;
     r.ms = performance.now() - t0;
     if (s.key === "vpn" && r.ok === false) vpnDown = true;
     TEST.res[s.key] = r; TEST.current = null; drawSteps();
   }
   TEST.running = false; TEST.done = true; drawSteps();
-  load().then(() => { $("#navCount").textContent = STATE.sites.length; });
+  load().catch(() => {});
 }
 
-/* ================= Tambah / ubah / hapus lokasi ================= */
+/* ================= Tambah / ubah / hapus server ================= */
 function siteForm(x) {
   return `
-    <label for="fName">Nama lokasi</label>
+    <label for="fName">Nama server</label>
     <input id="fName" type="text" maxlength="40" placeholder="contoh: Nangahale" value="${esc(x?.name || "")}">
     <label for="fSub">Subnet ONT di MikroTik</label>
     <input id="fSub" type="text" placeholder="10.0.0.0/24" value="${esc(x?.realSubnet || "10.0.0.0/24")}">
-    <div class="help">Winbox → IP → DHCP Server → Networks. Boleh sama dengan lokasi lain.</div>
+    <div class="help">Winbox → IP → DHCP Server → Networks. Boleh sama dengan server lain.</div>
     <label for="fVirt">IP virtual <span class="muted" style="font-weight:400">(opsional)</span></label>
     <input id="fVirt" type="text" placeholder="Otomatis" value="${esc(x?.virtualSubnet || "")}">
-    <div class="help">Kosongkan agar dipilih otomatis. Tidak boleh sama dengan lokasi lain.</div>
+    <div class="help">Kosongkan agar dipilih otomatis. Tidak boleh sama dengan server lain.</div>
     <label for="fNote">Catatan <span class="muted" style="font-weight:400">(opsional)</span></label>
     <input id="fNote" type="text" maxlength="120" placeholder="contoh: OLT C-Data 8 port" value="${esc(x?.note || "")}">
     <div class="err" id="fErr"></div>`;
 }
 const readForm = () => ({ name: $("#fName").value, realSubnet: $("#fSub").value, virtualSubnet: $("#fVirt").value, note: $("#fNote").value });
 function openAdd() {
-  modal("Tambah lokasi", siteForm(null), `<button class="btn" data-act="closemodal">Batal</button><button class="btn pri" id="fSave">Simpan</button>`);
+  modal("Tambah server", siteForm(null), `<button class="btn" data-act="closemodal">Batal</button><button class="btn pri" id="fSave">Simpan</button>`);
   $("#fSave").onclick = async () => {
-    $("#fSave").disabled = true;
-    try { const r = await api("/api/sites", { method: "POST", body: readForm() }); await load(); location.hash = `#/lokasi/${r.site.id}/script`; toast("Lokasi dibuat. Pasang script di MikroTik."); }
-    catch (e) { $("#fErr").textContent = e.message; $("#fSave").disabled = false; }
+    busyBtn($("#fSave"), true); $("#fErr").textContent = "";
+    try {
+      const r = await api("/api/sites", { method: "POST", body: readForm() });
+      await load(); location.hash = `#/server/${r.site.id}/script`;
+      setTimeout(() => doneDialog("Server ditambahkan", `<p><b>${esc(r.site.name)}</b> siap dipasang.</p><p>Langkah berikutnya: salin script di bawah, lalu tempel di Winbox → New Terminal.</p>`, "ok", false), 60);
+    } catch (e) { $("#fErr").textContent = e.message; busyBtn($("#fSave"), false); }
   };
 }
 function openEdit(id) {
   const x = site(id);
-  modal("Ubah lokasi", siteForm(x), `<button class="btn" data-act="closemodal">Batal</button><button class="btn pri" id="fSave">Simpan</button>`);
+  modal("Ubah server", siteForm(x), `<button class="btn" data-act="closemodal">Batal</button><button class="btn pri" id="fSave">Simpan</button>`);
   $("#fSave").onclick = async () => {
-    try { await api("/api/sites/" + id, { method: "PUT", body: readForm() }); await load(); route(); toast("Perubahan disimpan. Pasang ulang script jika subnet berubah."); }
-    catch (e) { $("#fErr").textContent = e.message; }
+    busyBtn($("#fSave"), true); $("#fErr").textContent = "";
+    const f = readForm();
+    try {
+      await api("/api/sites/" + id, { method: "PUT", body: f });
+      const net = f.realSubnet.trim() !== x.realSubnet || (f.virtualSubnet.trim() && f.virtualSubnet.trim() !== x.virtualSubnet);
+      await load(); route();
+      doneDialog("Perubahan disimpan", net ? "Subnet berubah. Pasang ulang script terbaru di MikroTik server ini." : "", "ok", !net);
+    } catch (e) { $("#fErr").textContent = e.message; busyBtn($("#fSave"), false); }
   };
 }
 function openResetPw(id) {
-  modal("Buat password VPN baru?", `<p>MikroTik lokasi ini akan terputus sampai script terbaru dipasang ulang.</p>`,
-    `<button class="btn" data-act="closemodal">Batal</button><button class="btn pri" id="ok">Buat password baru</button>`);
-  $("#ok").onclick = async () => { await api(`/api/sites/${id}/reset-password`, { method: "POST" }); await load(); location.hash = `#/lokasi/${id}/script`; route(); toast("Password baru dibuat. Pasang ulang script."); };
+  const x = site(id);
+  confirmDialog({
+    title: "Buat password VPN baru?", icon: "key", ok: "Buat password baru",
+    text: `<p>MikroTik <b>${esc(x.name)}</b> akan terputus sampai script terbaru dipasang ulang.</p>`,
+    onOk: async () => {
+      await api(`/api/sites/${id}/reset-password`, { method: "POST" }); await load();
+      location.hash = `#/server/${id}/script`;
+      setTimeout(() => doneDialog("Password VPN diganti", "Salin script terbaru dan pasang ulang di MikroTik.", "ok", false), 60);
+    },
+  });
 }
 function openDelete(id) {
   const x = site(id);
-  modal(`Hapus ${esc(x.name)}?`, `<p>Akun VPN dan akses remote lokasi ini akan dihapus. GenieACS tidak bisa lagi Summon ONT di lokasi ini.</p>
-    <details class="more"><summary>Script untuk membersihkan MikroTik</summary><div class="codebox"><pre class="code">${esc(x.removeScript)}</pre><button class="btn sm" data-copy="${esc(x.removeScript)}" data-msg="Script hapus tersalin">${ic("copy")}Salin</button></div></details>`,
-    `<button class="btn" data-act="closemodal">Batal</button><button class="btn danger" id="ok">Hapus lokasi</button>`);
-  $("#ok").onclick = async () => { await api("/api/sites/" + id, { method: "DELETE" }); await load(); location.hash = "#/lokasi"; toast("Lokasi dihapus"); };
+  confirmDialog({
+    title: `Hapus ${esc(x.name)}?`, danger: true, ok: "Hapus server",
+    text: `<p>Akun VPN dan akses remote server ini dihapus. GenieACS tidak bisa lagi Summon ONT di server ini.</p>
+      <details class="more"><summary>Script untuk membersihkan MikroTik</summary><div class="codebox"><pre class="code" style="max-height:160px">${esc(x.removeScript)}</pre><button class="btn sm" data-copy="${esc(x.removeScript)}" data-msg="Script hapus tersalin">${ic("copy")}Salin</button></div></details>`,
+    onOk: async () => {
+      await api("/api/sites/" + id, { method: "DELETE" }); await load();
+      location.hash = "#/server";
+      setTimeout(() => doneDialog("Server dihapus", `${esc(x.name)} sudah dihapus dari panel.`), 60);
+    },
+  });
+}
+function openDelFwd(id, fid) {
+  const x = site(id), f = x && x.forwards.find((y) => y.id === fid);
+  confirmDialog({
+    title: "Hapus akses remote?", danger: true, ok: "Hapus",
+    text: `<p>${f ? `<b>${esc(f.label)}</b> · <span class="mono">${esc(f.remote)}</span><br>` : ""}Alamat ini tidak bisa dipakai lagi.</p>`,
+    onOk: async () => { await api(`/api/sites/${id}/forwards/${fid}`, { method: "DELETE" }); await load(); route(); doneDialog("Akses remote dihapus", ""); },
+  });
 }
 
 /* ================= Panduan ================= */
@@ -3096,16 +3263,16 @@ function viewGuide(v) {
     <div class="card guide"><div class="ch"><h2>Cara kerja</h2></div><div class="cb">
       <div class="flow"><span>ONT</span><i>→</i><span>OLT</span><i>→</i><span>MikroTik</span><i>⇄ VPN L2TP ⇄</i><span>VPS · GenieACS</span></div>
       <p>Tanpa VPN, GenieACS hanya bisa membaca ONT, tetapi tidak bisa memberi perintah (Summon), karena ONT berada di jaringan lokal.</p>
-      <p>Setiap MikroTik membuat VPN ke VPS. Karena subnet ONT di semua lokasi boleh sama, tiap lokasi mendapat <b>IP virtual</b> berbeda; MikroTik menerjemahkannya kembali ke IP asli (NETMAP).</p>
+      <p>Setiap MikroTik membuat VPN ke VPS. Karena subnet ONT di semua server boleh sama, tiap server mendapat <b>IP virtual</b> berbeda; MikroTik menerjemahkannya kembali ke IP asli (NETMAP).</p>
     </div></div>
-    <div class="card"><div class="ch"><h2>Menambah lokasi</h2></div><div class="cb"><ol class="ol">
-      <li><b>Tambah lokasi di panel</b>Isi nama dan subnet ONT (Winbox → IP → DHCP Server → Networks).</li>
+    <div class="card"><div class="ch"><h2>Menambah server</h2></div><div class="cb"><ol class="ol">
+      <li><b>Tambah server di panel</b>Isi nama dan subnet ONT (Winbox → IP → DHCP Server → Networks).</li>
       <li><b>Pasang script di MikroTik</b>Tab Script MikroTik → Salin → Winbox → New Terminal → Paste.</li>
-      <li><b>Jalankan tes koneksi</b>Tab Tes koneksi memeriksa VPN, jaringan ONT, GenieACS, dan akses remote satu per satu.</li>
+      <li><b>Jalankan tes koneksi</b>Klik tombol Tes koneksi di halaman server. Popup tes memeriksa VPN, jaringan ONT, GenieACS, dan akses remote satu per satu.</li>
       <li><b>Atur ONT</b>URL ACS di ONT atau profil TR-069 OLT: <code>${esc(s.acsUrl || "")}</code></li>
     </ol></div></div>
     <div class="card"><div class="ch"><h2>Remote MikroTik dari mana saja</h2></div><div class="cb"><ol class="ol">
-      <li><b>Tambah akses remote</b>Buka lokasi → tab Remote → Tambah → pilih Winbox.</li>
+      <li><b>Tambah akses remote</b>Buka server → tab Remote → Tambah → pilih Winbox atau WebFig.</li>
       <li><b>Hubungkan Winbox</b>Isi Connect To dengan alamat yang diberikan, misalnya <code>${esc(s.publicIp || "IP_VPS")}:20001</code>.</li>
     </ol><p class="help">Jika di MikroTik IP → Services kolom Available From diisi, tambahkan <code>${esc(s.tunnelLocal || "")}</code>.</p></div></div>
     <div class="card"><div class="ch"><h2>Membersihkan pengaturan</h2></div><div class="cb">
@@ -3117,8 +3284,8 @@ function viewGuide(v) {
       <details><summary>Status tetap "Terputus" setelah script dipasang</summary><p>Jalankan Tes koneksi untuk melihat langkah yang gagal. Biasanya: MikroTik belum punya internet, alamat VPS salah, atau port UDP 1701 di VPS tertutup.</p></details>
       <details><summary>Summon di GenieACS masih gagal</summary><p>Pastikan langkah "Patch GenieACS" di Tes koneksi lolos, dan ONT sudah Inform sekali setelah VPN tersambung.</p></details>
       <details><summary>Remote Winbox tidak bisa masuk</summary><p>Pasang ulang script MikroTik terbaru (berisi aturan "remote dari VPS"), cek IP → Services → winbox aktif, dan pastikan provider VPS tidak memblokir port tersebut.</p></details>
-      <details><summary>Bolehkah IP virtual sama dengan ZeroTier?</summary><p>Boleh. Yang tidak boleh: dua lokasi memakai IP virtual yang sama, atau IP virtual sama dengan subnet lokal mana pun.</p></details>
-      <details><summary>Apa arti status "Menunggu pemasangan"?</summary><p>Lokasi sudah dibuat di panel tetapi MikroTik-nya belum pernah tersambung. Lokasi ini tidak dihitung terputus dan tidak dikirim notifikasi Telegram. Statusnya berubah sendiri saat MikroTik tersambung pertama kali.</p></details>
+      <details><summary>Bolehkah IP virtual sama dengan ZeroTier?</summary><p>Boleh. Yang tidak boleh: dua server memakai IP virtual yang sama, atau IP virtual sama dengan subnet lokal mana pun.</p></details>
+      <details><summary>Apa arti status "Menunggu pemasangan"?</summary><p>Server sudah dibuat di panel tetapi MikroTik-nya belum pernah tersambung. Server ini tidak dihitung terputus dan tidak dikirim notifikasi Telegram. Statusnya berubah sendiri saat MikroTik tersambung pertama kali.</p></details>
       <details><summary>Notifikasi Telegram tidak masuk</summary><p>Buka Pengaturan → Notifikasi Telegram, klik Kirim pesan tes. Jika gagal, pesan kesalahannya menjelaskan penyebabnya (token salah, bot bukan admin, topik terhapus). Ingat: notifikasi baru dikirim setelah VPN putus melewati jeda yang diatur.</p></details>
       <details><summary>Setelah HTTPS aktif, panel tidak bisa dibuka lewat IP</summary><p>Itu normal. Buka lewat <code>https://domain:${esc(String(s.port || 8088))}</code>; alamat http dan IP akan dialihkan otomatis ke sana. Jika domain bermasalah, lepas domain di Pengaturan → Domain &amp; HTTPS.</p></details>
       <details><summary>Aman menjalankan script MikroTik berulang kali?</summary><p>Aman. Script menghapus pengaturan lama bertanda "VPN ACS" terlebih dulu; pengaturan lain tidak disentuh.</p></details>
@@ -3184,24 +3351,26 @@ function setGeneral(b) {
   $("#vpsForm").onsubmit = async (e) => {
     e.preventDefault(); $("#vpsErr").textContent = "";
     const changed = $("#sIpsec").checked !== !!s.useIpsec;
-    try { await api("/api/settings", { method: "PUT", body: { publicIp: $("#sIp").value, useIpsec: $("#sIpsec").checked, timezone: $("#sTz").value } }); await load(); route(); toast(changed ? "Disimpan. Pasang ulang script di semua MikroTik." : "Pengaturan disimpan"); }
-    catch (err) { $("#vpsErr").textContent = err.message; }
+    const btn = e.submitter || $("#vpsForm button"); busyBtn(btn, true);
+    try { await api("/api/settings", { method: "PUT", body: { publicIp: $("#sIp").value, useIpsec: $("#sIpsec").checked, timezone: $("#sTz").value } }); await load(); route(); doneDialog("Pengaturan disimpan", changed ? "IPsec diubah. Pasang ulang script di semua MikroTik." : "", "ok", !changed); }
+    catch (err) { $("#vpsErr").textContent = err.message; busyBtn(btn, false); }
   };
   $("#tunForm").onsubmit = (e) => {
     e.preventDefault(); $("#tErr").textContent = "";
     const val = $("#tNet").value.trim();
     if (!val) { $("#tErr").textContent = "Isi jaringan VPN baru."; return; }
-    modal("Ganti jaringan VPN?", `<p>Dari <b>${esc(s.tunnelNet)}</b> ke <b>${esc(val)}</b>. Semua VPN terputus sebentar, script di ${STATE.sites.length} MikroTik harus dipasang ulang, dan URL ACS di semua ONT berubah.</p><div class="err" id="tErr2"></div>`,
-      `<button class="btn" data-act="closemodal">Batal</button><button class="btn danger" id="ok">Ganti</button>`);
-    $("#ok").onclick = async () => {
-      try { await api("/api/settings", { method: "PUT", body: { tunnelNet: val } }); await load(); route(); toast(`Jaringan VPN sekarang ${STATE.settings.tunnelNet}. Pasang ulang semua script.`); }
-      catch (err) { $("#tErr2").textContent = err.message; }
-    };
+    confirmDialog({
+      title: "Ganti jaringan VPN?", danger: true, icon: "alert", ok: "Ganti jaringan",
+      text: `<p>Dari <b>${esc(s.tunnelNet)}</b> ke <b>${esc(val)}</b>.</p><p>Semua VPN terputus sebentar, script di ${STATE.sites.length} MikroTik harus dipasang ulang, dan URL ACS di semua ONT berubah.</p>`,
+      onOk: async () => { await api("/api/settings", { method: "PUT", body: { tunnelNet: val } }); await load(); route(); doneDialog("Jaringan VPN diganti", `Sekarang ${esc(STATE.settings.tunnelNet)}. Pasang ulang script di semua MikroTik dan perbarui URL ACS di ONT.`, "ok", false); },
+    });
   };
   $("#pwForm").onsubmit = async (e) => {
     e.preventDefault(); $("#pwErr").textContent = "";
-    try { await api("/api/settings", { method: "PUT", body: { oldPassword: $("#pOld").value, newPassword: $("#pNew").value } }); $("#pOld").value = ""; $("#pNew").value = ""; toast("Password diganti"); }
+    const btn = $("#pwForm button"); busyBtn(btn, true);
+    try { await api("/api/settings", { method: "PUT", body: { oldPassword: $("#pOld").value, newPassword: $("#pNew").value } }); $("#pOld").value = ""; $("#pNew").value = ""; doneDialog("Password admin diganti", "Gunakan password baru saat login berikutnya."); }
     catch (err) { $("#pwErr").textContent = err.message; }
+    busyBtn(btn, false);
   };
 }
 
@@ -3235,7 +3404,7 @@ function setTelegram(b) {
     </div></div>
     <div class="card"><div class="ch"><h2>Aturan notifikasi</h2></div><div class="cb" style="padding-top:6px">
       <label class="check" style="margin-top:10px"><input id="tgOn" type="checkbox" ${t.enabled !== false ? "checked" : ""}>Aktifkan notifikasi VPN terputus</label>
-      <div class="help">Lokasi berstatus "Menunggu pemasangan" tidak pernah dikirim notifikasi.</div>
+      <div class="help">Server berstatus "Menunggu pemasangan" tidak pernah dikirim notifikasi.</div>
       <div class="f2">
         <div><label for="tgDelay">Jeda sebelum lapor (menit)</label><input id="tgDelay" type="number" min="1" max="1440" value="${t.delayMin || 3}">
           <div class="help">VPN harus putus selama ini dulu, supaya putus sebentar tidak dilaporkan.</div></div>
@@ -3302,33 +3471,33 @@ function setTelegram(b) {
       quietEnd: $("#tgQuiet").checked ? $("#tgQe").value : "",
     };
   };
-  const busy = (btn, on, html) => { btn.disabled = on; if (html) btn.innerHTML = html; };
   $("#tgDetect").onclick = async () => {
-    const btn = $("#tgDetect"); $("#tgErr").textContent = ""; busy(btn, true, ic("search") + "Mendeteksi…");
+    const btn = $("#tgDetect"); $("#tgErr").textContent = ""; busyBtn(btn, true);
     try {
       TGDET = await api("/api/telegram/detect", { method: "POST", body: { token: $("#tgTok").value.trim() } });
       $("#tgBot").textContent = "Bot: @" + TGDET.bot.username;
       fillChats(chatSel.value || t.chatId);
       toast(TGDET.chats.length ? `${TGDET.chats.length} grup ditemukan` : "Belum ada grup. Masukkan bot ke grup dan kirim pesan di sana.");
     } catch (e) { $("#tgErr").textContent = e.message; }
-    busy(btn, false, ic("search") + "Deteksi grup &amp; topik");
+    busyBtn(btn, false);
   };
   $("#tgTest").onclick = async () => {
-    const btn = $("#tgTest"); $("#tgErr").textContent = ""; busy(btn, true);
-    try { await api("/api/telegram/test", { method: "POST", body: body() }); toast("Pesan tes terkirim. Cek grup Telegram."); }
-    catch (e) { $("#tgErr").textContent = e.message; }
-    busy(btn, false);
+    const btn = $("#tgTest"); $("#tgErr").textContent = ""; busyBtn(btn, true);
+    try { await api("/api/telegram/test", { method: "POST", body: body() }); busyBtn(btn, false); doneDialog("Pesan tes terkirim", "Cek grup Telegram Anda. Jika sudah masuk, klik Simpan."); }
+    catch (e) { busyBtn(btn, false); doneDialog("Pesan tes gagal", esc(e.message), "bad", false); }
   };
   $("#tgSave").onclick = async () => {
-    const btn = $("#tgSave"); $("#tgErr").textContent = ""; busy(btn, true);
-    try { await api("/api/telegram", { method: "PUT", body: body() }); await load(); route(); toast("Pengaturan Telegram disimpan"); }
-    catch (e) { $("#tgErr").textContent = e.message; busy(btn, false); }
+    const btn = $("#tgSave"); $("#tgErr").textContent = ""; busyBtn(btn, true);
+    try { await api("/api/telegram", { method: "PUT", body: body() }); await load(); route(); doneDialog("Pengaturan Telegram disimpan", ""); }
+    catch (e) { $("#tgErr").textContent = e.message; busyBtn(btn, false); }
   };
   const clr = $("#tgClear");
   if (clr) clr.onclick = () => {
-    modal("Hapus pengaturan Telegram?", `<p>Token bot dan grup tujuan dihapus dari panel. Notifikasi berhenti dikirim.</p>`,
-      `<button class="btn" data-act="closemodal">Batal</button><button class="btn danger" id="ok">Hapus</button>`);
-    $("#ok").onclick = async () => { await api("/api/telegram", { method: "PUT", body: { clear: true } }); TGDET = null; await load(); route(); toast("Pengaturan Telegram dihapus"); };
+    confirmDialog({
+      title: "Hapus pengaturan Telegram?", danger: true, ok: "Hapus",
+      text: "Token bot dan grup tujuan dihapus dari panel. Notifikasi berhenti dikirim.",
+      onOk: async () => { await api("/api/telegram", { method: "PUT", body: { clear: true } }); TGDET = null; await load(); route(); doneDialog("Pengaturan Telegram dihapus", ""); },
+    });
   };
 }
 
@@ -3368,6 +3537,7 @@ function setDomain(b) {
       <details class="more"><summary>Cara membuat API Token</summary><ol class="ol" style="margin-top:12px">
         <li><b>Buka API Tokens</b>Cloudflare → ikon profil → <b>My Profile</b> → <b>API Tokens</b> → <b>Create Token</b>.</li>
         <li><b>Pilih template "Edit zone DNS"</b>Klik Use template.</li>
+        <li><b>Tambah izin Zone Read</b>Di Permissions klik + Add more → <b>Zone → Zone → Read</b>. Hasilnya: Zone Read dan DNS Edit.</li>
         <li><b>Batasi ke domain Anda</b>Zone Resources: Include → Specific zone → pilih domain.</li>
         <li><b>Buat dan salin</b>Continue to summary → Create Token → salin token (hanya ditampilkan sekali). Jangan pakai Global API Key.</li>
       </ol></details>
@@ -3387,14 +3557,15 @@ function setDomain(b) {
   if (c) {
     $("#cfAgain").onclick = () => runCf(c.domain, "", c.https);
     $("#cfRemove").onclick = () => {
-      modal("Lepas domain?", `<p>Alamat VPS kembali ke <b>${esc(c.publicIpBefore || "IP publik (otomatis)")}</b> dan HTTPS panel dimatikan. Record DNS di Cloudflare tidak dihapus, jadi MikroTik yang memakai domain tetap tersambung.</p><div class="err" id="rmErr"></div>`,
-        `<button class="btn" data-act="closemodal">Batal</button><button class="btn danger" id="ok">Lepas domain</button>`);
-      $("#ok").onclick = async () => {
-        try { await api("/api/cloudflare/remove", { method: "POST" }); }
-        catch (e) { $("#rmErr").textContent = e.message; return; }
-        if (location.protocol === "https:") { const ip = c.publicIpBefore || location.hostname; location.href = `http://${ip}:${port}/#/pengaturan/domain`; return; }
-        await load(); route(); toast("Domain dilepas");
-      };
+      confirmDialog({
+        title: "Lepas domain?", danger: true, icon: "globe", ok: "Lepas domain",
+        text: `<p>Alamat VPS kembali ke <b>${esc(c.publicIpBefore || "IP publik (otomatis)")}</b> dan HTTPS panel dimatikan.</p><p>Record DNS di Cloudflare tidak dihapus, jadi MikroTik yang memakai domain tetap tersambung.</p>`,
+        onOk: async () => {
+          await api("/api/cloudflare/remove", { method: "POST" });
+          if (location.protocol === "https:") { const ip = c.publicIpBefore || location.hostname; location.href = `http://${ip}:${port}/#/pengaturan/domain`; return; }
+          await load(); route(); doneDialog("Domain dilepas", "Panel kembali memakai alamat IP.");
+        },
+      });
     };
   }
   if (CF && CF.plan) drawCf();
@@ -3449,7 +3620,7 @@ function viewLog(v) {
   v.innerHTML = `
     <div class="ph"><div><h1>Log aktivitas</h1><p>Catatan perubahan di panel dan kejadian penting. Disimpan 90 hari.</p></div></div>
     <div class="card">
-      <div class="toolbar"><div class="search">${ic("search", "")}<input id="lq" type="text" placeholder="Cari aktivitas, lokasi, atau IP" value="${esc(LOGQ)}"></div><span class="muted" id="logCount" style="margin-left:auto;font-size:12.5px"></span></div>
+      <div class="toolbar"><div class="search">${ic("search", "")}<input id="lq" type="text" placeholder="Cari aktivitas, server, atau IP" value="${esc(LOGQ)}"></div><span class="muted" id="logCount" style="margin-left:auto;font-size:12.5px"></span></div>
       <div id="logBody"><div class="empty"><p>Memuat…</p></div></div>
     </div>
     <p class="help" style="margin-top:12px">Password dan token tidak pernah dicatat. Waktu dalam ${esc(tzLabel())}.</p>`;
@@ -3476,36 +3647,40 @@ async function fillLog() {
 document.addEventListener("click", async (e) => {
   const cp = e.target.closest("[data-copy]");
   if (cp) { e.preventDefault(); copyText(cp.dataset.copy, cp.dataset.msg || undefined); return; }
+  // Tutup menu yang terbuka bila klik di luar
+  document.querySelectorAll(".menu-list:not(.hidden)").forEach((m) => { if (!m.parentElement.contains(e.target)) m.classList.add("hidden"); });
   const go = e.target.closest("[data-go]");
-  if (go) { if (location.hash === go.dataset.go || (go.dataset.go === "#/" && !location.hash)) route(); else location.hash = go.dataset.go; return; }
+  if (go) { document.querySelectorAll(".menu-list").forEach((m) => m.classList.add("hidden")); if (location.hash === go.dataset.go || (go.dataset.go === "#/" && !location.hash)) route(); else location.hash = go.dataset.go; return; }
   const fl = e.target.closest("[data-filter]");
   if (fl) { LIST.f = fl.dataset.filter; document.querySelectorAll("[data-filter]").forEach((c) => c.classList.toggle("on", c === fl)); fillList(); return; }
   const a = e.target.closest("[data-act]");
-  const menu = $("#menuList");
-  if (menu && !e.target.closest(".menu")) menu.classList.add("hidden");
   if (!a) return;
   const act = a.dataset.act;
-  const cur = (location.hash.match(/^#\/lokasi\/([a-f0-9]{12})/) || [])[1];
-  if (act === "theme") toggleTheme();
+  if (a.tagName === "A") e.preventDefault();
+  const cur = (location.hash.match(/^#\/server\/([a-f0-9]{12})/) || [])[1];
+  if (act === "theme") { toggleTheme(); }
+  else if (act === "usermenu") $("#userList").classList.toggle("hidden");
   else if (act === "opennav") document.body.classList.add("nav-open");
   else if (act === "closenav") document.body.classList.remove("nav-open");
   else if (act === "closemodal") closeModal();
-  else if (act === "logout") { await api("/api/logout", { method: "POST" }).catch(() => {}); LOADED = false; showLogin(); }
-  else if (act === "refresh") { await load(); route(); toast("Status diperbarui"); }
+  else if (act === "logout") {
+    $("#userList").classList.add("hidden");
+    confirmDialog({ title: "Keluar dari panel?", icon: "logout", ok: "Keluar", text: "Anda perlu login lagi untuk membuka panel.",
+      onOk: async () => { await api("/api/logout", { method: "POST" }).catch(() => {}); LOADED = false; closeModal(); showLogin(); } });
+  }
+  else if (act === "refresh") { const b = a; b.classList.add("spinning"); try { await load(); route(); toast("Status diperbarui"); } finally { b.classList.remove("spinning"); } }
   else if (act === "add") openAdd();
   else if (act === "menu") $("#menuList").classList.toggle("hidden");
-  else if (act === "edit") openEdit(a.dataset.id);
-  else if (act === "resetpw") openResetPw(a.dataset.id);
-  else if (act === "del") openDelete(a.dataset.id);
+  else if (act === "edit") { $("#menuList").classList.add("hidden"); openEdit(a.dataset.id); }
+  else if (act === "resetpw") { $("#menuList").classList.add("hidden"); openResetPw(a.dataset.id); }
+  else if (act === "del") { $("#menuList").classList.add("hidden"); openDelete(a.dataset.id); }
+  else if (act === "test") openTest(a.dataset.id || cur);
+  else if (act === "runtest") runTest();
   else if (act === "showpw") { const x = site(cur); const el = $("#pwv"); el.textContent = el.textContent.startsWith("•") ? x.password : "••••••••••••"; }
   else if (act === "addfwd") fwdForm(site(cur));
-  else if (act === "delfwd") {
-    modal("Hapus akses remote?", `<p>Alamat remote ini tidak bisa dipakai lagi.</p>`, `<button class="btn" data-act="closemodal">Batal</button><button class="btn danger" id="ok">Hapus</button>`);
-    $("#ok").onclick = async () => { await api(`/api/sites/${cur}/forwards/${a.dataset.fid}`, { method: "DELETE" }); await load(); route(); toast("Akses remote dihapus"); };
-  }
-  else if (act === "runtest") runTest();
+  else if (act === "delfwd") openDelFwd(cur, a.dataset.fid);
 });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeModal(); const m = $("#menuList"); if (m) m.classList.add("hidden"); } });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeModal(); document.querySelectorAll(".menu-list").forEach((m) => m.classList.add("hidden")); } });
 
 /* ================= Mulai ================= */
 paintIcons();
@@ -3515,7 +3690,7 @@ paintIcons();
     if (me.loggedIn) { showApp(); await load(); route(); } else showLogin();
   } catch (e) { showLogin(); }
   setInterval(async () => {
-    if ($("#appView").classList.contains("hidden") || $("#mbg") || (TEST && TEST.running)) return;
+    if ($("#appView").classList.contains("hidden") || $("#mbg") || TEST) return;
     const h = location.hash;
     if (CF && CF.running) return;
     try { await load(); if (!/\/(tes|remote)$|^#\/(pengaturan|log)/.test(h) && !document.activeElement.matches("input,select")) route(); } catch (e) {}
