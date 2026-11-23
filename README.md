@@ -20,6 +20,7 @@ ONT ─ OLT ─ MikroTik lokasi ═══ VPN L2TP ═══ VPS (GenieACS + Pan
 | `install-vpn-acs.sh` | Installer Panel VPN ACS (sudah berisi seluruh panel) |
 | `genieacs-virtualip.sh` | Patch IP virtual untuk GenieACS v1.2.13 |
 | `pasang-parameter.sh`, `parameter/` | Parameter GenieACS versi bersih (basis beryindo) + pemasang dengan backup/rollback |
+| `bersihkan.sh` | Menghapus aturan/pengaturan yang dipasang repo ini dari VPS |
 | `panel/server.js`, `panel/public/index.html` | Kode sumber panel (untuk dibaca/diubah) |
 
 ## Rekomendasi VPS
@@ -173,6 +174,32 @@ bash genieacs-virtualip.sh rollback  # kembali ke GenieACS asli
 journalctl -u vpn-acs -n 50 --no-pager
 journalctl -u genieacs-cwmp -n 50 --no-pager
 journalctl -u xl2tpd -n 50 --no-pager
+```
+
+## Membersihkan / menghapus
+
+### Di VPS
+```bash
+cd /root/suwazed-panel
+bash bersihkan.sh
+```
+Pilihan menu:
+1. **Hapus semua port forwarding saja** (VPN & lokasi tetap jalan)
+2. **Hapus Panel VPN ACS** + akun VPN lokasi + route IP virtual + aturan firewall panel, dan kembalikan xl2tpd ke bawaan `vpnsetup.sh`
+3. **Kembalikan GenieACS asli** (hapus patch IP virtual)
+4. **Kembalikan parameter GenieACS** dari backup
+5. **Hapus semua** (2 + 3, parameter ditanyakan)
+
+Atau langsung: `bash bersihkan.sh portforward|panel|genieacs|parameter|semua`. Setiap pilihan meminta konfirmasi (ketik `YA`) dan membackup data penting ke `/root` dulu. Server VPN (xl2tpd/IPsec), GenieACS, MongoDB, dan data ONT tidak dihapus.
+
+### Di setiap MikroTik
+Tempel di Winbox → New Terminal (hanya menghapus pengaturan bertanda "VPN ACS"):
+```
+/interface l2tp-client remove [find where name="l2tp-acs"]
+/ip route remove [find where comment="VPN ACS"]
+/ip firewall nat remove [find where comment~"^VPN ACS"]
+/ip firewall filter remove [find where comment~"^VPN ACS"]
+:put "Pengaturan VPN ACS sudah dihapus."
 ```
 
 ## Backup
