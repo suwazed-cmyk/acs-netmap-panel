@@ -177,7 +177,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "1.4.1";
+const VERSION = "1.4.2";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
 const VIRTUAL_POOL = "10.100.0.0/14";
@@ -2581,6 +2581,8 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   a.ext{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:13px;font-weight:500}
   a.ext svg{width:13px;height:13px}
   a.ext:hover{text-decoration:underline}
+  .btn.del-ic{color:var(--bad)}
+  .btn.del-ic:hover{background:var(--bad-soft);color:var(--bad)}
 
   [data-act=refresh].spinning svg{animation:spin .8s linear infinite}
   .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--text);color:var(--surface);padding:10px 16px;border-radius:8px;font-size:13.5px;font-weight:500;z-index:90;box-shadow:var(--shadow-lg);animation:pop .18s}
@@ -3084,10 +3086,10 @@ function tabRemote(b, x) {
           const url = fwdLink(f);
           const addr = url
             ? `<a class="ext" href="${esc(url)}" target="_blank" rel="noopener" title="Buka di tab baru">${esc(f.remote)}${ic("ext", "")}</a> ${copyBtn(url, "Alamat tersalin")}`
-            : `<span class="mono">${esc(f.remote)}</span> ${copyBtn(f.remote, "Alamat tersalin")}${f.service === "winbox" ? `<div class="muted" style="font-size:12px">Buka lewat aplikasi Winbox</div>` : ""}`;
+            : `<span class="mono">${esc(f.remote)}</span> ${copyBtn(f.remote, "Alamat tersalin")}`;
           return `<tr><td><b style="font-weight:550">${esc(f.label)}</b></td><td>${addr}</td>
           <td class="hide-sm muted mono">${f.target === "router" ? "MikroTik" : esc(f.lanIp)}:${f.targetPort}</td>
-          <td class="r"><button class="btn sm ghost" data-act="delfwd" data-fid="${f.id}" title="Hapus">${ic("trash")}</button></td></tr>`;
+          <td class="r"><button class="btn sm ghost del-ic" data-act="delfwd" data-fid="${f.id}" title="Hapus" aria-label="Hapus">${ic("trash")}</button></td></tr>`;
         }).join("")}
       </tbody></table>`
       : `<div class="empty"><h3>Belum ada port forwarding</h3><p>Tambahkan Winbox atau web untuk me-remote router ini lewat ${esc(STATE.settings.publicIp || "VPS")}.</p></div>`}
