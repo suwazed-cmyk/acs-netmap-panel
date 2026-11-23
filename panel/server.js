@@ -40,7 +40,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "1.4.0";
+const VERSION = "1.4.1";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
 const VIRTUAL_POOL = "10.100.0.0/14";
@@ -888,7 +888,8 @@ function tgErr(r) {
     [/kicked|not a member/i, "Bot sudah dikeluarkan dari grup."],
     [/not enough rights|have no rights|need administrator/i, "Bot tidak punya izin mengirim pesan di grup/topik ini. Jadikan bot admin."],
     [/upgraded to a supergroup/i, "Grup berubah menjadi supergroup. Klik Deteksi lalu pilih grupnya lagi."],
-    [/terminated by other getUpdates|webhook/i, "Bot ini sedang dipakai aplikasi lain (webhook). Buat bot khusus untuk panel."],
+    [/webhook/i, "Bot ini masih memakai webhook (terhubung ke aplikasi lain). Hapus webhook dulu lewat tombol Hapus webhook, atau pakai bot khusus untuk panel."],
+    [/terminated by other getUpdates/i, "Bot ini sedang dibaca aplikasi lain. Hentikan aplikasi itu atau pakai bot khusus untuk panel."],
   ];
   for (const [re, msg] of map) if (re.test(desc)) return msg;
   if (r.status === 401 || r.status === 404 || /^(unauthorized|not found)$/i.test(desc)) return "Token bot salah atau bot sudah dihapus.";
@@ -1057,7 +1058,7 @@ async function tgDetect(token) {
   const me = await tgCall(token, "getMe", {});
   if (!(me.json && me.json.ok)) return { error: tgErr(me) };
   const up = await tgCall(token, "getUpdates", { limit: 100, timeout: 0 });
-  if (!(up.json && up.json.ok)) return { error: tgErr(up) };
+  if (!(up.json && up.json.ok)) return { error: tgErr(up), webhook: up.status === 409 && /webhook/i.test((up.json && up.json.description) || "") };
   const chats = new Map();
   const gone = new Set();
   for (const u of up.json.result || []) {
@@ -1618,8 +1619,22 @@ async function handleApi(req, res, url) {
     if (!/^\d{5,}:[A-Za-z0-9_-]{30,}$/.test(token)) return send(res, 400, { error: "Format token salah. Contoh: 123456789:AAH…  (salin dari @BotFather)" });
     if (p === "/api/telegram/detect") {
       const r = await tgDetect(token);
-      if (r.error) return send(res, 400, { error: r.error });
+      if (r.error) return send(res, 400, { error: r.error, webhook: !!r.webhook });
       return send(res, 200, r);
+    }
+    if (p === "/api/telegram/webhook") {
+      const r = await tgCall(token, "getWebhookInfo", {});
+      if (!(r.json && r.json.ok)) return send(res, 400, { error: tgErr(r) });
+      const w = r.json.result || {};
+      return send(res, 200, { url: w.url || "", pending: w.pending_update_count || 0, lastError: w.last_error_message || "" });
+    }
+    if (p === "/api/telegram/delete-webhook") {
+      const info = await tgCall(token, "getWebhookInfo", {});
+      const oldUrl = (info.json && info.json.ok && info.json.result && info.json.result.url) || "";
+      const r = await tgCall(token, "deleteWebhook", { drop_pending_updates: false });
+      if (!(r.json && r.json.ok)) return send(res, 400, { error: tgErr(r) });
+      logActivity(req, "Webhook bot Telegram dihapus", oldUrl ? `Sebelumnya: ${oldUrl.replace(/(bot)?\d{5,}:[A-Za-z0-9_-]{30,}/g, "•••")}` : "Tidak ada webhook aktif");
+      return send(res, 200, { ok: true, oldUrl });
     }
     if (p === "/api/telegram/test") {
       const chatId = String(body.chatId || saved.chatId || "").trim();

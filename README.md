@@ -145,7 +145,7 @@ Menu **Pengaturan → Notifikasi Telegram**:
 1. Buat bot lewat **@BotFather** (`/newbot`) dan salin token-nya.
 2. Buat grup Telegram → aktifkan **Topik (Topics)** → buat topik, misalnya `🔴 VPN`.
 3. Masukkan bot ke grup dan jadikan **admin**, lalu kirim pesan apa saja di topik tujuan.
-4. Di panel: tempel token → **Deteksi grup & topik** → pilih grup dan topik → atur jeda → **Kirim pesan tes** → **Simpan**.
+4. Di panel: tempel token → **Deteksi grup & topik**. Jika bot pernah dipakai aplikasi lain (webhook), panel menawarkan **Hapus webhook** (atau klik tombolnya) → → pilih grup dan topik → atur jeda → **Kirim pesan tes** → **Simpan**.
 
 Aturan pengiriman:
 - Hanya dikirim saat status **berubah**. Putus yang lebih singkat dari **jeda** (bawaan 3 menit) tidak dilaporkan.

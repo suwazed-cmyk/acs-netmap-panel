@@ -177,7 +177,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "1.4.0";
+const VERSION = "1.4.1";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
 const VIRTUAL_POOL = "10.100.0.0/14";
@@ -1025,7 +1025,8 @@ function tgErr(r) {
     [/kicked|not a member/i, "Bot sudah dikeluarkan dari grup."],
     [/not enough rights|have no rights|need administrator/i, "Bot tidak punya izin mengirim pesan di grup/topik ini. Jadikan bot admin."],
     [/upgraded to a supergroup/i, "Grup berubah menjadi supergroup. Klik Deteksi lalu pilih grupnya lagi."],
-    [/terminated by other getUpdates|webhook/i, "Bot ini sedang dipakai aplikasi lain (webhook). Buat bot khusus untuk panel."],
+    [/webhook/i, "Bot ini masih memakai webhook (terhubung ke aplikasi lain). Hapus webhook dulu lewat tombol Hapus webhook, atau pakai bot khusus untuk panel."],
+    [/terminated by other getUpdates/i, "Bot ini sedang dibaca aplikasi lain. Hentikan aplikasi itu atau pakai bot khusus untuk panel."],
   ];
   for (const [re, msg] of map) if (re.test(desc)) return msg;
   if (r.status === 401 || r.status === 404 || /^(unauthorized|not found)$/i.test(desc)) return "Token bot salah atau bot sudah dihapus.";
@@ -1194,7 +1195,7 @@ async function tgDetect(token) {
   const me = await tgCall(token, "getMe", {});
   if (!(me.json && me.json.ok)) return { error: tgErr(me) };
   const up = await tgCall(token, "getUpdates", { limit: 100, timeout: 0 });
-  if (!(up.json && up.json.ok)) return { error: tgErr(up) };
+  if (!(up.json && up.json.ok)) return { error: tgErr(up), webhook: up.status === 409 && /webhook/i.test((up.json && up.json.description) || "") };
   const chats = new Map();
   const gone = new Set();
   for (const u of up.json.result || []) {
@@ -1755,8 +1756,22 @@ async function handleApi(req, res, url) {
     if (!/^\d{5,}:[A-Za-z0-9_-]{30,}$/.test(token)) return send(res, 400, { error: "Format token salah. Contoh: 123456789:AAH…  (salin dari @BotFather)" });
     if (p === "/api/telegram/detect") {
       const r = await tgDetect(token);
-      if (r.error) return send(res, 400, { error: r.error });
+      if (r.error) return send(res, 400, { error: r.error, webhook: !!r.webhook });
       return send(res, 200, r);
+    }
+    if (p === "/api/telegram/webhook") {
+      const r = await tgCall(token, "getWebhookInfo", {});
+      if (!(r.json && r.json.ok)) return send(res, 400, { error: tgErr(r) });
+      const w = r.json.result || {};
+      return send(res, 200, { url: w.url || "", pending: w.pending_update_count || 0, lastError: w.last_error_message || "" });
+    }
+    if (p === "/api/telegram/delete-webhook") {
+      const info = await tgCall(token, "getWebhookInfo", {});
+      const oldUrl = (info.json && info.json.ok && info.json.result && info.json.result.url) || "";
+      const r = await tgCall(token, "deleteWebhook", { drop_pending_updates: false });
+      if (!(r.json && r.json.ok)) return send(res, 400, { error: tgErr(r) });
+      logActivity(req, "Webhook bot Telegram dihapus", oldUrl ? `Sebelumnya: ${oldUrl.replace(/(bot)?\d{5,}:[A-Za-z0-9_-]{30,}/g, "•••")}` : "Tidak ada webhook aktif");
+      return send(res, 200, { ok: true, oldUrl });
     }
     if (p === "/api/telegram/test") {
       const chatId = String(body.chatId || saved.chatId || "").trim();
@@ -2715,7 +2730,7 @@ async function api(path, opts = {}) {
   let data = {};
   try { data = await r.json(); } catch (e) {}
   if (r.status === 401 && path !== "/api/login") { showLogin(); throw new Error(data.error || "Sesi habis"); }
-  if (!r.ok) throw new Error(data.error || "Terjadi kesalahan (" + r.status + ")");
+  if (!r.ok) { const err = new Error(data.error || "Terjadi kesalahan (" + r.status + ")"); err.data = data; throw err; }
   return data;
 }
 function toast(msg) {
@@ -3429,11 +3444,12 @@ function setTelegram(b) {
           <li><b>Buat bot</b>Di Telegram buka <b>@BotFather</b> → kirim <code>/newbot</code> → ikuti petunjuk → salin token yang diberikan.</li>
           <li><b>Siapkan grup</b>Buat grup → Info grup → Edit → aktifkan <b>Topik (Topics)</b> → buat topik, misalnya "🔴 VPN".</li>
           <li><b>Masukkan bot</b>Tambahkan bot ke grup, lalu jadikan <b>admin</b>.</li>
+          <li><b>Bot bekas aplikasi lain?</b>Jika bot pernah dipakai aplikasi lain (webhook), klik <b>Hapus webhook</b> dulu.</li>
           <li><b>Kirim pesan di topik tujuan</b>Kirim pesan apa saja (misalnya "tes") di topik tersebut, lalu klik <b>Deteksi grup &amp; topik</b> di bawah.</li>
         </ol></details>
       <label for="tgTok">Token bot</label>
       <input id="tgTok" type="password" autocomplete="off" placeholder="${t.tokenSet ? `Tersimpan (${esc(t.tokenMask)}) — kosongkan jika tidak diganti` : "contoh: 123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}">
-      <div class="form-actions" style="margin-top:10px"><button class="btn" id="tgDetect">${ic("search")}Deteksi grup &amp; topik</button><span class="help" id="tgBot" style="margin:auto 0">${t.botName ? "Bot: @" + esc(t.botName) : ""}</span></div>
+      <div class="form-actions" style="margin-top:10px"><button class="btn" id="tgDetect">${ic("search")}Deteksi grup &amp; topik</button><button class="btn ghost" id="tgHook" title="Lepas bot dari aplikasi lain yang memakai webhook">${ic("x")}Hapus webhook</button><span class="help" id="tgBot" style="margin:auto 0">${t.botName ? "Bot: @" + esc(t.botName) : ""}</span></div>
       <div class="f2">
         <div><label for="tgChat">Grup</label><select id="tgChat"></select></div>
         <div><label for="tgThread">Topik</label><select id="tgThread"></select></div>
@@ -3516,9 +3532,34 @@ function setTelegram(b) {
       $("#tgBot").textContent = "Bot: @" + TGDET.bot.username;
       fillChats(chatSel.value || t.chatId);
       toast(TGDET.chats.length ? `${TGDET.chats.length} grup ditemukan` : "Belum ada grup. Masukkan bot ke grup dan kirim pesan di sana.");
-    } catch (e) { $("#tgErr").textContent = e.message; }
+    } catch (e) {
+      busyBtn(btn, false);
+      if (e.data && e.data.webhook) return hookFlow(true);
+      $("#tgErr").textContent = e.message;
+    }
     busyBtn(btn, false);
   };
+  // Hapus webhook: tampilkan dulu ke mana bot sedang terhubung, lalu minta konfirmasi
+  const hookFlow = async (fromDetect) => {
+    const token = $("#tgTok").value.trim(), btn = $("#tgHook");
+    $("#tgErr").textContent = ""; busyBtn(btn, true);
+    let info;
+    try { info = await api("/api/telegram/webhook", { method: "POST", body: { token } }); }
+    catch (e) { busyBtn(btn, false); $("#tgErr").textContent = e.message; return; }
+    busyBtn(btn, false);
+    if (!info.url) return doneDialog("Tidak ada webhook", "Bot ini tidak memakai webhook, jadi bisa langsung dipakai panel. Klik Deteksi grup &amp; topik.", "info", false);
+    confirmDialog({
+      title: "Hapus webhook bot?", danger: true, icon: "alert", ok: "Hapus webhook",
+      text: `${fromDetect ? "<p>Grup tidak bisa dideteksi karena bot ini masih memakai webhook.</p>" : ""}
+        <p>Bot sedang terhubung ke:<br><span class="mono" style="word-break:break-all">${esc(info.url.replace(/\d{5,}:[A-Za-z0-9_-]{30,}/g, "•••"))}</span></p>
+        <p>Jika dihapus, aplikasi tersebut <b>berhenti menerima pesan</b> dari bot ini. Lanjutkan hanya jika bot itu memang akan dipakai untuk panel.</p>`,
+      onOk: async () => {
+        await api("/api/telegram/delete-webhook", { method: "POST", body: { token } });
+        doneDialog("Webhook dihapus", "Bot siap dipakai panel. Kirim pesan di topik tujuan, lalu klik Deteksi grup &amp; topik.", "ok", false);
+      },
+    });
+  };
+  $("#tgHook").onclick = () => hookFlow(false);
   $("#tgTest").onclick = async () => {
     const btn = $("#tgTest"); $("#tgErr").textContent = ""; busyBtn(btn, true);
     try { await api("/api/telegram/test", { method: "POST", body: body() }); busyBtn(btn, false); doneDialog("Pesan tes terkirim", "Cek grup Telegram Anda. Jika sudah masuk, klik Simpan."); }

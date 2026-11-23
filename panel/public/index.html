@@ -513,7 +513,7 @@ async function api(path, opts = {}) {
   let data = {};
   try { data = await r.json(); } catch (e) {}
   if (r.status === 401 && path !== "/api/login") { showLogin(); throw new Error(data.error || "Sesi habis"); }
-  if (!r.ok) throw new Error(data.error || "Terjadi kesalahan (" + r.status + ")");
+  if (!r.ok) { const err = new Error(data.error || "Terjadi kesalahan (" + r.status + ")"); err.data = data; throw err; }
   return data;
 }
 function toast(msg) {
@@ -1227,11 +1227,12 @@ function setTelegram(b) {
           <li><b>Buat bot</b>Di Telegram buka <b>@BotFather</b> → kirim <code>/newbot</code> → ikuti petunjuk → salin token yang diberikan.</li>
           <li><b>Siapkan grup</b>Buat grup → Info grup → Edit → aktifkan <b>Topik (Topics)</b> → buat topik, misalnya "🔴 VPN".</li>
           <li><b>Masukkan bot</b>Tambahkan bot ke grup, lalu jadikan <b>admin</b>.</li>
+          <li><b>Bot bekas aplikasi lain?</b>Jika bot pernah dipakai aplikasi lain (webhook), klik <b>Hapus webhook</b> dulu.</li>
           <li><b>Kirim pesan di topik tujuan</b>Kirim pesan apa saja (misalnya "tes") di topik tersebut, lalu klik <b>Deteksi grup &amp; topik</b> di bawah.</li>
         </ol></details>
       <label for="tgTok">Token bot</label>
       <input id="tgTok" type="password" autocomplete="off" placeholder="${t.tokenSet ? `Tersimpan (${esc(t.tokenMask)}) — kosongkan jika tidak diganti` : "contoh: 123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}">
-      <div class="form-actions" style="margin-top:10px"><button class="btn" id="tgDetect">${ic("search")}Deteksi grup &amp; topik</button><span class="help" id="tgBot" style="margin:auto 0">${t.botName ? "Bot: @" + esc(t.botName) : ""}</span></div>
+      <div class="form-actions" style="margin-top:10px"><button class="btn" id="tgDetect">${ic("search")}Deteksi grup &amp; topik</button><button class="btn ghost" id="tgHook" title="Lepas bot dari aplikasi lain yang memakai webhook">${ic("x")}Hapus webhook</button><span class="help" id="tgBot" style="margin:auto 0">${t.botName ? "Bot: @" + esc(t.botName) : ""}</span></div>
       <div class="f2">
         <div><label for="tgChat">Grup</label><select id="tgChat"></select></div>
         <div><label for="tgThread">Topik</label><select id="tgThread"></select></div>
@@ -1314,9 +1315,34 @@ function setTelegram(b) {
       $("#tgBot").textContent = "Bot: @" + TGDET.bot.username;
       fillChats(chatSel.value || t.chatId);
       toast(TGDET.chats.length ? `${TGDET.chats.length} grup ditemukan` : "Belum ada grup. Masukkan bot ke grup dan kirim pesan di sana.");
-    } catch (e) { $("#tgErr").textContent = e.message; }
+    } catch (e) {
+      busyBtn(btn, false);
+      if (e.data && e.data.webhook) return hookFlow(true);
+      $("#tgErr").textContent = e.message;
+    }
     busyBtn(btn, false);
   };
+  // Hapus webhook: tampilkan dulu ke mana bot sedang terhubung, lalu minta konfirmasi
+  const hookFlow = async (fromDetect) => {
+    const token = $("#tgTok").value.trim(), btn = $("#tgHook");
+    $("#tgErr").textContent = ""; busyBtn(btn, true);
+    let info;
+    try { info = await api("/api/telegram/webhook", { method: "POST", body: { token } }); }
+    catch (e) { busyBtn(btn, false); $("#tgErr").textContent = e.message; return; }
+    busyBtn(btn, false);
+    if (!info.url) return doneDialog("Tidak ada webhook", "Bot ini tidak memakai webhook, jadi bisa langsung dipakai panel. Klik Deteksi grup &amp; topik.", "info", false);
+    confirmDialog({
+      title: "Hapus webhook bot?", danger: true, icon: "alert", ok: "Hapus webhook",
+      text: `${fromDetect ? "<p>Grup tidak bisa dideteksi karena bot ini masih memakai webhook.</p>" : ""}
+        <p>Bot sedang terhubung ke:<br><span class="mono" style="word-break:break-all">${esc(info.url.replace(/\d{5,}:[A-Za-z0-9_-]{30,}/g, "•••"))}</span></p>
+        <p>Jika dihapus, aplikasi tersebut <b>berhenti menerima pesan</b> dari bot ini. Lanjutkan hanya jika bot itu memang akan dipakai untuk panel.</p>`,
+      onOk: async () => {
+        await api("/api/telegram/delete-webhook", { method: "POST", body: { token } });
+        doneDialog("Webhook dihapus", "Bot siap dipakai panel. Kirim pesan di topik tujuan, lalu klik Deteksi grup &amp; topik.", "ok", false);
+      },
+    });
+  };
+  $("#tgHook").onclick = () => hookFlow(false);
   $("#tgTest").onclick = async () => {
     const btn = $("#tgTest"); $("#tgErr").textContent = ""; busyBtn(btn, true);
     try { await api("/api/telegram/test", { method: "POST", body: body() }); busyBtn(btn, false); doneDialog("Pesan tes terkirim", "Cek grup Telegram Anda. Jika sudah masuk, klik Simpan."); }
