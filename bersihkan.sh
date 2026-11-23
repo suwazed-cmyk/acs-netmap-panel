@@ -5,7 +5,7 @@
 #  Pemakaian (sebagai root, dari folder suwazed-panel):
 #    bash bersihkan.sh                -> menu pilihan
 #    bash bersihkan.sh portforward    -> hapus semua port forwarding saja
-#    bash bersihkan.sh panel          -> hapus Panel VPN ACS + akun VPN server + aturan firewall
+#    bash bersihkan.sh panel          -> hapus Panel VPN ACS + akun VPN router + aturan firewall
 #    bash bersihkan.sh genieacs       -> kembalikan GenieACS asli (tanpa patch IP virtual)
 #    bash bersihkan.sh parameter      -> kembalikan parameter GenieACS dari backup
 #    bash bersihkan.sh semua          -> panel + genieacs (+ parameter, ditanyakan)
@@ -83,7 +83,7 @@ hapus_akun_vpn() {
       $0 == e { skip = 0; next }
       !skip { print }
     ' "$CHAP" > "$CHAP.tmp" && cat "$CHAP.tmp" > "$CHAP" && rm -f "$CHAP.tmp"
-    ok "Akun VPN server dihapus dari $CHAP (backup: /root/backup-chap-secrets-$STAMP)"
+    ok "Akun VPN router dihapus dari $CHAP (backup: /root/backup-chap-secrets-$STAMP)"
   else
     info "Tidak ada akun VPN dari panel di $CHAP"
   fi
@@ -121,7 +121,7 @@ hapus_layanan_panel() {
 cetak_script_mikrotik() {
   echo
   echo -e "${GREEN}== Bersihkan juga setiap MikroTik ==${NC}"
-  echo "Salin baris berikut ke Winbox > New Terminal di setiap MikroTik server:"
+  echo "Salin baris berikut ke Winbox > New Terminal di setiap MikroTik router:"
   echo
   cat <<'EOF'
 /interface l2tp-client remove [find where name="l2tp-acs"]
@@ -135,7 +135,7 @@ EOF
 
 # ---------- mode ----------
 mode_portforward() {
-  konfirmasi "Semua port forwarding (remote Winbox, Web ONT, dll) di SEMUA server akan dihapus. VPN dan server tetap ada."
+  konfirmasi "Semua port forwarding (remote Winbox, Web ONT, dll) di SEMUA router akan dihapus. VPN dan router tetap ada."
   if [ -f "$DATA" ] && command -v node >/dev/null 2>&1; then
     cp "$DATA" "/root/backup-vpnacs-$STAMP.json"; chmod 600 "/root/backup-vpnacs-$STAMP.json"
     node -e 'const fs=require("fs");const f=process.argv[1];const d=JSON.parse(fs.readFileSync(f));let n=0;for(const s of d.sites||[]){n+=(s.forwards||[]).length;s.forwards=[]}fs.writeFileSync(f,JSON.stringify(d,null,2));console.log("     "+n+" port forwarding dihapus dari data panel")' "$DATA"
@@ -148,7 +148,7 @@ mode_portforward() {
 }
 
 mode_panel() {
-  konfirmasi "Panel VPN ACS, SEMUA akun VPN server, route IP virtual, dan aturan firewall panel akan dihapus. Semua MikroTik akan terputus dari VPS."
+  konfirmasi "Panel VPN ACS, SEMUA akun VPN router, route IP virtual, dan aturan firewall panel akan dihapus. Semua MikroTik akan terputus dari VPS."
   hapus_route_virtual
   hapus_layanan_panel
   hapus_firewall_panel
@@ -182,7 +182,7 @@ mode_parameter() {
 }
 
 mode_semua() {
-  konfirmasi "SEMUA yang dipasang suwazed-panel akan dihapus: Panel VPN ACS, akun VPN server, port forwarding, aturan firewall, dan patch GenieACS."
+  konfirmasi "SEMUA yang dipasang suwazed-panel akan dihapus: Panel VPN ACS, akun VPN router, port forwarding, aturan firewall, dan patch GenieACS."
   hapus_route_virtual
   hapus_layanan_panel
   hapus_firewall_panel
@@ -197,8 +197,8 @@ mode_semua() {
 
 menu() {
   echo -e "${GREEN}== Bersihkan suwazed-panel ==${NC}"
-  echo "  1) Hapus semua port forwarding saja (VPN & server tetap)"
-  echo "  2) Hapus Panel VPN ACS + akun VPN server + aturan firewall"
+  echo "  1) Hapus semua port forwarding saja (VPN & router tetap)"
+  echo "  2) Hapus Panel VPN ACS + akun VPN router + aturan firewall"
   echo "  3) Kembalikan GenieACS asli (hapus patch IP virtual)"
   echo "  4) Kembalikan parameter GenieACS dari backup"
   echo "  5) Hapus SEMUA (2 + 3, parameter ditanyakan)"

@@ -177,7 +177,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "1.3.0";
+const VERSION = "1.4.0";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
 const VIRTUAL_POOL = "10.100.0.0/14";
@@ -305,6 +305,23 @@ function readGenieCidr() {
   } catch (e) {
     return null;
   }
+}
+function readGenieUiPort() {
+  try {
+    const t = fs.readFileSync(GENIE_ENV, "utf8");
+    const m = t.match(/^GENIEACS_UI_PORT=(\d+)/m);
+    return m ? parseInt(m[1], 10) : 3000;
+  } catch (e) {
+    return null; // GenieACS tidak ada di VPS ini
+  }
+}
+// Alamat GenieACS UI: isian manual di Pengaturan, atau otomatis alamat VPS + port UI
+function genieUrl(d, publicIp) {
+  const manual = d.settings && d.settings.genieUrl;
+  if (manual) return manual;
+  const port = readGenieUiPort();
+  if (port === null || !publicIp) return "";
+  return `http://${publicIp}:${port}`;
 }
 function detectPublicIp() {
   const os = require("os");
@@ -611,9 +628,9 @@ function siteView(s, st, peers, h, now) {
 // ---------- Validasi ----------
 function validateSite(d, input, existing) {
   const name = String(input.name || "").trim();
-  if (name.length < 2 || name.length > 40) return "Nama server 2-40 karakter.";
+  if (name.length < 2 || name.length > 40) return "Nama router 2-40 karakter.";
   if (d.sites.some((s) => s !== existing && s.name.toLowerCase() === name.toLowerCase()))
-    return "Nama server sudah dipakai.";
+    return "Nama router sudah dipakai.";
   const sub = parseCidr(input.realSubnet);
   if (!sub) return "Subnet ONT tidak valid. Contoh yang benar: 10.0.0.0/24";
   if (sub.prefix < 16 || sub.prefix > 29) return "Ukuran subnet ONT harus antara /16 sampai /29.";
@@ -623,7 +640,7 @@ function validateSite(d, input, existing) {
   if (overlap(sub, T.cidr)) return `Subnet ONT tidak boleh bentrok dengan jaringan VPN ${T.net}.`;
   const others = d.sites.filter((s) => s !== existing);
   if (others.some((o) => overlap(sub, parseCidr(o.virtualSubnet))))
-    return "Subnet ONT bentrok dengan IP virtual server lain.";
+    return "Subnet ONT bentrok dengan IP virtual router lain.";
   const vtext = String(input.virtualSubnet || "").trim();
   if (vtext) {
     const v = parseCidr(vtext);
@@ -634,9 +651,9 @@ function validateSite(d, input, existing) {
     if (overlap(v, T.cidr)) return `IP virtual tidak boleh bentrok dengan jaringan VPN ${T.net}.`;
     if (overlap(v, sub)) return "IP virtual tidak boleh sama dengan subnet ONT asli.";
     const clash = others.find((o) => overlap(v, parseCidr(o.virtualSubnet)));
-    if (clash) return `IP virtual ${v.text} sudah dipakai server "${clash.name}" (${clash.virtualSubnet}). Pilih yang lain.`;
+    if (clash) return `IP virtual ${v.text} sudah dipakai router "${clash.name}" (${clash.virtualSubnet}). Pilih yang lain.`;
     const clashReal = others.find((o) => overlap(v, parseCidr(o.realSubnet)));
-    if (clashReal) return `IP virtual ${v.text} bentrok dengan subnet ONT asli server "${clashReal.name}" (${clashReal.realSubnet}).`;
+    if (clashReal) return `IP virtual ${v.text} bentrok dengan subnet ONT asli router "${clashReal.name}" (${clashReal.realSubnet}).`;
   }
   if (existing && (existing.forwards || []).some((f) => f.target === "lan" && !inSubnet(f.lanIp, sub)))
     return "Ada port forwarding ke perangkat di luar subnet ONT baru. Hapus port forwarding itu dulu.";
@@ -671,7 +688,7 @@ function validateForward(d, site, b) {
     if (ipToInt(lanIp) === null) return { error: "IP perangkat tidak valid. Contoh: 10.0.0.25" };
     const real = parseCidr(site.realSubnet);
     if (!inSubnet(lanIp, real))
-      return { error: `IP perangkat harus di dalam subnet ONT server ini (${site.realSubnet}).` };
+      return { error: `IP perangkat harus di dalam subnet ONT router ini (${site.realSubnet}).` };
   }
   const used = usedPublicPorts(d);
   const protos = proto === "both" ? ["tcp", "udp"] : [proto];
@@ -687,7 +704,7 @@ function validateForward(d, site, b) {
     if (RESERVED_PORTS.has(publicPort)) return { error: `Port ${publicPort} sudah dipakai layanan VPS. Pilih port lain.` };
     if (!free(publicPort)) {
       const owner = d.sites.find((s) => (s.forwards || []).some((f) => f.publicPort === publicPort));
-      return { error: `Port publik ${publicPort} sudah dipakai${owner ? ` di server "${owner.name}"` : ""}. Pilih port lain atau kosongkan untuk otomatis.` };
+      return { error: `Port publik ${publicPort} sudah dipakai${owner ? ` di router "${owner.name}"` : ""}. Pilih port lain atau kosongkan untuk otomatis.` };
     }
   }
   const dupe = (site.forwards || []).find(
@@ -749,7 +766,7 @@ async function runTestStep(site, key, st) {
     if (iface) return { ok: true, detail: `Tersambung lewat ${iface}` };
     return site.installedAt
       ? { ok: false, detail: "MikroTik belum tersambung ke VPS", hint: "Pastikan script MikroTik sudah dipasang, MikroTik punya internet, dan alamat VPS di Pengaturan benar." }
-      : { ok: false, detail: "Server ini belum pernah tersambung (menunggu pemasangan)", hint: "Salin script dari tab Script MikroTik, tempel di Winbox → New Terminal, lalu tes lagi." };
+      : { ok: false, detail: "Router ini belum pernah tersambung (menunggu pemasangan)", hint: "Salin script dari tab Script MikroTik, tempel di Winbox → New Terminal, lalu tes lagi." };
   }
   if (key === "ping-mt") {
     const r = await run("ping", ["-c", "2", "-W", "1", site.tunnelIp]);
@@ -773,7 +790,7 @@ async function runTestStep(site, key, st) {
     if (g === null) return { ok: null, detail: "Dilewati: GenieACS tidak ada di VPS ini" };
     return g
       ? { ok: true, detail: `Termasuk rentang ${st.genieCidr}` }
-      : { ok: false, detail: `Di luar rentang patch (${st.genieCidr || "kosong"})`, hint: "Jalankan ulang genieacs-virtualip.sh dengan VIRTUAL_CIDR yang mencakup IP virtual server ini." };
+      : { ok: false, detail: `Di luar rentang patch (${st.genieCidr || "kosong"})`, hint: "Jalankan ulang genieacs-virtualip.sh dengan VIRTUAL_CIDR yang mencakup IP virtual router ini." };
   }
   if (key.startsWith("fwd:")) {
     const f = (site.forwards || []).find((x) => "fwd:" + x.id === key);
@@ -1071,7 +1088,7 @@ function siteLabel(s) {
 function listLines(items, fn) {
   const max = 30;
   const lines = items.slice(0, max).map(fn);
-  if (items.length > max) lines.push(`… dan ${items.length - max} server lainnya`);
+  if (items.length > max) lines.push(`… dan ${items.length - max} router lainnya`);
   return lines.join("\n");
 }
 function msgDown(list, now, tz) {
@@ -1122,7 +1139,7 @@ async function monitorTick() {
         if (!online) continue;
         s.installedAt = new Date(now).toISOString();
         dataChanged = true;
-        logActivity(null, "Server tersambung pertama kali", s.name);
+        logActivity(null, "Router tersambung pertama kali", s.name);
       }
       let r = h.sites[s.id];
       if (!r) {
@@ -1442,7 +1459,7 @@ async function cfRollback(job) {
 
 // =====================================================================
 //  HTTPS panel: satu port untuk http & https
-//  - HTTPS aktif: koneksi TLS diteruskan ke server https internal,
+//  - HTTPS aktif: koneksi TLS diteruskan ke router https internal,
 //    permintaan http biasa diarahkan (301) ke https://domain:PORT
 // =====================================================================
 let httpsServer = null;
@@ -1668,6 +1685,8 @@ async function handleApi(req, res, url) {
         genieCidr: st.genieCidr,
         virtualPool: VIRTUAL_POOL,
         acsUrl: `http://${st.tun.local}:${ACS_PORT}`,
+        genieUrl: genieUrl(d, st.publicIp),
+        genieUrlManual: (d.settings && d.settings.genieUrl) || "",
         tunnelNet: st.tun.net,
         tunnelLocal: st.tun.local,
         tunnelStatic: `${intToIp(st.tun.first)} - ${intToIp(st.tun.last)}`,
@@ -1862,7 +1881,7 @@ async function handleApi(req, res, url) {
     return send(res, 200, { ok: true });
   }
 
-  // --- Tambah server ---
+  // --- Tambah router ---
   if (p === "/api/sites" && method === "POST") {
     const d = loadData();
     const err = validateSite(d, body, null);
@@ -1871,12 +1890,12 @@ async function handleApi(req, res, url) {
     const tunnelIp = allocTunnelIp(d);
     if (!tunnelIp) {
       const T = tun(d);
-      return send(res, 400, { error: `Slot VPN penuh (maksimal ${T.last - T.first + 1} server untuk ${T.net}). Perbesar jaringan VPN di Pengaturan.` });
+      return send(res, 400, { error: `Slot VPN penuh (maksimal ${T.last - T.first + 1} router untuk ${T.net}). Perbesar jaringan VPN di Pengaturan.` });
     }
     const custom = String(body.virtualSubnet || "").trim();
     const virtualSubnet = custom ? parseCidr(custom).text : allocVirtual(d, sub.prefix);
     if (!virtualSubnet) return send(res, 400, { error: "Rentang IP virtual otomatis penuh. Isi IP virtual secara manual." });
-    let base = String(body.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 20) || "server";
+    let base = String(body.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 20) || "router";
     let username = "acs-" + base;
     let i = 2;
     const manualUsers = manualChapEntries().users;
@@ -1896,7 +1915,7 @@ async function handleApi(req, res, url) {
     };
     d.sites.push(site);
     saveData(d);
-    logActivity(req, "Server ditambah", `${site.name} · ONT ${site.realSubnet} → virtual ${site.virtualSubnet}`);
+    logActivity(req, "Router ditambah", `${site.name} · ONT ${site.realSubnet} → virtual ${site.virtualSubnet}`);
     await applyAll(d);
     const st = settings(d);
     return send(res, 200, { ok: true, site: siteView(site, st, await onlinePeers(), loadHistory()) });
@@ -1907,7 +1926,7 @@ async function handleApi(req, res, url) {
   if (mf) {
     const d = loadData();
     const site = d.sites.find((s) => s.id === mf[1]);
-    if (!site) return send(res, 404, { error: "Server tidak ditemukan." });
+    if (!site) return send(res, 404, { error: "Router tidak ditemukan." });
     site.forwards = site.forwards || [];
     if (!mf[3] && method === "POST") {
       const r = validateForward(d, site, body);
@@ -1929,12 +1948,12 @@ async function handleApi(req, res, url) {
     }
   }
 
-  // --- Ubah / hapus / tes / riwayat server ---
+  // --- Ubah / hapus / tes / riwayat router ---
   const m = p.match(/^\/api\/sites\/([a-f0-9]{12})(\/(test|test-plan|test-step|reset-password|history))?$/);
   if (m) {
     const d = loadData();
     const site = d.sites.find((s) => s.id === m[1]);
-    if (!site) return send(res, 404, { error: "Server tidak ditemukan." });
+    if (!site) return send(res, 404, { error: "Router tidak ditemukan." });
     const action = m[3];
 
     if (!action && method === "PUT") {
@@ -1964,14 +1983,14 @@ async function handleApi(req, res, url) {
       site.note = newNote;
       site.realSubnet = sub.text;
       saveData(d);
-      logActivity(req, "Server diubah", `${site.name}${changes.length ? ": " + changes.join(", ") : " (tanpa perubahan)"}`);
+      logActivity(req, "Router diubah", `${site.name}${changes.length ? ": " + changes.join(", ") : " (tanpa perubahan)"}`);
       await applyAll(d, removed);
       return send(res, 200, { ok: true });
     }
     if (!action && method === "DELETE") {
       d.sites = d.sites.filter((s) => s.id !== site.id);
       saveData(d);
-      logActivity(req, "Server dihapus", `${site.name} · ${site.virtualSubnet}`);
+      logActivity(req, "Router dihapus", `${site.name} · ${site.virtualSubnet}`);
       await applyAll(d, [site.virtualSubnet]);
       return send(res, 200, { ok: true });
     }
@@ -2018,6 +2037,12 @@ async function handleApi(req, res, url) {
       if (v !== (d.settings.publicIp || "")) logs.push(["Alamat VPS diubah", `${d.settings.publicIp || "(otomatis)"} → ${v || "(otomatis)"}`]);
       d.settings.publicIp = v;
     }
+    if (body.genieUrl !== undefined) {
+      const g = String(body.genieUrl || "").trim().replace(/\/+$/, "");
+      if (g && !/^https?:\/\/[^\s/]+(:\d+)?(\/\S*)?$/i.test(g)) return send(res, 400, { error: "Alamat GenieACS harus diawali http:// atau https://, contoh http://acs.domain.com:3000" });
+      if (g !== (d.settings.genieUrl || "")) logs.push(["Alamat GenieACS diubah", g || "(otomatis)"]);
+      d.settings.genieUrl = g;
+    }
     if (body.useIpsec !== undefined && !!body.useIpsec !== !!d.settings.useIpsec) {
       logs.push(["IPsec " + (body.useIpsec ? "diaktifkan" : "dimatikan"), ""]);
       d.settings.useIpsec = !!body.useIpsec;
@@ -2037,12 +2062,12 @@ async function handleApi(req, res, url) {
         return send(res, 400, { error: "Jaringan VPN harus memakai IP privat (10.x, 172.16-31.x, 192.168.x, atau 100.64-127.x)." });
       if (overlap(t, parseCidr(VIRTUAL_POOL))) return send(res, 400, { error: `Bentrok dengan rentang IP virtual otomatis ${VIRTUAL_POOL}.` });
       for (const o of d.sites) {
-        if (overlap(t, parseCidr(o.realSubnet))) return send(res, 400, { error: `Bentrok dengan subnet ONT server "${o.name}" (${o.realSubnet}).` });
-        if (overlap(t, parseCidr(o.virtualSubnet))) return send(res, 400, { error: `Bentrok dengan IP virtual server "${o.name}" (${o.virtualSubnet}).` });
+        if (overlap(t, parseCidr(o.realSubnet))) return send(res, 400, { error: `Bentrok dengan subnet ONT router "${o.name}" (${o.realSubnet}).` });
+        if (overlap(t, parseCidr(o.virtualSubnet))) return send(res, 400, { error: `Bentrok dengan IP virtual router "${o.name}" (${o.virtualSubnet}).` });
       }
       const nt = tunnelCfg(t.text);
       const slots = nt.last - nt.first + 1;
-      if (d.sites.length > slots) return send(res, 400, { error: `Terlalu kecil: hanya ${slots} slot, padahal ada ${d.sites.length} server.` });
+      if (d.sites.length > slots) return send(res, 400, { error: `Terlalu kecil: hanya ${slots} slot, padahal ada ${d.sites.length} router.` });
       // Pertahankan nomor host lama jika masih muat, sisanya diberi nomor baru
       const oldT = tun(d);
       const used = new Set();
@@ -2123,7 +2148,7 @@ if (process.argv[2] === "--set-password") {
   (async () => {
     const d = loadData();
     if (!d.admin) console.error("Password admin belum diset. Jalankan: node server.js --set-password PASSWORD");
-    // Server dari versi lama dianggap sudah terpasang (bukan "menunggu pemasangan")
+    // Router dari versi lama dianggap sudah terpasang (bukan "menunggu pemasangan")
     if (!d.v2) {
       for (const s of d.sites || []) if (s.installedAt === undefined) s.installedAt = s.createdAt || new Date().toISOString();
       d.v2 = true;
@@ -2193,7 +2218,7 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
     --primary:#1d4ed8;--primary-hover:#1e40af;--primary-soft:#eef3ff;--ring:rgba(29,78,216,.18);
     --ok:#16a34a;--ok-soft:#ecfdf3;--warn:#d97706;--warn-soft:#fffbeb;--bad:#dc2626;--bad-soft:#fef2f2;
     --side:#0f2a6b;--side-text:rgba(255,255,255,.72);--side-hover:rgba(255,255,255,.07);--side-on:rgba(255,255,255,.12);
-    --code-bg:#0f172a;--code-fg:#e2e8f0;
+    --code-bg:#0f172a;--code-fg:#e2e8f0;--tab-accent:#38bdf8;
     --r:10px;--r-sm:8px;--shadow:0 1px 2px rgba(16,24,40,.04);--shadow-lg:0 18px 48px -12px rgba(16,24,40,.28);
     --font:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
     --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
@@ -2205,7 +2230,7 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
     --text:#e6ebf2;--text-2:#b4bdcb;--muted:#8591a3;
     --primary:#5b8cff;--primary-hover:#7aa2ff;--primary-soft:#18243f;--ring:rgba(91,140,255,.25);
     --ok:#3ccf74;--ok-soft:#10291b;--warn:#f0a73a;--warn-soft:#2c2111;--bad:#f26b6b;--bad-soft:#2d1516;
-    --side:#0b1530;
+    --side:#0b1530;--tab-accent:#38bdf8;
     --shadow:0 1px 2px rgba(0,0,0,.3);
   }
   *,*::before,*::after{box-sizing:border-box}
@@ -2338,10 +2363,12 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .dh{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:18px}
   .dh h1{font-size:22px;font-weight:650;letter-spacing:-.02em;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
   .dh p{color:var(--muted);margin-top:3px}
-  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:20px;overflow-x:auto}
-  .tab{border:0;background:none;padding:10px 14px;font-size:13.5px;font-weight:500;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
+  .tabs{display:flex;gap:6px;box-shadow:inset 0 -1px 0 var(--line);margin-bottom:22px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
+  .tabs::-webkit-scrollbar{display:none}
+  .tab{display:inline-flex;align-items:center;gap:8px;padding:11px 14px 12px;font-size:14.5px;font-weight:500;color:var(--muted);border-bottom:2px solid transparent;white-space:nowrap;transition:color .12s,border-color .12s}
+  .tab svg{width:17px;height:17px}
   .tab:hover{color:var(--text)}
-  .tab.on{color:var(--primary);border-bottom-color:var(--primary)}
+  .tab.on{color:var(--text);font-weight:600;border-bottom-color:var(--tab-accent)}
   .menu{position:relative}
   .menu-list{position:absolute;right:0;top:42px;min-width:200px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow-lg);padding:6px;z-index:30}
   .menu-list button{display:flex;align-items:center;gap:9px;width:100%;padding:9px 10px;border:0;background:none;border-radius:6px;text-align:left;font-size:13.5px}
@@ -2596,11 +2623,10 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   <aside class="side">
     <div class="brand"><span class="brand-mark" data-ic="shield"></span><span><b>VPN ACS</b><small>Control Panel</small></span></div>
     <button class="nav" data-go="#/"><span data-ic="home"></span>Dashboard</button>
-    <button class="nav" data-go="#/server"><span data-ic="router"></span>Server<span class="cnt" id="navCount">0</span></button>
-    <div class="nav-sec">Lainnya</div>
-    <button class="nav" data-go="#/log"><span data-ic="list"></span>Log aktivitas</button>
-    <button class="nav" data-go="#/panduan"><span data-ic="book"></span>Panduan</button>
+    <button class="nav" data-go="#/router"><span data-ic="router"></span>Router</button>
     <button class="nav" data-go="#/pengaturan"><span data-ic="gear"></span>Pengaturan</button>
+    <button class="nav" data-go="#/panduan"><span data-ic="book"></span>Panduan</button>
+    <button class="nav" data-go="#/log"><span data-ic="list"></span>Log aktivitas</button>
     <div class="grow"></div>
     <div class="side-foot"><span>VPN ACS Panel</span><span id="ver"></span></div>
   </aside>
@@ -2662,6 +2688,11 @@ const ICONS = {
   play: '<path d="M7 5l12 7-12 7z"/>',
   wifi_off: '<path d="M2 2l20 20M8.5 16.5a5 5 0 0 1 7 0M5 12.9a10 10 0 0 1 5.2-2.8M19 12.9a10 10 0 0 0-2-1.4M12 20h.01"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  bolt: '<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',
+  share: '<path d="M4 12h11M11 8l4 4-4 4"/><rect x="15" y="5" width="6" height="14" rx="2"/>',
+  code: '<path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/>',
+  pulse: '<path d="M3 12h4l2.5-6 5 12 2.5-6h4"/>',
+  sliders: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
   down: '<path d="M6 9l6 6 6-6"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   list: '<path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/>',
@@ -2796,7 +2827,6 @@ $("#loginForm").addEventListener("submit", async (e) => {
 async function load() {
   STATE = await api("/api/overview");
   LOADED = true;
-  $("#navCount").textContent = STATE.sites.length;
   $("#ver").textContent = STATE.settings.version ? "v" + STATE.settings.version : "";
 }
 
@@ -2805,7 +2835,7 @@ let TEST = null; // tes koneksi yang sedang tampil
 function route() {
   if (!LOADED) return;
   let h = location.hash || "#/";
-  if (/^#\/lokasi/.test(h)) { h = h.replace("#/lokasi", "#/server"); history.replaceState(null, "", h); }
+  if (/^#\/(lokasi|server)(\/|$)/.test(h)) { h = h.replace(/^#\/(lokasi|server)/, "#/router"); history.replaceState(null, "", h); }
   const parts = h.replace(/^#\/?/, "").split("/").filter(Boolean);
   document.querySelectorAll(".nav[data-go]").forEach((n) => {
     const g = n.dataset.go.replace(/^#\/?/, "");
@@ -2816,16 +2846,16 @@ function route() {
   closeModal();
   const v = $("#view");
   let title = "Dashboard";
-  if (parts[0] === "server" && (parts[1] === "terputus" || parts[1] === "menunggu")) { LIST.f = parts[1] === "terputus" ? "off" : "wait"; LIST.q = ""; history.replaceState(null, "", "#/server"); viewList(v); title = "Server"; }
-  else if (parts[0] === "server" && parts[1]) {
+  if (parts[0] === "router" && (parts[1] === "terputus" || parts[1] === "menunggu")) { LIST.f = parts[1] === "terputus" ? "off" : "wait"; LIST.q = ""; history.replaceState(null, "", "#/router"); viewList(v); title = "Router"; }
+  else if (parts[0] === "router" && parts[1]) {
     let tab = parts[2] || "ringkasan";
     const wantTest = tab === "tes";
-    if (wantTest) { tab = "ringkasan"; history.replaceState(null, "", `#/server/${parts[1]}`); }
+    if (wantTest) { tab = "ringkasan"; history.replaceState(null, "", `#/router/${parts[1]}`); }
     viewDetail(v, parts[1], tab);
-    const x = site(parts[1]); title = x ? x.name : "Server";
+    const x = site(parts[1]); title = x ? x.name : "Router";
     if (wantTest && x) setTimeout(() => openTest(x.id), 50);
   }
-  else if (parts[0] === "server") { viewList(v); title = "Server"; }
+  else if (parts[0] === "router") { viewList(v); title = "Router"; }
   else if (parts[0] === "panduan") { viewGuide(v); title = "Panduan"; }
   else if (parts[0] === "pengaturan") { viewSettings(v, parts[1] || "umum"); title = "Pengaturan"; }
   else if (parts[0] === "log") { viewLog(v); title = "Log aktivitas"; }
@@ -2845,21 +2875,21 @@ function issues() {
   if (!s.publicIp) list.push({ t: "Alamat VPS belum diisi", d: "Script MikroTik membutuhkan alamat VPS.", go: "#/pengaturan" });
   if (s.genieCidr !== null && !genieOk(s.genieCidr)) list.push({ t: "Patch IP virtual GenieACS belum aktif", d: "Summon ke ONT akan gagal.", go: "#/pengaturan" });
   const off = STATE.sites.filter((x) => x.state === "down");
-  if (off.length === 1) list.push({ t: `${off[0].name} terputus`, d: off[0].downSince ? `Sejak ${fmtT(off[0].downSince, true)} (${fmtDur(Date.now() - off[0].downSince)}). Klik untuk tes koneksi.` : "Klik untuk tes koneksi.", go: `#/server/${off[0].id}/tes` });
+  if (off.length === 1) list.push({ t: `${off[0].name} terputus`, d: off[0].downSince ? `Sejak ${fmtT(off[0].downSince, true)} (${fmtDur(Date.now() - off[0].downSince)}). Klik untuk tes koneksi.` : "Klik untuk tes koneksi.", go: `#/router/${off[0].id}/tes` });
   else if (off.length > 1) {
     const names = off.map((x) => x.name);
-    list.push({ t: `${off.length} server terputus`, d: names.slice(0, 4).join(", ") + (names.length > 4 ? ` dan ${names.length - 4} lainnya` : ""), go: "#/server/terputus" });
+    list.push({ t: `${off.length} router terputus`, d: names.slice(0, 4).join(", ") + (names.length > 4 ? ` dan ${names.length - 4} lainnya` : ""), go: "#/router/terputus" });
   }
   const tg = s.telegram || {};
   if (tg.active && tg.lastError) list.push({ t: "Notifikasi Telegram gagal terkirim", d: tg.lastError, go: "#/pengaturan/telegram" });
   const cf = s.cloudflare;
   if (cf && cf.https && cf.certExpiry && cf.certExpiry - Date.now() < 14 * 864e5) list.push({ t: "Sertifikat HTTPS hampir habis", d: `Berlaku sampai ${fmtT(cf.certExpiry, true)}. Perpanjangan otomatis mungkin gagal.`, go: "#/pengaturan/domain" });
   for (const x of STATE.sites) {
-    if (x.inGenie === false) list.push({ t: `${x.name}: IP virtual di luar patch GenieACS`, d: `${x.virtualSubnet} tidak dikenali GenieACS, Summon akan gagal.`, go: `#/server/${x.id}` });
+    if (x.inGenie === false) list.push({ t: `${x.name}: IP virtual di luar patch GenieACS`, d: `${x.virtualSubnet} tidak dikenali GenieACS, Summon akan gagal.`, go: `#/router/${x.id}` });
   }
   const pend = STATE.sites.filter((x) => x.state === "pending");
-  if (pend.length === 1) list.push({ k: "info", t: `${pend[0].name} menunggu pemasangan`, d: "Script MikroTik belum dipasang atau belum pernah tersambung.", go: `#/server/${pend[0].id}/script` });
-  else if (pend.length > 1) list.push({ k: "info", t: `${pend.length} server menunggu pemasangan`, d: pend.map((x) => x.name).slice(0, 4).join(", ") + (pend.length > 4 ? ` dan ${pend.length - 4} lainnya` : ""), go: "#/server/menunggu" });
+  if (pend.length === 1) list.push({ k: "info", t: `${pend[0].name} menunggu pemasangan`, d: "Script MikroTik belum dipasang atau belum pernah tersambung.", go: `#/router/${pend[0].id}/script` });
+  else if (pend.length > 1) list.push({ k: "info", t: `${pend.length} router menunggu pemasangan`, d: pend.map((x) => x.name).slice(0, 4).join(", ") + (pend.length > 4 ? ` dan ${pend.length - 4} lainnya` : ""), go: "#/router/menunggu" });
   return list;
 }
 function viewDashboard(v) {
@@ -2870,24 +2900,24 @@ function viewDashboard(v) {
   const avg = u7.length ? u7.reduce((a, b) => a + b, 0) / u7.length : null;
   const iss = issues();
   v.innerHTML = `
-    <div class="ph"><div><h1>Dashboard</h1><p>Ringkasan koneksi VPN dan uptime setiap server.</p></div>
-      <div class="acts"><button class="btn pri" data-act="add">${ic("plus")}Tambah server</button></div></div>
+    <div class="ph"><div><h1>Dashboard</h1><p>Ringkasan koneksi VPN dan uptime setiap router.</p></div>
+      <div class="acts"><button class="btn pri" data-act="add">${ic("plus")}Tambah router</button></div></div>
     <div class="kpis">
-      <div class="kpi"><span>Total server</span><b>${S.length}</b><small>${pend ? `${pend} menunggu pemasangan` : "MikroTik terdaftar"}</small></div>
-      <div class="kpi"><span><i class="dot ok"></i>Tersambung</span><b>${on}</b><small>${inst.length ? Math.round((on / inst.length) * 100) : 0}% dari server terpasang</small></div>
+      <div class="kpi"><span>Total router</span><b>${S.length}</b><small>${pend ? `${pend} menunggu pemasangan` : "MikroTik terdaftar"}</small></div>
+      <div class="kpi"><span><i class="dot ok"></i>Tersambung</span><b>${on}</b><small>${inst.length ? Math.round((on / inst.length) * 100) : 0}% dari router terpasang</small></div>
       <div class="kpi"><span><i class="dot bad"></i>Terputus</span><b>${off}</b><small>${off ? "perlu dicek" : "tidak ada"}</small></div>
       <div class="kpi"><span>Rata-rata uptime</span><b class="${pctCls(avg)}" style="${avg != null && avg < 99 ? `color:var(--${avg >= 95 ? "warn" : "bad"})` : ""}">${pct(avg)}</b><small>7 hari terakhir</small></div>
     </div>
     <div class="grid-dash">
       <div class="card">
-        <div class="ch"><h2>Uptime server</h2><span class="muted" style="font-size:12.5px">Klik baris untuk riwayat lengkap</span></div>
-        ${S.length ? uptimeTable(S) : `<div class="empty"><h3>Belum ada server</h3><p>Tambahkan MikroTik pertama untuk mulai.</p><button class="btn pri" style="margin-top:12px" data-act="add">${ic("plus")}Tambah server</button></div>`}
+        <div class="ch"><h2>Uptime router</h2><span class="muted" style="font-size:12.5px">Klik baris untuk riwayat lengkap</span></div>
+        ${S.length ? uptimeTable(S) : `<div class="empty"><h3>Belum ada router</h3><p>Tambahkan MikroTik pertama untuk mulai.</p><button class="btn pri" style="margin-top:12px" data-act="add">${ic("plus")}Tambah router</button></div>`}
       </div>
       <div class="stack">
         <div class="card">
           <div class="ch"><h2>Perlu perhatian</h2>${iss.length ? `<span class="muted">${iss.length}</span>` : ""}</div>
           ${iss.length ? `<ul class="rows">${iss.slice(0, 6).map((x) => `<li><a class="row ${x.k || "warn"}" href="${x.go}"><span class="ic">${ic(x.k === "info" ? "clock" : "alert")}</span><span class="grow"><span class="nm">${esc(x.t)}</span><span class="sb" style="display:block">${esc(x.d)}</span></span><span class="chev">${ic("chev")}</span></a></li>`).join("")}</ul>`
-            : `<div class="empty"><div class="big">${ic("check")}</div><h3>Semua normal</h3><p>Semua server tersambung dan pengaturan lengkap.</p></div>`}
+            : `<div class="empty"><div class="big">${ic("check")}</div><h3>Semua normal</h3><p>Semua router tersambung dan pengaturan lengkap.</p></div>`}
         </div>
         <div class="card">
           <div class="ch"><h2>VPS</h2><a href="#/pengaturan">Pengaturan</a></div>
@@ -2899,14 +2929,14 @@ function viewDashboard(v) {
 function uptimeTable(S) {
   const order = { down: 0, up: 1, pending: 2 };
   const rows = [...S].sort((a, b) => order[a.state] - order[b.state] || a.name.localeCompare(b.name, "id"));
-  return `<table class="t"><thead><tr><th>Server</th><th class="hide-md">30 hari terakhir</th><th class="r">24 jam</th><th class="r">7 hari</th><th class="r hide-sm">30 hari</th></tr></thead><tbody>
+  return `<table class="t"><thead><tr><th>Router</th><th class="hide-md">30 hari terakhir</th><th class="r">24 jam</th><th class="r">7 hari</th><th class="r hide-sm">30 hari</th></tr></thead><tbody>
     ${rows.map((x) => {
       const [c] = stOf(x);
       const sub = x.state === "down" ? `Terputus${x.downSince ? " · " + fmtDur(Date.now() - x.downSince) : ""}` : x.state === "pending" ? "Menunggu pemasangan" : x.incidents30 ? `${x.incidents30}× putus (30 hari)` : "Stabil";
       const name = `<td><div class="srv"><span class="dot ${c}"></span><span style="min-width:0"><b>${esc(x.name)}</b><small${x.state === "down" ? ' style="color:var(--warn)"' : ""}>${esc(sub)}</small></span></div></td>`;
-      if (!x.uptime) return `<tr class="click" data-go="#/server/${x.id}/script">${name}<td class="hide-md"><div class="mini">${"<i class=nodata></i>".repeat(30)}</div></td><td class="r muted">—</td><td class="r muted">—</td><td class="r muted hide-sm">—</td></tr>`;
+      if (!x.uptime) return `<tr class="click" data-go="#/router/${x.id}/script">${name}<td class="hide-md"><div class="mini">${"<i class=nodata></i>".repeat(30)}</div></td><td class="r muted">—</td><td class="r muted">—</td><td class="r muted hide-sm">—</td></tr>`;
       const U = x.uptime;
-      return `<tr class="click" data-go="#/server/${x.id}/riwayat">${name}
+      return `<tr class="click" data-go="#/router/${x.id}/riwayat">${name}
         <td class="hide-md"><div class="mini">${(x.days || []).map((d) => `<i class="${d}"></i>`).join("")}</div></td>
         <td class="r pc ${pctCls(U.d1)}">${pct(U.d1)}</td><td class="r pc ${pctCls(U.d7)}">${pct(U.d7)}</td><td class="r pc hide-sm ${pctCls(U.d30)}">${pct(U.d30)}</td></tr>`;
     }).join("")}
@@ -2918,12 +2948,15 @@ function serverKv() {
   const tg = s.telegram || {};
   const tgs = !tg.tokenSet ? "Belum diatur" : !tg.enabled ? "Nonaktif" : tg.lastError ? "Gagal kirim" : "Aktif";
   const https = s.cloudflare && s.cloudflare.https ? "Aktif" : "Tidak";
-  return [["Alamat", s.publicIp || "—"], ["URL ACS ONT", s.acsUrl || "—"], ["Jaringan VPN", s.tunnelNet || "—"], ["Patch GenieACS", g], ["Notifikasi Telegram", tgs], ["HTTPS panel", https]]
+  const genie = s.genieUrl
+    ? `<div class="kv"><span>GenieACS</span><b><a class="ext" href="${esc(s.genieUrl)}" target="_blank" rel="noopener" title="Buka GenieACS di tab baru">${esc(s.genieUrl.replace(/^https?:\/\//, ""))}${ic("ext", "")}</a></b></div>`
+    : `<div class="kv"><span>GenieACS</span><b><a href="#/pengaturan/umum">Atur alamat</a></b></div>`;
+  return genie + [["Alamat VPS", s.publicIp || "—"], ["URL ACS ONT", s.acsUrl || "—"], ["Jaringan VPN", s.tunnelNet || "—"], ["Patch GenieACS", g], ["Notifikasi Telegram", tgs], ["HTTPS panel", https]]
     .map(([k, val]) => `<div class="kv"><span>${k}</span><b>${esc(val)}</b></div>`).join("");
 }
 function rowHtml(x) {
   const [c, t] = stOf(x);
-  return `<li><a class="row" href="#/server/${x.id}">
+  return `<li><a class="row" href="#/router/${x.id}">
     <span class="dot ${c}"></span>
     <span class="grow"><span class="nm">${esc(x.name)}</span>${x.note ? `<span class="sb" style="display:block">${esc(x.note)}</span>` : ""}</span>
     <span class="meta">${esc(x.virtualSubnet)}</span>
@@ -2932,13 +2965,13 @@ function rowHtml(x) {
     <span class="chev">${ic("chev")}</span></a></li>`;
 }
 
-/* ================= Daftar server ================= */
+/* ================= Daftar router ================= */
 let LIST = { q: "", f: "all" };
 function viewList(v) {
-  crumb([["Server"]]);
+  crumb([["Router"]]);
   v.innerHTML = `
-    <div class="ph"><div><h1>Server</h1><p>Setiap server adalah satu MikroTik yang tersambung ke VPS lewat VPN.</p></div>
-      <div class="acts"><button class="btn pri" data-act="add">${ic("plus")}Tambah server</button></div></div>
+    <div class="ph"><div><h1>Router</h1><p>Setiap router adalah satu MikroTik yang tersambung ke VPS lewat VPN.</p></div>
+      <div class="acts"><button class="btn pri" data-act="add">${ic("plus")}Tambah router</button></div></div>
     <div class="card">
       <div class="toolbar">
         <div class="search">${ic("search", "")}<input id="q" type="text" placeholder="Cari nama, subnet, atau IP" value="${esc(LIST.q)}"></div>
@@ -2961,44 +2994,46 @@ function fillList() {
     .filter((x) => !q || [x.name, x.note, x.realSubnet, x.virtualSubnet, x.tunnelIp].join(" ").toLowerCase().includes(q))
     .sort((a, b) => a.name.localeCompare(b.name, "id"));
   const el = $("#listRows");
-  if (!STATE.sites.length) el.innerHTML = `<li><div class="empty"><h3>Belum ada server</h3><p>Tambahkan MikroTik pertama untuk mulai.</p></div></li>`;
-  else if (!rows.length) el.innerHTML = `<li><div class="empty"><p>Tidak ada server yang cocok.</p></div></li>`;
+  if (!STATE.sites.length) el.innerHTML = `<li><div class="empty"><h3>Belum ada router</h3><p>Tambahkan MikroTik pertama untuk mulai.</p></div></li>`;
+  else if (!rows.length) el.innerHTML = `<li><div class="empty"><p>Tidak ada router yang cocok.</p></div></li>`;
   else el.innerHTML = rows.map(rowHtml).join("");
 }
 
-/* ================= Detail server ================= */
-const TABS = [["ringkasan", "Ringkasan"], ["riwayat", "Riwayat"], ["remote", "Remote"], ["script", "Script MikroTik"]];
+/* ================= Detail router ================= */
+const TABS = [["ringkasan", "Ringkasan", "bolt"], ["port", "Port Forwarding", "share"], ["script", "Script MikroTik", "code"], ["riwayat", "Riwayat", "pulse"]];
+const tabsHtml = (list, cur, base) => `<nav class="tabs">${list.map(([k, t, i]) => `<a class="tab ${k === cur ? "on" : ""}" href="${base}/${k}">${ic(i, "")}${t}</a>`).join("")}</nav>`;
 function viewDetail(v, id, tab) {
   const x = site(id);
-  if (!x) { crumb([["Server", "#/server"], ["Tidak ditemukan"]]); v.innerHTML = `<div class="card"><div class="empty"><h3>Server tidak ditemukan</h3><p><a href="#/server">Kembali ke daftar server</a></p></div></div>`; return; }
+  if (!x) { crumb([["Router", "#/router"], ["Tidak ditemukan"]]); v.innerHTML = `<div class="card"><div class="empty"><h3>Router tidak ditemukan</h3><p><a href="#/router">Kembali ke daftar router</a></p></div></div>`; return; }
+  if (tab === "remote") { tab = "port"; history.replaceState(null, "", `#/router/${id}/port`); }
   if (!TABS.some(([k]) => k === tab)) tab = "ringkasan";
-  crumb([["Server", "#/server"], [x.name]]);
+  crumb([["Router", "#/router"], [x.name]]);
   v.innerHTML = `
     <div class="dh">
       <div><h1>${esc(x.name)} <span class="pill ${stOf(x)[0]}">${stOf(x)[1]}</span></h1>
-        <p>${x.note ? esc(x.note) + " · " : ""}IP virtual ${esc(x.virtualSubnet)}</p></div>
+        ${x.note ? `<p>${esc(x.note)}</p>` : ""}</div>
       <div class="acts" style="display:flex;gap:8px">
         <button class="btn" data-act="test" data-id="${x.id}">${ic("play")}Tes koneksi</button>
         <div class="menu"><button class="btn icon" data-act="menu" aria-label="Lainnya">${ic("dots")}</button>
           <div class="menu-list hidden" id="menuList">
-            <button data-act="edit" data-id="${x.id}">${ic("edit")}Ubah server</button>
+            <button data-act="edit" data-id="${x.id}">${ic("edit")}Ubah router</button>
             <button data-act="resetpw" data-id="${x.id}">${ic("key")}Buat password VPN baru</button>
-            <hr><button class="d" data-act="del" data-id="${x.id}">${ic("trash")}Hapus server</button>
+            <hr><button class="d" data-act="del" data-id="${x.id}">${ic("trash")}Hapus router</button>
           </div></div>
       </div>
     </div>
-    <nav class="tabs">${TABS.map(([k, t]) => `<a class="tab ${k === tab ? "on" : ""}" href="#/server/${x.id}/${k}">${t}${k === "remote" && x.forwards.length ? ` <span class="muted">${x.forwards.length}</span>` : ""}</a>`).join("")}</nav>
+    ${tabsHtml(TABS, tab, `#/router/${x.id}`)}
     <div id="tabBody"></div>`;
   const b = $("#tabBody");
-  if (tab === "remote") tabRemote(b, x);
+  if (tab === "port") tabRemote(b, x);
   else if (tab === "script") tabScript(b, x);
   else if (tab === "riwayat") tabHistory(b, x);
   else tabSummary(b, x);
 }
 function tabSummary(b, x) {
   b.innerHTML = `
-    ${x.inGenie === false ? `<div class="note warn">${ic("alert")}<div><b>IP virtual di luar rentang patch GenieACS</b>Summon ke ONT di server ini akan gagal. Jalankan ulang <code>genieacs-virtualip.sh</code> dengan rentang yang mencakup ${esc(x.virtualSubnet)}.</div></div>` : ""}
-    ${x.state === "pending" ? `<div class="note info">${ic("clock")}<div><b>Menunggu pemasangan</b>Server ini belum pernah tersambung. Pasang script lewat tab <a href="#/server/${x.id}/script">Script MikroTik</a>. Riwayat dan notifikasi Telegram mulai berjalan setelah MikroTik tersambung pertama kali.</div></div>` : ""}
+    ${x.inGenie === false ? `<div class="note warn">${ic("alert")}<div><b>IP virtual di luar rentang patch GenieACS</b>Summon ke ONT di router ini akan gagal. Jalankan ulang <code>genieacs-virtualip.sh</code> dengan rentang yang mencakup ${esc(x.virtualSubnet)}.</div></div>` : ""}
+    ${x.state === "pending" ? `<div class="note info">${ic("clock")}<div><b>Menunggu pemasangan</b>Router ini belum pernah tersambung. Pasang script lewat tab <a href="#/router/${x.id}/script">Script MikroTik</a>. Riwayat dan notifikasi Telegram mulai berjalan setelah MikroTik tersambung pertama kali.</div></div>` : ""}
     ${x.state === "down" ? `<div class="note warn">${ic("alert")}<div><b>Terputus${x.downSince ? ` sejak ${esc(fmtT(x.downSince, true))} (${fmtDur(Date.now() - x.downSince)})` : ""}</b>Jalankan <a href="#" data-act="test" data-id="${x.id}">tes koneksi</a> untuk melihat penyebabnya.</div></div>` : ""}
     <div class="card">
       <div class="ch"><h2>Jaringan</h2></div>
@@ -3028,7 +3063,7 @@ function fwdLink(f) {
 function tabRemote(b, x) {
   b.innerHTML = `
     <div class="card">
-      <div class="ch"><h2>Akses remote</h2><button class="btn sm pri" data-act="addfwd">${ic("plus")}Tambah</button></div>
+      <div class="ch"><h2>Port forwarding</h2><button class="btn sm pri" data-act="addfwd">${ic("plus")}Tambah</button></div>
       ${x.forwards.length ? `<table class="t"><thead><tr><th>Layanan</th><th>Alamat</th><th class="hide-sm">Tujuan</th><th></th></tr></thead><tbody>
         ${x.forwards.map((f) => {
           const url = fwdLink(f);
@@ -3040,13 +3075,13 @@ function tabRemote(b, x) {
           <td class="r"><button class="btn sm ghost" data-act="delfwd" data-fid="${f.id}" title="Hapus">${ic("trash")}</button></td></tr>`;
         }).join("")}
       </tbody></table>`
-      : `<div class="empty"><h3>Belum ada akses remote</h3><p>Tambahkan Winbox atau web untuk me-remote server ini lewat ${esc(STATE.settings.publicIp || "VPS")}.</p></div>`}
+      : `<div class="empty"><h3>Belum ada port forwarding</h3><p>Tambahkan Winbox atau web untuk me-remote router ini lewat ${esc(STATE.settings.publicIp || "VPS")}.</p></div>`}
     </div>
     <p class="help" style="margin-top:12px">Alamat layanan web bisa diklik untuk langsung membuka halamannya. Untuk Winbox, isi <b>Connect To</b> dengan alamat lengkap dengan port. Port ini terbuka ke internet, jadi pastikan password perangkat kuat.</p>`;
 }
 function fwdForm(x) {
   const P = STATE.settings.presets || {};
-  modal("Tambah akses remote", `
+  modal("Tambah port forwarding", `
     <label for="wSvc">Layanan</label>
     <select id="wSvc">${Object.entries(P).map(([k, p]) => `<option value="${k}">${esc(p.label)}${p.port ? ` (port ${p.port})` : ""}</option>`).join("")}</select>
     <label>Tujuan</label>
@@ -3073,7 +3108,7 @@ function fwdForm(x) {
       await api(`/api/sites/${x.id}/forwards`, { method: "POST", body: { service: $("#wSvc").value, proto: $("#wProto").value, target: document.querySelector("input[name=wTgt]:checked").value, lanIp: $("#wLan").value, targetPort: $("#wPort").value, publicPort: $("#wPub").value, label: $("#wLabel").value } });
       await load(); route();
       const nx = site(x.id), f = nx.forwards[nx.forwards.length - 1];
-      doneDialog("Akses remote ditambahkan", f ? `Alamat: <b class="mono">${esc(f.remote)}</b>` : "", "ok", false);
+      doneDialog("Port forwarding ditambahkan", f ? `Alamat: <b class="mono">${esc(f.remote)}</b>` : "", "ok", false);
     } catch (e) { $("#wErr").textContent = e.message; busyBtn($("#wSave"), false); }
   };
 }
@@ -3094,7 +3129,7 @@ function tabHistory(b, x) {
   api(`/api/sites/${x.id}/history`).then((h) => {
     if (!$("#tabBody") || !location.hash.includes(x.id + "/riwayat")) return;
     if (h.pending) {
-      b.innerHTML = `<div class="card"><div class="empty"><div class="big" style="background:var(--subtle);color:var(--muted)">${ic("clock")}</div><h3>Belum ada riwayat</h3><p>Riwayat mulai dicatat setelah MikroTik tersambung pertama kali.<br><a href="#/server/${x.id}/script">Pasang script MikroTik</a></p></div></div>`;
+      b.innerHTML = `<div class="card"><div class="empty"><div class="big" style="background:var(--subtle);color:var(--muted)">${ic("clock")}</div><h3>Belum ada riwayat</h3><p>Riwayat mulai dicatat setelah MikroTik tersambung pertama kali.<br><a href="#/router/${x.id}/script">Pasang script MikroTik</a></p></div></div>`;
       return;
     }
     const U = h.uptime, days = h.days;
@@ -3113,7 +3148,7 @@ function tabHistory(b, x) {
       <div class="card"><div class="ch"><h2>Kejadian putus</h2><span class="muted" style="font-size:12.5px">${total ? `${total} kejadian · 90 hari` : ""}</span></div>
         ${total ? `<table class="t"><thead><tr><th>Mulai putus</th><th>Tersambung lagi</th><th class="r">Lama</th></tr></thead><tbody>
           ${h.events.slice(0, 50).map((e) => `<tr><td>${esc(fmtT(e.s, true))}</td><td>${e.open ? `<span class="pill bad">Masih terputus</span>` : esc(fmtT(e.e, true))}</td><td class="r mono">${fmtDur(e.dur)}</td></tr>`).join("")}
-          </tbody></table>` : `<div class="empty"><div class="big">${ic("check")}</div><h3>Tidak ada kejadian putus</h3><p>VPN server ini stabil sejak tercatat.</p></div>`}
+          </tbody></table>` : `<div class="empty"><div class="big">${ic("check")}</div><h3>Tidak ada kejadian putus</h3><p>VPN router ini stabil sejak tercatat.</p></div>`}
       </div>
       <p class="help" style="margin-top:12px">Dicatat sejak ${esc(fmtT(h.installedAt ? Date.parse(h.installedAt) : 0, true))} · diperiksa tiap 30 detik · waktu dalam ${esc(h.tz)}${open ? "" : ""}.</p>`;
     const bars = $("#bars");
@@ -3147,7 +3182,7 @@ function drawSteps() {
     $("#tstSub").textContent = `Selesai · ${P.length} langkah`;
     $("#tstSum").innerHTML = fail
       ? `<div class="tst-sum fail">${ic("alert")}${fail} langkah perlu diperbaiki. Lihat saran di bawah langkah yang gagal.</div>`
-      : `<div class="tst-sum ok">${ic("check")}Semua beres. GenieACS dapat menjangkau ONT di server ini.</div>`;
+      : `<div class="tst-sum ok">${ic("check")}Semua beres. GenieACS dapat menjangkau ONT di router ini.</div>`;
     if (btn) btn.disabled = false;
   } else { $("#tstSum").innerHTML = ""; if (btn) btn.disabled = true; }
 }
@@ -3178,36 +3213,36 @@ async function runTest() {
   load().catch(() => {});
 }
 
-/* ================= Tambah / ubah / hapus server ================= */
+/* ================= Tambah / ubah / hapus router ================= */
 function siteForm(x) {
   return `
-    <label for="fName">Nama server</label>
+    <label for="fName">Nama router</label>
     <input id="fName" type="text" maxlength="40" placeholder="contoh: Nangahale" value="${esc(x?.name || "")}">
     <label for="fSub">Subnet ONT di MikroTik</label>
     <input id="fSub" type="text" placeholder="10.0.0.0/24" value="${esc(x?.realSubnet || "10.0.0.0/24")}">
-    <div class="help">Winbox → IP → DHCP Server → Networks. Boleh sama dengan server lain.</div>
+    <div class="help">Winbox → IP → DHCP Server → Networks. Boleh sama dengan router lain.</div>
     <label for="fVirt">IP virtual <span class="muted" style="font-weight:400">(opsional)</span></label>
     <input id="fVirt" type="text" placeholder="Otomatis" value="${esc(x?.virtualSubnet || "")}">
-    <div class="help">Kosongkan agar dipilih otomatis. Tidak boleh sama dengan server lain.</div>
+    <div class="help">Kosongkan agar dipilih otomatis. Tidak boleh sama dengan router lain.</div>
     <label for="fNote">Catatan <span class="muted" style="font-weight:400">(opsional)</span></label>
     <input id="fNote" type="text" maxlength="120" placeholder="contoh: OLT C-Data 8 port" value="${esc(x?.note || "")}">
     <div class="err" id="fErr"></div>`;
 }
 const readForm = () => ({ name: $("#fName").value, realSubnet: $("#fSub").value, virtualSubnet: $("#fVirt").value, note: $("#fNote").value });
 function openAdd() {
-  modal("Tambah server", siteForm(null), `<button class="btn" data-act="closemodal">Batal</button><button class="btn pri" id="fSave">Simpan</button>`);
+  modal("Tambah router", siteForm(null), `<button class="btn" data-act="closemodal">Batal</button><button class="btn pri" id="fSave">Simpan</button>`);
   $("#fSave").onclick = async () => {
     busyBtn($("#fSave"), true); $("#fErr").textContent = "";
     try {
       const r = await api("/api/sites", { method: "POST", body: readForm() });
-      await load(); location.hash = `#/server/${r.site.id}/script`;
-      setTimeout(() => doneDialog("Server ditambahkan", `<p><b>${esc(r.site.name)}</b> siap dipasang.</p><p>Langkah berikutnya: salin script di bawah, lalu tempel di Winbox → New Terminal.</p>`, "ok", false), 60);
+      await load(); location.hash = `#/router/${r.site.id}/script`;
+      setTimeout(() => doneDialog("Router ditambahkan", `<p><b>${esc(r.site.name)}</b> siap dipasang.</p><p>Langkah berikutnya: salin script di bawah, lalu tempel di Winbox → New Terminal.</p>`, "ok", false), 60);
     } catch (e) { $("#fErr").textContent = e.message; busyBtn($("#fSave"), false); }
   };
 }
 function openEdit(id) {
   const x = site(id);
-  modal("Ubah server", siteForm(x), `<button class="btn" data-act="closemodal">Batal</button><button class="btn pri" id="fSave">Simpan</button>`);
+  modal("Ubah router", siteForm(x), `<button class="btn" data-act="closemodal">Batal</button><button class="btn pri" id="fSave">Simpan</button>`);
   $("#fSave").onclick = async () => {
     busyBtn($("#fSave"), true); $("#fErr").textContent = "";
     const f = readForm();
@@ -3215,7 +3250,7 @@ function openEdit(id) {
       await api("/api/sites/" + id, { method: "PUT", body: f });
       const net = f.realSubnet.trim() !== x.realSubnet || (f.virtualSubnet.trim() && f.virtualSubnet.trim() !== x.virtualSubnet);
       await load(); route();
-      doneDialog("Perubahan disimpan", net ? "Subnet berubah. Pasang ulang script terbaru di MikroTik server ini." : "", "ok", !net);
+      doneDialog("Perubahan disimpan", net ? "Subnet berubah. Pasang ulang script terbaru di MikroTik router ini." : "", "ok", !net);
     } catch (e) { $("#fErr").textContent = e.message; busyBtn($("#fSave"), false); }
   };
 }
@@ -3226,7 +3261,7 @@ function openResetPw(id) {
     text: `<p>MikroTik <b>${esc(x.name)}</b> akan terputus sampai script terbaru dipasang ulang.</p>`,
     onOk: async () => {
       await api(`/api/sites/${id}/reset-password`, { method: "POST" }); await load();
-      location.hash = `#/server/${id}/script`;
+      location.hash = `#/router/${id}/script`;
       setTimeout(() => doneDialog("Password VPN diganti", "Salin script terbaru dan pasang ulang di MikroTik.", "ok", false), 60);
     },
   });
@@ -3234,22 +3269,22 @@ function openResetPw(id) {
 function openDelete(id) {
   const x = site(id);
   confirmDialog({
-    title: `Hapus ${esc(x.name)}?`, danger: true, ok: "Hapus server",
-    text: `<p>Akun VPN dan akses remote server ini dihapus. GenieACS tidak bisa lagi Summon ONT di server ini.</p>
+    title: `Hapus ${esc(x.name)}?`, danger: true, ok: "Hapus router",
+    text: `<p>Akun VPN dan port forwarding router ini dihapus. GenieACS tidak bisa lagi Summon ONT di router ini.</p>
       <details class="more"><summary>Script untuk membersihkan MikroTik</summary><div class="codebox"><pre class="code" style="max-height:160px">${esc(x.removeScript)}</pre><button class="btn sm" data-copy="${esc(x.removeScript)}" data-msg="Script hapus tersalin">${ic("copy")}Salin</button></div></details>`,
     onOk: async () => {
       await api("/api/sites/" + id, { method: "DELETE" }); await load();
-      location.hash = "#/server";
-      setTimeout(() => doneDialog("Server dihapus", `${esc(x.name)} sudah dihapus dari panel.`), 60);
+      location.hash = "#/router";
+      setTimeout(() => doneDialog("Router dihapus", `${esc(x.name)} sudah dihapus dari panel.`), 60);
     },
   });
 }
 function openDelFwd(id, fid) {
   const x = site(id), f = x && x.forwards.find((y) => y.id === fid);
   confirmDialog({
-    title: "Hapus akses remote?", danger: true, ok: "Hapus",
+    title: "Hapus port forwarding?", danger: true, ok: "Hapus",
     text: `<p>${f ? `<b>${esc(f.label)}</b> · <span class="mono">${esc(f.remote)}</span><br>` : ""}Alamat ini tidak bisa dipakai lagi.</p>`,
-    onOk: async () => { await api(`/api/sites/${id}/forwards/${fid}`, { method: "DELETE" }); await load(); route(); doneDialog("Akses remote dihapus", ""); },
+    onOk: async () => { await api(`/api/sites/${id}/forwards/${fid}`, { method: "DELETE" }); await load(); route(); doneDialog("Port forwarding dihapus", ""); },
   });
 }
 
@@ -3263,16 +3298,16 @@ function viewGuide(v) {
     <div class="card guide"><div class="ch"><h2>Cara kerja</h2></div><div class="cb">
       <div class="flow"><span>ONT</span><i>→</i><span>OLT</span><i>→</i><span>MikroTik</span><i>⇄ VPN L2TP ⇄</i><span>VPS · GenieACS</span></div>
       <p>Tanpa VPN, GenieACS hanya bisa membaca ONT, tetapi tidak bisa memberi perintah (Summon), karena ONT berada di jaringan lokal.</p>
-      <p>Setiap MikroTik membuat VPN ke VPS. Karena subnet ONT di semua server boleh sama, tiap server mendapat <b>IP virtual</b> berbeda; MikroTik menerjemahkannya kembali ke IP asli (NETMAP).</p>
+      <p>Setiap MikroTik membuat VPN ke VPS. Karena subnet ONT di semua router boleh sama, tiap router mendapat <b>IP virtual</b> berbeda; MikroTik menerjemahkannya kembali ke IP asli (NETMAP).</p>
     </div></div>
-    <div class="card"><div class="ch"><h2>Menambah server</h2></div><div class="cb"><ol class="ol">
-      <li><b>Tambah server di panel</b>Isi nama dan subnet ONT (Winbox → IP → DHCP Server → Networks).</li>
+    <div class="card"><div class="ch"><h2>Menambah router</h2></div><div class="cb"><ol class="ol">
+      <li><b>Tambah router di panel</b>Isi nama dan subnet ONT (Winbox → IP → DHCP Server → Networks).</li>
       <li><b>Pasang script di MikroTik</b>Tab Script MikroTik → Salin → Winbox → New Terminal → Paste.</li>
-      <li><b>Jalankan tes koneksi</b>Klik tombol Tes koneksi di halaman server. Popup tes memeriksa VPN, jaringan ONT, GenieACS, dan akses remote satu per satu.</li>
+      <li><b>Jalankan tes koneksi</b>Klik tombol Tes koneksi di halaman router. Popup tes memeriksa VPN, jaringan ONT, GenieACS, dan akses remote satu per satu.</li>
       <li><b>Atur ONT</b>URL ACS di ONT atau profil TR-069 OLT: <code>${esc(s.acsUrl || "")}</code></li>
     </ol></div></div>
     <div class="card"><div class="ch"><h2>Remote MikroTik dari mana saja</h2></div><div class="cb"><ol class="ol">
-      <li><b>Tambah akses remote</b>Buka server → tab Remote → Tambah → pilih Winbox atau WebFig.</li>
+      <li><b>Tambah akses remote</b>Buka router → tab Port Forwarding → Tambah → pilih Winbox atau WebFig.</li>
       <li><b>Hubungkan Winbox</b>Isi Connect To dengan alamat yang diberikan, misalnya <code>${esc(s.publicIp || "IP_VPS")}:20001</code>.</li>
     </ol><p class="help">Jika di MikroTik IP → Services kolom Available From diisi, tambahkan <code>${esc(s.tunnelLocal || "")}</code>.</p></div></div>
     <div class="card"><div class="ch"><h2>Membersihkan pengaturan</h2></div><div class="cb">
@@ -3284,8 +3319,8 @@ function viewGuide(v) {
       <details><summary>Status tetap "Terputus" setelah script dipasang</summary><p>Jalankan Tes koneksi untuk melihat langkah yang gagal. Biasanya: MikroTik belum punya internet, alamat VPS salah, atau port UDP 1701 di VPS tertutup.</p></details>
       <details><summary>Summon di GenieACS masih gagal</summary><p>Pastikan langkah "Patch GenieACS" di Tes koneksi lolos, dan ONT sudah Inform sekali setelah VPN tersambung.</p></details>
       <details><summary>Remote Winbox tidak bisa masuk</summary><p>Pasang ulang script MikroTik terbaru (berisi aturan "remote dari VPS"), cek IP → Services → winbox aktif, dan pastikan provider VPS tidak memblokir port tersebut.</p></details>
-      <details><summary>Bolehkah IP virtual sama dengan ZeroTier?</summary><p>Boleh. Yang tidak boleh: dua server memakai IP virtual yang sama, atau IP virtual sama dengan subnet lokal mana pun.</p></details>
-      <details><summary>Apa arti status "Menunggu pemasangan"?</summary><p>Server sudah dibuat di panel tetapi MikroTik-nya belum pernah tersambung. Server ini tidak dihitung terputus dan tidak dikirim notifikasi Telegram. Statusnya berubah sendiri saat MikroTik tersambung pertama kali.</p></details>
+      <details><summary>Bolehkah IP virtual sama dengan ZeroTier?</summary><p>Boleh. Yang tidak boleh: dua router memakai IP virtual yang sama, atau IP virtual sama dengan subnet lokal mana pun.</p></details>
+      <details><summary>Apa arti status "Menunggu pemasangan"?</summary><p>Router sudah dibuat di panel tetapi MikroTik-nya belum pernah tersambung. Router ini tidak dihitung terputus dan tidak dikirim notifikasi Telegram. Statusnya berubah sendiri saat MikroTik tersambung pertama kali.</p></details>
       <details><summary>Notifikasi Telegram tidak masuk</summary><p>Buka Pengaturan → Notifikasi Telegram, klik Kirim pesan tes. Jika gagal, pesan kesalahannya menjelaskan penyebabnya (token salah, bot bukan admin, topik terhapus). Ingat: notifikasi baru dikirim setelah VPN putus melewati jeda yang diatur.</p></details>
       <details><summary>Setelah HTTPS aktif, panel tidak bisa dibuka lewat IP</summary><p>Itu normal. Buka lewat <code>https://domain:${esc(String(s.port || 8088))}</code>; alamat http dan IP akan dialihkan otomatis ke sana. Jika domain bermasalah, lepas domain di Pengaturan → Domain &amp; HTTPS.</p></details>
       <details><summary>Aman menjalankan script MikroTik berulang kali?</summary><p>Aman. Script menghapus pengaturan lama bertanda "VPN ACS" terlebih dulu; pengaturan lain tidak disentuh.</p></details>
@@ -3293,13 +3328,13 @@ function viewGuide(v) {
 }
 
 /* ================= Pengaturan ================= */
-const SET_TABS = [["umum", "Umum"], ["telegram", "Notifikasi Telegram"], ["domain", "Domain & HTTPS"]];
+const SET_TABS = [["umum", "Umum", "sliders"], ["telegram", "Notifikasi Telegram", "send"], ["domain", "Domain & HTTPS", "globe"]];
 function viewSettings(v, tab) {
   if (!SET_TABS.some(([k]) => k === tab)) tab = "umum";
   crumb([["Pengaturan", "#/pengaturan"], [SET_TABS.find(([k]) => k === tab)[1]]]);
   v.innerHTML = `
     <div class="ph"><div><h1>Pengaturan</h1><p>Pengaturan VPS, notifikasi, dan domain panel.</p></div></div>
-    <nav class="tabs">${SET_TABS.map(([k, t]) => `<a class="tab ${k === tab ? "on" : ""}" href="#/pengaturan/${k}">${t}</a>`).join("")}</nav>
+    ${tabsHtml(SET_TABS, tab, "#/pengaturan")}
     <div id="setBody"></div>`;
   const b = $("#setBody");
   if (tab === "telegram") setTelegram(b);
@@ -3308,7 +3343,7 @@ function viewSettings(v, tab) {
 }
 function setGeneral(b) {
   const s = STATE.settings;
-  const g = s.genieCidr === null ? { c: "info", t: "GenieACS tidak ditemukan di VPS ini", d: "Abaikan jika GenieACS dipasang di server lain." }
+  const g = s.genieCidr === null ? { c: "info", t: "GenieACS tidak ditemukan di VPS ini", d: "Abaikan jika GenieACS dipasang di router lain." }
     : genieOk(s.genieCidr) ? { c: "ok", t: "Patch IP virtual aktif", d: `GENIEACS_CR_USE_REMOTE_ADDRESS = ${s.genieCidr}` }
     : { c: "warn", t: "Patch IP virtual belum aktif", d: `Nilai sekarang: ${s.genieCidr || "(kosong)"}. Jalankan genieacs-virtualip.sh.` };
   b.innerHTML = `
@@ -3316,6 +3351,9 @@ function setGeneral(b) {
       <label for="sIp">Alamat VPS</label>
       <input id="sIp" type="text" placeholder="103.20.30.40 atau vpn.domain.com" value="${esc(s.publicIp || "")}">
       <div class="help">Dipakai sebagai <i>connect-to</i> di MikroTik.${s.cloudflare ? ` Saat ini diatur lewat <a href="#/pengaturan/domain">Domain &amp; HTTPS</a>.` : ""}</div>
+      <label for="sGenie">Alamat GenieACS <span class="muted" style="font-weight:400">(opsional)</span></label>
+      <input id="sGenie" type="text" placeholder="${esc(s.genieUrlManual ? "" : s.genieUrl || "http://acs.domain.com:3000")}" value="${esc(s.genieUrlManual || "")}">
+      <div class="help">Ditampilkan sebagai link di dashboard. Kosongkan untuk otomatis (alamat VPS + port GenieACS).</div>
       <label for="sTz">Zona waktu</label>
       <select id="sTz">${(s.timezones || []).map((z) => `<option value="${z.id}" ${z.id === tzId() ? "selected" : ""}>${z.label} (${z.id})</option>`).join("")}</select>
       <div class="help">Untuk jam di riwayat, log aktivitas, dan pesan Telegram.</div>
@@ -3352,7 +3390,7 @@ function setGeneral(b) {
     e.preventDefault(); $("#vpsErr").textContent = "";
     const changed = $("#sIpsec").checked !== !!s.useIpsec;
     const btn = e.submitter || $("#vpsForm button"); busyBtn(btn, true);
-    try { await api("/api/settings", { method: "PUT", body: { publicIp: $("#sIp").value, useIpsec: $("#sIpsec").checked, timezone: $("#sTz").value } }); await load(); route(); doneDialog("Pengaturan disimpan", changed ? "IPsec diubah. Pasang ulang script di semua MikroTik." : "", "ok", !changed); }
+    try { await api("/api/settings", { method: "PUT", body: { publicIp: $("#sIp").value, genieUrl: $("#sGenie").value, useIpsec: $("#sIpsec").checked, timezone: $("#sTz").value } }); await load(); route(); doneDialog("Pengaturan disimpan", changed ? "IPsec diubah. Pasang ulang script di semua MikroTik." : "", "ok", !changed); }
     catch (err) { $("#vpsErr").textContent = err.message; busyBtn(btn, false); }
   };
   $("#tunForm").onsubmit = (e) => {
@@ -3404,7 +3442,7 @@ function setTelegram(b) {
     </div></div>
     <div class="card"><div class="ch"><h2>Aturan notifikasi</h2></div><div class="cb" style="padding-top:6px">
       <label class="check" style="margin-top:10px"><input id="tgOn" type="checkbox" ${t.enabled !== false ? "checked" : ""}>Aktifkan notifikasi VPN terputus</label>
-      <div class="help">Server berstatus "Menunggu pemasangan" tidak pernah dikirim notifikasi.</div>
+      <div class="help">Router berstatus "Menunggu pemasangan" tidak pernah dikirim notifikasi.</div>
       <div class="f2">
         <div><label for="tgDelay">Jeda sebelum lapor (menit)</label><input id="tgDelay" type="number" min="1" max="1440" value="${t.delayMin || 3}">
           <div class="help">VPN harus putus selama ini dulu, supaya putus sebentar tidak dilaporkan.</div></div>
@@ -3620,7 +3658,7 @@ function viewLog(v) {
   v.innerHTML = `
     <div class="ph"><div><h1>Log aktivitas</h1><p>Catatan perubahan di panel dan kejadian penting. Disimpan 90 hari.</p></div></div>
     <div class="card">
-      <div class="toolbar"><div class="search">${ic("search", "")}<input id="lq" type="text" placeholder="Cari aktivitas, server, atau IP" value="${esc(LOGQ)}"></div><span class="muted" id="logCount" style="margin-left:auto;font-size:12.5px"></span></div>
+      <div class="toolbar"><div class="search">${ic("search", "")}<input id="lq" type="text" placeholder="Cari aktivitas, router, atau IP" value="${esc(LOGQ)}"></div><span class="muted" id="logCount" style="margin-left:auto;font-size:12.5px"></span></div>
       <div id="logBody"><div class="empty"><p>Memuat…</p></div></div>
     </div>
     <p class="help" style="margin-top:12px">Password dan token tidak pernah dicatat. Waktu dalam ${esc(tzLabel())}.</p>`;
@@ -3657,7 +3695,7 @@ document.addEventListener("click", async (e) => {
   if (!a) return;
   const act = a.dataset.act;
   if (a.tagName === "A") e.preventDefault();
-  const cur = (location.hash.match(/^#\/server\/([a-f0-9]{12})/) || [])[1];
+  const cur = (location.hash.match(/^#\/router\/([a-f0-9]{12})/) || [])[1];
   if (act === "theme") { toggleTheme(); }
   else if (act === "usermenu") $("#userList").classList.toggle("hidden");
   else if (act === "opennav") document.body.classList.add("nav-open");
@@ -3693,7 +3731,7 @@ paintIcons();
     if ($("#appView").classList.contains("hidden") || $("#mbg") || TEST) return;
     const h = location.hash;
     if (CF && CF.running) return;
-    try { await load(); if (!/\/(tes|remote)$|^#\/(pengaturan|log)/.test(h) && !document.activeElement.matches("input,select")) route(); } catch (e) {}
+    try { await load(); if (!/\/(tes|port)$|^#\/(pengaturan|log)/.test(h) && !document.activeElement.matches("input,select")) route(); } catch (e) {}
   }, 30000);
 })();
 </script>

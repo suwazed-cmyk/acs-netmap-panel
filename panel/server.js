@@ -40,7 +40,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "1.3.0";
+const VERSION = "1.4.0";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
 const VIRTUAL_POOL = "10.100.0.0/14";
@@ -168,6 +168,23 @@ function readGenieCidr() {
   } catch (e) {
     return null;
   }
+}
+function readGenieUiPort() {
+  try {
+    const t = fs.readFileSync(GENIE_ENV, "utf8");
+    const m = t.match(/^GENIEACS_UI_PORT=(\d+)/m);
+    return m ? parseInt(m[1], 10) : 3000;
+  } catch (e) {
+    return null; // GenieACS tidak ada di VPS ini
+  }
+}
+// Alamat GenieACS UI: isian manual di Pengaturan, atau otomatis alamat VPS + port UI
+function genieUrl(d, publicIp) {
+  const manual = d.settings && d.settings.genieUrl;
+  if (manual) return manual;
+  const port = readGenieUiPort();
+  if (port === null || !publicIp) return "";
+  return `http://${publicIp}:${port}`;
 }
 function detectPublicIp() {
   const os = require("os");
@@ -474,9 +491,9 @@ function siteView(s, st, peers, h, now) {
 // ---------- Validasi ----------
 function validateSite(d, input, existing) {
   const name = String(input.name || "").trim();
-  if (name.length < 2 || name.length > 40) return "Nama server 2-40 karakter.";
+  if (name.length < 2 || name.length > 40) return "Nama router 2-40 karakter.";
   if (d.sites.some((s) => s !== existing && s.name.toLowerCase() === name.toLowerCase()))
-    return "Nama server sudah dipakai.";
+    return "Nama router sudah dipakai.";
   const sub = parseCidr(input.realSubnet);
   if (!sub) return "Subnet ONT tidak valid. Contoh yang benar: 10.0.0.0/24";
   if (sub.prefix < 16 || sub.prefix > 29) return "Ukuran subnet ONT harus antara /16 sampai /29.";
@@ -486,7 +503,7 @@ function validateSite(d, input, existing) {
   if (overlap(sub, T.cidr)) return `Subnet ONT tidak boleh bentrok dengan jaringan VPN ${T.net}.`;
   const others = d.sites.filter((s) => s !== existing);
   if (others.some((o) => overlap(sub, parseCidr(o.virtualSubnet))))
-    return "Subnet ONT bentrok dengan IP virtual server lain.";
+    return "Subnet ONT bentrok dengan IP virtual router lain.";
   const vtext = String(input.virtualSubnet || "").trim();
   if (vtext) {
     const v = parseCidr(vtext);
@@ -497,9 +514,9 @@ function validateSite(d, input, existing) {
     if (overlap(v, T.cidr)) return `IP virtual tidak boleh bentrok dengan jaringan VPN ${T.net}.`;
     if (overlap(v, sub)) return "IP virtual tidak boleh sama dengan subnet ONT asli.";
     const clash = others.find((o) => overlap(v, parseCidr(o.virtualSubnet)));
-    if (clash) return `IP virtual ${v.text} sudah dipakai server "${clash.name}" (${clash.virtualSubnet}). Pilih yang lain.`;
+    if (clash) return `IP virtual ${v.text} sudah dipakai router "${clash.name}" (${clash.virtualSubnet}). Pilih yang lain.`;
     const clashReal = others.find((o) => overlap(v, parseCidr(o.realSubnet)));
-    if (clashReal) return `IP virtual ${v.text} bentrok dengan subnet ONT asli server "${clashReal.name}" (${clashReal.realSubnet}).`;
+    if (clashReal) return `IP virtual ${v.text} bentrok dengan subnet ONT asli router "${clashReal.name}" (${clashReal.realSubnet}).`;
   }
   if (existing && (existing.forwards || []).some((f) => f.target === "lan" && !inSubnet(f.lanIp, sub)))
     return "Ada port forwarding ke perangkat di luar subnet ONT baru. Hapus port forwarding itu dulu.";
@@ -534,7 +551,7 @@ function validateForward(d, site, b) {
     if (ipToInt(lanIp) === null) return { error: "IP perangkat tidak valid. Contoh: 10.0.0.25" };
     const real = parseCidr(site.realSubnet);
     if (!inSubnet(lanIp, real))
-      return { error: `IP perangkat harus di dalam subnet ONT server ini (${site.realSubnet}).` };
+      return { error: `IP perangkat harus di dalam subnet ONT router ini (${site.realSubnet}).` };
   }
   const used = usedPublicPorts(d);
   const protos = proto === "both" ? ["tcp", "udp"] : [proto];
@@ -550,7 +567,7 @@ function validateForward(d, site, b) {
     if (RESERVED_PORTS.has(publicPort)) return { error: `Port ${publicPort} sudah dipakai layanan VPS. Pilih port lain.` };
     if (!free(publicPort)) {
       const owner = d.sites.find((s) => (s.forwards || []).some((f) => f.publicPort === publicPort));
-      return { error: `Port publik ${publicPort} sudah dipakai${owner ? ` di server "${owner.name}"` : ""}. Pilih port lain atau kosongkan untuk otomatis.` };
+      return { error: `Port publik ${publicPort} sudah dipakai${owner ? ` di router "${owner.name}"` : ""}. Pilih port lain atau kosongkan untuk otomatis.` };
     }
   }
   const dupe = (site.forwards || []).find(
@@ -612,7 +629,7 @@ async function runTestStep(site, key, st) {
     if (iface) return { ok: true, detail: `Tersambung lewat ${iface}` };
     return site.installedAt
       ? { ok: false, detail: "MikroTik belum tersambung ke VPS", hint: "Pastikan script MikroTik sudah dipasang, MikroTik punya internet, dan alamat VPS di Pengaturan benar." }
-      : { ok: false, detail: "Server ini belum pernah tersambung (menunggu pemasangan)", hint: "Salin script dari tab Script MikroTik, tempel di Winbox → New Terminal, lalu tes lagi." };
+      : { ok: false, detail: "Router ini belum pernah tersambung (menunggu pemasangan)", hint: "Salin script dari tab Script MikroTik, tempel di Winbox → New Terminal, lalu tes lagi." };
   }
   if (key === "ping-mt") {
     const r = await run("ping", ["-c", "2", "-W", "1", site.tunnelIp]);
@@ -636,7 +653,7 @@ async function runTestStep(site, key, st) {
     if (g === null) return { ok: null, detail: "Dilewati: GenieACS tidak ada di VPS ini" };
     return g
       ? { ok: true, detail: `Termasuk rentang ${st.genieCidr}` }
-      : { ok: false, detail: `Di luar rentang patch (${st.genieCidr || "kosong"})`, hint: "Jalankan ulang genieacs-virtualip.sh dengan VIRTUAL_CIDR yang mencakup IP virtual server ini." };
+      : { ok: false, detail: `Di luar rentang patch (${st.genieCidr || "kosong"})`, hint: "Jalankan ulang genieacs-virtualip.sh dengan VIRTUAL_CIDR yang mencakup IP virtual router ini." };
   }
   if (key.startsWith("fwd:")) {
     const f = (site.forwards || []).find((x) => "fwd:" + x.id === key);
@@ -934,7 +951,7 @@ function siteLabel(s) {
 function listLines(items, fn) {
   const max = 30;
   const lines = items.slice(0, max).map(fn);
-  if (items.length > max) lines.push(`… dan ${items.length - max} server lainnya`);
+  if (items.length > max) lines.push(`… dan ${items.length - max} router lainnya`);
   return lines.join("\n");
 }
 function msgDown(list, now, tz) {
@@ -985,7 +1002,7 @@ async function monitorTick() {
         if (!online) continue;
         s.installedAt = new Date(now).toISOString();
         dataChanged = true;
-        logActivity(null, "Server tersambung pertama kali", s.name);
+        logActivity(null, "Router tersambung pertama kali", s.name);
       }
       let r = h.sites[s.id];
       if (!r) {
@@ -1305,7 +1322,7 @@ async function cfRollback(job) {
 
 // =====================================================================
 //  HTTPS panel: satu port untuk http & https
-//  - HTTPS aktif: koneksi TLS diteruskan ke server https internal,
+//  - HTTPS aktif: koneksi TLS diteruskan ke router https internal,
 //    permintaan http biasa diarahkan (301) ke https://domain:PORT
 // =====================================================================
 let httpsServer = null;
@@ -1531,6 +1548,8 @@ async function handleApi(req, res, url) {
         genieCidr: st.genieCidr,
         virtualPool: VIRTUAL_POOL,
         acsUrl: `http://${st.tun.local}:${ACS_PORT}`,
+        genieUrl: genieUrl(d, st.publicIp),
+        genieUrlManual: (d.settings && d.settings.genieUrl) || "",
         tunnelNet: st.tun.net,
         tunnelLocal: st.tun.local,
         tunnelStatic: `${intToIp(st.tun.first)} - ${intToIp(st.tun.last)}`,
@@ -1725,7 +1744,7 @@ async function handleApi(req, res, url) {
     return send(res, 200, { ok: true });
   }
 
-  // --- Tambah server ---
+  // --- Tambah router ---
   if (p === "/api/sites" && method === "POST") {
     const d = loadData();
     const err = validateSite(d, body, null);
@@ -1734,12 +1753,12 @@ async function handleApi(req, res, url) {
     const tunnelIp = allocTunnelIp(d);
     if (!tunnelIp) {
       const T = tun(d);
-      return send(res, 400, { error: `Slot VPN penuh (maksimal ${T.last - T.first + 1} server untuk ${T.net}). Perbesar jaringan VPN di Pengaturan.` });
+      return send(res, 400, { error: `Slot VPN penuh (maksimal ${T.last - T.first + 1} router untuk ${T.net}). Perbesar jaringan VPN di Pengaturan.` });
     }
     const custom = String(body.virtualSubnet || "").trim();
     const virtualSubnet = custom ? parseCidr(custom).text : allocVirtual(d, sub.prefix);
     if (!virtualSubnet) return send(res, 400, { error: "Rentang IP virtual otomatis penuh. Isi IP virtual secara manual." });
-    let base = String(body.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 20) || "server";
+    let base = String(body.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 20) || "router";
     let username = "acs-" + base;
     let i = 2;
     const manualUsers = manualChapEntries().users;
@@ -1759,7 +1778,7 @@ async function handleApi(req, res, url) {
     };
     d.sites.push(site);
     saveData(d);
-    logActivity(req, "Server ditambah", `${site.name} · ONT ${site.realSubnet} → virtual ${site.virtualSubnet}`);
+    logActivity(req, "Router ditambah", `${site.name} · ONT ${site.realSubnet} → virtual ${site.virtualSubnet}`);
     await applyAll(d);
     const st = settings(d);
     return send(res, 200, { ok: true, site: siteView(site, st, await onlinePeers(), loadHistory()) });
@@ -1770,7 +1789,7 @@ async function handleApi(req, res, url) {
   if (mf) {
     const d = loadData();
     const site = d.sites.find((s) => s.id === mf[1]);
-    if (!site) return send(res, 404, { error: "Server tidak ditemukan." });
+    if (!site) return send(res, 404, { error: "Router tidak ditemukan." });
     site.forwards = site.forwards || [];
     if (!mf[3] && method === "POST") {
       const r = validateForward(d, site, body);
@@ -1792,12 +1811,12 @@ async function handleApi(req, res, url) {
     }
   }
 
-  // --- Ubah / hapus / tes / riwayat server ---
+  // --- Ubah / hapus / tes / riwayat router ---
   const m = p.match(/^\/api\/sites\/([a-f0-9]{12})(\/(test|test-plan|test-step|reset-password|history))?$/);
   if (m) {
     const d = loadData();
     const site = d.sites.find((s) => s.id === m[1]);
-    if (!site) return send(res, 404, { error: "Server tidak ditemukan." });
+    if (!site) return send(res, 404, { error: "Router tidak ditemukan." });
     const action = m[3];
 
     if (!action && method === "PUT") {
@@ -1827,14 +1846,14 @@ async function handleApi(req, res, url) {
       site.note = newNote;
       site.realSubnet = sub.text;
       saveData(d);
-      logActivity(req, "Server diubah", `${site.name}${changes.length ? ": " + changes.join(", ") : " (tanpa perubahan)"}`);
+      logActivity(req, "Router diubah", `${site.name}${changes.length ? ": " + changes.join(", ") : " (tanpa perubahan)"}`);
       await applyAll(d, removed);
       return send(res, 200, { ok: true });
     }
     if (!action && method === "DELETE") {
       d.sites = d.sites.filter((s) => s.id !== site.id);
       saveData(d);
-      logActivity(req, "Server dihapus", `${site.name} · ${site.virtualSubnet}`);
+      logActivity(req, "Router dihapus", `${site.name} · ${site.virtualSubnet}`);
       await applyAll(d, [site.virtualSubnet]);
       return send(res, 200, { ok: true });
     }
@@ -1881,6 +1900,12 @@ async function handleApi(req, res, url) {
       if (v !== (d.settings.publicIp || "")) logs.push(["Alamat VPS diubah", `${d.settings.publicIp || "(otomatis)"} → ${v || "(otomatis)"}`]);
       d.settings.publicIp = v;
     }
+    if (body.genieUrl !== undefined) {
+      const g = String(body.genieUrl || "").trim().replace(/\/+$/, "");
+      if (g && !/^https?:\/\/[^\s/]+(:\d+)?(\/\S*)?$/i.test(g)) return send(res, 400, { error: "Alamat GenieACS harus diawali http:// atau https://, contoh http://acs.domain.com:3000" });
+      if (g !== (d.settings.genieUrl || "")) logs.push(["Alamat GenieACS diubah", g || "(otomatis)"]);
+      d.settings.genieUrl = g;
+    }
     if (body.useIpsec !== undefined && !!body.useIpsec !== !!d.settings.useIpsec) {
       logs.push(["IPsec " + (body.useIpsec ? "diaktifkan" : "dimatikan"), ""]);
       d.settings.useIpsec = !!body.useIpsec;
@@ -1900,12 +1925,12 @@ async function handleApi(req, res, url) {
         return send(res, 400, { error: "Jaringan VPN harus memakai IP privat (10.x, 172.16-31.x, 192.168.x, atau 100.64-127.x)." });
       if (overlap(t, parseCidr(VIRTUAL_POOL))) return send(res, 400, { error: `Bentrok dengan rentang IP virtual otomatis ${VIRTUAL_POOL}.` });
       for (const o of d.sites) {
-        if (overlap(t, parseCidr(o.realSubnet))) return send(res, 400, { error: `Bentrok dengan subnet ONT server "${o.name}" (${o.realSubnet}).` });
-        if (overlap(t, parseCidr(o.virtualSubnet))) return send(res, 400, { error: `Bentrok dengan IP virtual server "${o.name}" (${o.virtualSubnet}).` });
+        if (overlap(t, parseCidr(o.realSubnet))) return send(res, 400, { error: `Bentrok dengan subnet ONT router "${o.name}" (${o.realSubnet}).` });
+        if (overlap(t, parseCidr(o.virtualSubnet))) return send(res, 400, { error: `Bentrok dengan IP virtual router "${o.name}" (${o.virtualSubnet}).` });
       }
       const nt = tunnelCfg(t.text);
       const slots = nt.last - nt.first + 1;
-      if (d.sites.length > slots) return send(res, 400, { error: `Terlalu kecil: hanya ${slots} slot, padahal ada ${d.sites.length} server.` });
+      if (d.sites.length > slots) return send(res, 400, { error: `Terlalu kecil: hanya ${slots} slot, padahal ada ${d.sites.length} router.` });
       // Pertahankan nomor host lama jika masih muat, sisanya diberi nomor baru
       const oldT = tun(d);
       const used = new Set();
@@ -1986,7 +2011,7 @@ if (process.argv[2] === "--set-password") {
   (async () => {
     const d = loadData();
     if (!d.admin) console.error("Password admin belum diset. Jalankan: node server.js --set-password PASSWORD");
-    // Server dari versi lama dianggap sudah terpasang (bukan "menunggu pemasangan")
+    // Router dari versi lama dianggap sudah terpasang (bukan "menunggu pemasangan")
     if (!d.v2) {
       for (const s of d.sites || []) if (s.installedAt === undefined) s.installedAt = s.createdAt || new Date().toISOString();
       d.v2 = true;
