@@ -863,7 +863,7 @@ function viewDetail(v, id, tab) {
 }
 function tabSummary(b, x) {
   b.innerHTML = `
-    ${x.inGenie === false ? `<div class="note warn">${ic("alert")}<div><b>IP virtual di luar rentang patch GenieACS</b>Summon ke ONT di router ini akan gagal. Jalankan ulang <code>genieacs-virtualip.sh</code> dengan rentang yang mencakup ${esc(x.virtualSubnet)}.</div></div>` : ""}
+    ${x.inGenie === false ? `<div class="note warn">${ic("alert")}<div><b>IP virtual di luar rentang patch GenieACS</b>Panel belum berhasil memperbarui setting GenieACS untuk ${esc(x.virtualSubnet)}, jadi Summon ke ONT di router ini akan gagal. Buka menu <a href="#/genieacs">GenieACS</a> untuk melihat statusnya.</div></div>` : ""}
     ${x.state === "pending" && !(x.transport === "zt" && !x.ztNode) ? `<div class="note info">${ic("clock")}<div><b>Menunggu pemasangan</b>Router ini belum pernah tersambung. Pasang script lewat tab <a href="#/router/${x.id}/script">Script MikroTik</a>. Riwayat dan notifikasi Telegram mulai berjalan setelah MikroTik tersambung pertama kali.</div></div>` : ""}
     ${x.state === "down" ? `<div class="note warn">${ic("alert")}<div><b>Terputus${x.downSince ? ` sejak ${esc(fmtT(x.downSince, true))} (${fmtDur(Date.now() - x.downSince)})` : ""}</b>Jalankan <a href="#" data-act="test" data-id="${x.id}">tes koneksi</a> untuk melihat penyebabnya.</div></div>` : ""}
     <div class="card">
@@ -1112,7 +1112,7 @@ function siteForm(x) {
     <div class="help">Winbox → IP → DHCP Server → Networks. Boleh sama dengan router lain.</div>
     <label for="fVirt">IP virtual <span class="muted" style="font-weight:400">(opsional)</span></label>
     <input id="fVirt" type="text" placeholder="Otomatis" value="${esc(x?.virtualSubnet || "")}">
-    <div class="help">Kosongkan agar dipilih otomatis. Tidak boleh sama dengan router lain.</div>
+    <div class="help">Kosongkan agar dipilih otomatis (10.100.x.0). Boleh diisi IP private apa saja, misalnya 172.16.10.0/24; GenieACS di VPS ikut menyesuaikan otomatis. Tidak boleh sama dengan router lain.</div>
     <label for="fNote">Catatan <span class="muted" style="font-weight:400">(opsional)</span></label>
     <input id="fNote" type="text" maxlength="120" placeholder="contoh: OLT C-Data 8 port" value="${esc(x?.note || "")}">
     <div class="err" id="fErr"></div>`;
@@ -1342,9 +1342,11 @@ async function fillGenie(refresh) {
   const s = STATE.settings, T = g.totals;
   const rows = g.perRouter.slice().sort((a, b2) => b2.total - a.total || a.name.localeCompare(b2.name, "id"));
   const ago = (t) => (t ? fmtDur(Date.now() - t) + " lalu" : "—");
-  const patch = g.patch.cidr === null ? { c: "info", t: "GenieACS tidak ditemukan di VPS ini", d: "Abaikan jika GenieACS dipasang di server lain." }
-    : g.patch.active ? { c: "ok", t: "Patch IP virtual aktif", d: `Rentang: ${g.patch.cidr}` }
-    : { c: "warn", t: "Patch IP virtual belum aktif", d: "Summon ke ONT akan gagal. Jalankan genieacs-virtualip.sh." };
+  const P = g.patch, R = P.ranges || { extra: [], fromSites: [] };
+  const patch = P.cidr === null ? { c: "info", t: "GenieACS tidak ditemukan di VPS ini", d: "Abaikan jika GenieACS dipasang di server lain." }
+    : !P.patched ? { c: "warn", t: "Patch IP virtual belum terpasang", d: "Summon ke ONT akan gagal. Di VPS jalankan: bash genieacs-virtualip.sh" }
+    : !P.synced ? { c: "warn", t: "Setting GenieACS belum sama dengan panel", d: "Panel akan mencoba lagi dalam 5 menit. Jika tetap begini, cek: journalctl -u vpn-acs -n 50" }
+    : { c: "ok", t: "Patch IP virtual aktif", d: "Rentang mengikuti IP virtual router di panel secara otomatis." };
   b.innerHTML = `
     <div class="kpis">
       <div class="kpi"><span>Total ONT</span><b>${g.devicesError ? "—" : T.total}</b><small>terdaftar di GenieACS</small></div>
@@ -1370,8 +1372,20 @@ async function fillGenie(refresh) {
         </div>
         <div class="card"><div class="ch"><h2>Patch IP virtual</h2></div><div class="cb">
           <div class="note ${patch.c}" style="margin:0">${ic(patch.c === "ok" ? "check" : patch.c === "warn" ? "alert" : "info")}<div><b>${esc(patch.t)}</b>${esc(patch.d)}</div></div>
-          ${g.patch.outside.length ? `<div class="note warn" style="margin:12px 0 0">${ic("alert")}<div><b>${g.patch.outside.length} router di luar rentang patch</b>${g.patch.outside.map((o) => `<a href="#/router/${o.id}">${esc(o.name)}</a> (${esc(o.virtualSubnet)})`).join(", ")}</div></div>` : ""}
-        </div></div>
+          ${P.outside.length ? `<div class="note warn" style="margin:12px 0 0">${ic("alert")}<div><b>${P.outside.length} router di luar rentang patch</b>${P.outside.map((o) => `<a href="#/router/${o.id}">${esc(o.name)}</a> (${esc(o.virtualSubnet)})`).join(", ")}</div></div>` : ""}
+        </div>
+        ${P.cidr === null ? "" : `
+          <div class="kv"><span>Otomatis</span><b class="mono">${esc(R.pool || "")}</b></div>
+          ${R.fromSites.map((x) => `<div class="kv"><span>IP virtual <a href="#/router/${x.id}">${esc(x.name)}</a></span><b class="mono">${esc(x.subnet)}</b></div>`).join("")}
+          ${R.extra.map((x) => `<div class="kv"><span>Tambahan</span><b class="mono">${esc(x)}</b></div>`).join("")}
+          <form class="cb" id="gExtraForm" style="border-top:1px solid var(--line)">
+            <label for="gExtra" style="margin-top:0">Rentang tambahan (opsional)</label>
+            <input id="gExtra" type="text" placeholder="contoh: 10.20.0.0/16" value="${esc(R.extra.join(", "))}">
+            <div class="help">IP virtual router di panel otomatis dimasukkan. Isi ini hanya untuk ONT dengan IP virtual buatan sendiri di luar panel. Pisahkan dengan koma.</div>
+            <div class="err" id="gExtraErr"></div>
+            <div class="form-actions"><button class="btn pri">Simpan</button></div>
+          </form>`}
+        </div>
         <div class="card"><div class="ch"><h2>Alamat</h2></div>
           <div class="kv"><span>GenieACS UI</span><b>${g.url ? `<a class="ext" href="${esc(g.url)}" target="_blank" rel="noopener">${esc(g.url.replace(/^https?:\/\//, ""))}${ic("ext", "")}</a>` : "—"}</b></div>
           <div class="kv"><span>Subdomain</span><b>${g.subdomain ? esc(g.subdomain) : s.cloudflare ? `<a href="#/pengaturan/domain">Buat subdomain</a>` : "—"}</b></div>
@@ -1388,6 +1402,15 @@ async function fillGenie(refresh) {
     </div>`;
   paintIcons(b);
   $("#gRefresh") && ($("#gRefresh").onclick = async () => { busyBtn($("#gRefresh"), true); await fillGenie(true); });
+  $("#gExtraForm") && ($("#gExtraForm").onsubmit = async (e) => {
+    e.preventDefault(); $("#gExtraErr").textContent = "";
+    const btn = $("#gExtraForm button"); busyBtn(btn, true);
+    try {
+      const r = await api("/api/genie/ranges", { method: "PUT", body: { extra: $("#gExtra").value } });
+      await fillGenie(true);
+      doneDialog("Rentang GenieACS disimpan", `<p>Rentang yang dipakai GenieACS:</p><p class="mono">${esc(r.value.split(",").join(", "))}</p>${r.restarted ? "<p>GenieACS CWMP sudah di-restart. ONT perlu Inform sekali lagi (maksimal 5 menit) sebelum Summon memakai rentang baru.</p>" : ""}`);
+    } catch (err) { $("#gExtraErr").textContent = err.message; busyBtn(btn, false); }
+  });
   $("#genieForm").onsubmit = async (e) => {
     e.preventDefault(); $("#genieErr").textContent = "";
     const btn = $("#genieForm button"); busyBtn(btn, true);

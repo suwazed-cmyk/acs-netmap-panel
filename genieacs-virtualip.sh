@@ -9,10 +9,10 @@
 #    bash genieacs-virtualip.sh rollback   -> kembali ke GenieACS asli (npm)
 #    bash genieacs-virtualip.sh status     -> cek status
 #
-#  Ubah VIRTUAL_CIDR di bawah sesuai rentang IP virtual semua lokasi.
-#  Contoh 10.100.0.0/14 mencakup 10.100.x.x s/d 10.103.x.x
-#  (lokasi A = 10.101.0.0/24, lokasi B = 10.102.0.0/24, dst).
-#  Bisa juga daftar dipisah koma: "10.101.0.0/24,10.102.0.0/24"
+#  VIRTUAL_CIDR hanya nilai awal. Jika Panel VPN ACS terpasang, panel
+#  mengatur rentang ini sendiri mengikuti IP virtual setiap router
+#  (menu GenieACS di panel), jadi tidak perlu diubah di sini.
+#  Contoh 10.100.0.0/14 mencakup 10.100.x.x s/d 10.103.x.x.
 # =====================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -247,6 +247,12 @@ PYEOF
 
   restart_all
   echo
+  # Panel mengatur rentang IP virtual sendiri: restart agar langsung disesuaikan
+  if systemctl is-active --quiet vpn-acs; then
+    systemctl restart vpn-acs
+    sleep 2
+    ok "Rentang disesuaikan oleh Panel VPN ACS: $(grep '^GENIEACS_CR_USE_REMOTE_ADDRESS=' "$ENV_FILE" | cut -d= -f2)"
+  fi
   ok "Selesai. Summon akan memakai IP virtual setelah ONT Inform 1x."
   echo "Cek: journalctl -u genieacs-cwmp -n 20 | grep version  (harus ada '+' di versi)"
   local summary

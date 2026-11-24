@@ -24,6 +24,7 @@ const CHAP_FILE = ROOT + "/etc/ppp/chap-secrets";
 const IPSEC_SECRETS = ROOT + "/etc/ipsec.secrets";
 const ROUTE_SCRIPT = ROOT + "/etc/ppp/ip-up.d/vpn-acs-routes";
 const GENIE_ENV = ROOT + "/opt/genieacs/genieacs.env";
+const GENIE_SVC = ROOT + "/etc/systemd/system/genieacs-cwmp.service"; // ExecStart versi patch memuat /opt/genieacs-app/
 const DRY_RUN = process.env.VPNACS_DRYRUN === "1"; // tidak menjalankan perintah ip
 const HISTORY_FILE = ROOT + "/opt/vpn-acs/history.json";
 const ACTIVITY_FILE = ROOT + "/opt/vpn-acs/activity.json";
@@ -40,7 +41,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "1.7.2";
+const VERSION = "1.8.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -114,6 +115,119 @@ function tunnelCfg(net) {
 }
 function tun(d) {
   return tunnelCfg((d && d.settings && d.settings.tunnelNet) || DEFAULT_TUNNEL_NET);
+}
+// ---------- Rentang patch GenieACS (dikelola panel) ----------
+// GenieACS memakai IP pengirim untuk Summon hanya bila IP itu ada di rentang ini.
+// Panel menulisnya otomatis: rentang otomatis + IP virtual tiap router + rentang tambahan.
+const PRIVATE_NETS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"];
+function isPrivateCidr(c) {
+  return PRIVATE_NETS.some((x) => {
+    const p = parseCidr(x);
+    return c.net >= p.net && c.net + c.size <= p.net + p.size;
+  });
+}
+function cidrCovers(outer, inner) {
+  return inner.net >= outer.net && inner.net + inner.size <= outer.net + outer.size;
+}
+function geniePatched() {
+  try {
+    return fs.readFileSync(GENIE_SVC, "utf8").split("\n").some((l) => l.startsWith("ExecStart=") && l.includes("/opt/genieacs-app/"));
+  } catch (e) {
+    return false;
+  }
+}
+// Rentang tambahan dari isian Pengaturan: valid, private, tidak memuat jaringan VPN/ZeroTier
+function checkGenieExtra(d, list) {
+  const out = [];
+  const T = tun(d);
+  const z = ztCfg(d);
+  const zsub = z ? parseCidr(z.subnet) : null;
+  for (const raw of list) {
+    const t = String(raw || "").trim();
+    if (!t) continue;
+    const c = parseCidr(t);
+    if (!c) return { error: `Rentang "${t}" tidak valid. Contoh: 172.16.0.0/16` };
+    if (!c.aligned) return { error: `Rentang "${t}" harus ditulis dari alamat awalnya. Mungkin maksud Anda ${c.text}` };
+    if (c.prefix < 8) return { error: `Rentang ${c.text} terlalu besar (minimal /8).` };
+    if (!isPrivateCidr(c)) return { error: `Rentang ${c.text} bukan IP private (10.x, 172.16-31.x, 192.168.x).` };
+    if (overlap(c, T.cidr)) return { error: `Rentang ${c.text} memuat jaringan VPN L2TP ${T.net}. Router yang memakai masquerade akan salah alamat.` };
+    if (zsub && overlap(c, zsub)) return { error: `Rentang ${c.text} memuat jaringan ZeroTier ${z.subnet}.` };
+    if (!out.includes(c.text)) out.push(c.text);
+  }
+  return { list: out };
+}
+function genieRanges(d) {
+  const pool = parseCidr(VIRTUAL_POOL);
+  const list = [pool];
+  const extra = [];
+  for (const t of (d.settings && d.settings.genieExtra) || []) {
+    const c = parseCidr(t);
+    if (c && !list.some((x) => cidrCovers(x, c))) {
+      list.push(c);
+      extra.push(c.text);
+    }
+  }
+  const fromSites = [];
+  for (const st of d.sites) {
+    const c = parseCidr(st.virtualSubnet);
+    if (c && !list.some((x) => cidrCovers(x, c))) {
+      list.push(c);
+      fromSites.push({ id: st.id, name: st.name, subnet: c.text });
+    }
+  }
+  return { pool: pool.text, extra, fromSites, value: list.map((x) => x.text).join(",") };
+}
+// Pindahkan isian lama di genieacs.env (misalnya 10.20.0.0/16) menjadi rentang tambahan, sekali saja
+function genieMigrate(d) {
+  d.settings = d.settings || {};
+  if (Array.isArray(d.settings.genieExtra)) return false;
+  const cur = readGenieCidr();
+  const keep = [];
+  if (cur) {
+    const pool = parseCidr(VIRTUAL_POOL);
+    for (const t of cur.split(",")) {
+      const c = parseCidr(t.trim());
+      if (!c || cidrCovers(pool, c) || d.sites.some((st) => st.virtualSubnet === c.text)) continue;
+      const r = checkGenieExtra(d, [c.text]);
+      if (r.list && r.list.length) keep.push(c.text);
+    }
+  }
+  d.settings.genieExtra = keep;
+  return true;
+}
+let GENIE_SYNC_BUSY = false;
+// Tulis rentang ke genieacs.env dan restart genieacs-cwmp jika berubah
+async function genieSync(d, req) {
+  const cur = readGenieCidr();
+  if (cur === null) return { skipped: true }; // GenieACS tidak di VPS ini
+  if (genieMigrate(d)) saveData(d);
+  // GenieACS asli (belum/tidak di-patch): jangan ubah apa pun. genieacs-virtualip.sh
+  // me-restart panel setelah memasang patch, sehingga rentang langsung disesuaikan.
+  if (!geniePatched()) return { skipped: true, unpatched: true };
+  const want = genieRanges(d).value;
+  if (cur === want || GENIE_SYNC_BUSY) return { ok: true, changed: false };
+  GENIE_SYNC_BUSY = true;
+  try {
+    let t = fs.readFileSync(GENIE_ENV, "utf8");
+    const line = `GENIEACS_CR_USE_REMOTE_ADDRESS=${want}`;
+    if (/^GENIEACS_CR_USE_REMOTE_ADDRESS=.*$/m.test(t)) t = t.replace(/^GENIEACS_CR_USE_REMOTE_ADDRESS=.*$/m, line);
+    else t = t.replace(/\n?$/, "\n") + line + "\n";
+    fs.writeFileSync(GENIE_ENV, t);
+    let restarted = false;
+    if (geniePatched()) {
+      const r = await run("systemctl", ["restart", "genieacs-cwmp"], 30000);
+      restarted = r.code === 0;
+      if (!restarted) console.error("Restart genieacs-cwmp gagal:", r.out.trim());
+    }
+    GENIE_CACHE.t = 0;
+    logActivity(req || null, "Rentang patch GenieACS diperbarui", `${cur || "(kosong)"} → ${want}`);
+    return { ok: true, changed: true, restarted };
+  } catch (e) {
+    console.error("Gagal menulis genieacs.env:", e.message);
+    return { error: "Gagal menulis genieacs.env: " + e.message };
+  } finally {
+    GENIE_SYNC_BUSY = false;
+  }
 }
 function insideGenie(sub, genieCidr) {
   if (genieCidr === null) return null; // GenieACS tidak ada di VPS ini
@@ -382,6 +496,7 @@ async function applyAll(d, removedSubnets) {
     if (ifc) await run("ip", ["route", "replace", s.virtualSubnet, "dev", ifc]);
   }
   await ensureLoAddr(d);
+  await genieSync(d);
   if (ztCfg(d)) {
     const r = await syncZtRoutes(d);
     if (r.error) console.error("Sinkron route ZeroTier gagal:", r.error);
@@ -609,6 +724,7 @@ function validateSite(d, input, existing) {
     if (!v.aligned) return `IP virtual harus ditulis dari alamat awalnya. Mungkin maksud Anda ${v.text}`;
     if (v.prefix !== sub.prefix)
       return `Ukuran IP virtual harus sama dengan subnet ONT (/${sub.prefix}). Contoh: ${intToIp(v.net)}/${sub.prefix}`;
+    if (!isPrivateCidr(v)) return "IP virtual harus IP private: 10.x.x.x, 172.16-31.x.x, atau 192.168.x.x.";
     if (overlap(v, T.cidr)) return `IP virtual tidak boleh bentrok dengan jaringan VPN ${T.net}.`;
     if (overlap(v, sub)) return "IP virtual tidak boleh sama dengan subnet ONT asli.";
     if (zsub && overlap(v, zsub)) return `IP virtual tidak boleh bentrok dengan jaringan ZeroTier ${zc.subnet}.`;
@@ -782,7 +898,7 @@ async function runTestStep(site, key, st) {
     if (g === null) return { ok: null, detail: "Dilewati: GenieACS tidak ada di VPS ini" };
     return g
       ? { ok: true, detail: `Termasuk rentang ${st.genieCidr}` }
-      : { ok: false, detail: `Di luar rentang patch (${st.genieCidr || "kosong"})`, hint: "Jalankan ulang genieacs-virtualip.sh dengan VIRTUAL_CIDR yang mencakup IP virtual router ini." };
+      : { ok: false, detail: `Di luar rentang patch (${st.genieCidr || "kosong"})`, hint: "Panel memperbarui rentang ini otomatis. Buka menu GenieACS untuk melihat statusnya, atau restart panel: systemctl restart vpn-acs" };
   }
   if (key.startsWith("fwd:")) {
     const f = (site.forwards || []).find((x) => "fwd:" + x.id === key);
@@ -867,7 +983,7 @@ async function genieStatus(d) {
     installed: cidr !== null || services.some((x) => x.active),
     version: genieVersion(),
     services,
-    patch: { cidr, active: cidr !== null && !!cidr, outside: d.sites.filter((s) => insideGenie(s.virtualSubnet, cidr) === false).map((s) => ({ id: s.id, name: s.name, virtualSubnet: s.virtualSubnet })) },
+    patch: { cidr, patched: geniePatched(), ranges: genieRanges(d), synced: cidr === genieRanges(d).value, active: cidr !== null && !!cidr && geniePatched(), outside: d.sites.filter((s) => insideGenie(s.virtualSubnet, cidr) === false).map((s) => ({ id: s.id, name: s.name, virtualSubnet: s.virtualSubnet })) },
     url: genieUrl(d, st.publicIp),
     urlManual: (d.settings && d.settings.genieUrl) || "",
     subdomain: (d.settings && d.settings.subdomains && d.settings.subdomains.acs && d.settings.subdomains.acs.host) || "",
@@ -1565,9 +1681,10 @@ async function monitorTick() {
   if (monitorBusy) return;
   monitorBusy = true;
   try {
-    if (Date.now() - ztRefreshAt >= 5 * 60 * 1000 && ztCfg(loadData())) {
+    if (Date.now() - ztRefreshAt >= 5 * 60 * 1000) {
       ztRefreshAt = Date.now();
-      await ztRefresh(null).catch((e) => console.error("Pemeriksaan ZeroTier gagal:", e.message));
+      if (ztCfg(loadData())) await ztRefresh(null).catch((e) => console.error("Pemeriksaan ZeroTier gagal:", e.message));
+      await genieSync(loadData()).catch((e) => console.error("Sinkron rentang GenieACS gagal:", e.message));
     }
     await ztPingAll(loadData());
     const peers = await onlinePeers();
@@ -2524,6 +2641,20 @@ async function handleApi(req, res, url) {
   }
 
   // --- GenieACS ---
+  if (p === "/api/genie/ranges" && method === "PUT") {
+    const d = loadData();
+    const raw = Array.isArray(body.extra) ? body.extra : String(body.extra || "").split(/[\s,;]+/);
+    const r = checkGenieExtra(d, raw);
+    if (r.error) return send(res, 400, { error: r.error });
+    d.settings = d.settings || {};
+    const before = (d.settings.genieExtra || []).join(", ") || "(kosong)";
+    d.settings.genieExtra = r.list;
+    saveData(d);
+    logActivity(req, "Rentang tambahan GenieACS diubah", `${before} → ${r.list.join(", ") || "(kosong)"}`);
+    const s2 = await genieSync(d, req);
+    if (s2.error) return send(res, 500, { error: s2.error });
+    return send(res, 200, { ok: true, value: genieRanges(d).value, changed: !!s2.changed, restarted: !!s2.restarted, skipped: !!s2.skipped });
+  }
   if (p === "/api/genie" && method === "GET") {
     if (url.searchParams.get("refresh") === "1") GENIE_CACHE.t = 0;
     return send(res, 200, await genieStatus(loadData()));
@@ -2914,6 +3045,9 @@ if (process.argv[2] === "--set-password") {
       d.v2 = true;
       saveData(d);
     }
+    if (genieMigrate(d)) saveData(d);
+    const gs = await genieSync(d);
+    if (gs.changed) console.log("Rentang patch GenieACS disesuaikan dengan IP virtual di panel");
     const cf = d.settings && d.settings.cloudflare;
     if (cf && cf.https) {
       try {

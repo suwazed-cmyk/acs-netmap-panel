@@ -117,18 +117,13 @@ systemctl restart genieacs-cwmp genieacs-nbi genieacs-fs genieacs-ui
 ```
 
 ### 5. Patch IP virtual GenieACS
-Jika IP virtual memakai pilihan otomatis panel (`10.100.x.x`):
 ```bash
 cd /root/acs-netmap-panel
-bash genieacs-virtualip.sh
-```
-Jika juga memakai IP virtual sendiri (misalnya `10.20.x.x`), tambahkan rentangnya dulu:
-```bash
-cd /root/acs-netmap-panel
-sed -i 's#^VIRTUAL_CIDR=.*#VIRTUAL_CIDR="10.100.0.0/14,10.20.0.0/16"#' genieacs-virtualip.sh
 bash genieacs-virtualip.sh
 ```
 Di akhir muncul ringkasan. Cek patch: `bash genieacs-virtualip.sh status`
+
+Rentang IP virtual tidak perlu diatur di sini. Setelah panel terpasang, **panel mengatur rentangnya sendiri** mengikuti IP virtual setiap router: rentang otomatis `10.100.0.0/14` ditambah IP virtual yang Anda isi sendiri (misalnya `172.16.10.0/24`). Lihat menu **GenieACS** di panel.
 
 ### 6. Panel VPN ACS
 ```bash
@@ -171,7 +166,7 @@ Menu **Pengaturan → Umum**:
 4. **Jaringan VPN (L2TP)**: tentukan **sekarang** (bawaan `192.168.42.0/24`). Mengganti belakangan berarti URL ACS di semua ONT ikut berubah.
 5. **Password admin**: ganti jika masih `Admin123`. Selama belum diganti, dashboard menampilkan peringatan.
 
-Menu **GenieACS**: pastikan **Patch IP virtual** berstatus **Aktif** dan keempat layanan **Berjalan**.
+Menu **GenieACS**: pastikan **Patch IP virtual** berstatus **Aktif** dan keempat layanan **Berjalan**. Kartu ini juga menampilkan rentang IP virtual yang dipakai GenieACS. Kolom **Rentang tambahan** hanya perlu diisi jika Anda punya ONT dengan IP virtual buatan sendiri di luar panel.
 
 Buka **GenieACS UI** di `http://IP_VPS:3000`. Jika muncul *initialization wizard*, buat akun admin dan centang **Users saja** agar konfigurasi dari repo beryindo tidak tertimpa.
 
@@ -180,7 +175,7 @@ Panel → **Tambah router**:
 1. **Jalur ke VPS**: pilih **L2TP** (semua MikroTik). Jalur **ZeroTier** dibahas di [Fitur opsional C](#c-router-lewat-zerotier).
 2. **Nama router**, misalnya `Nangahale`.
 3. **Subnet ONT di MikroTik**: lihat di Winbox → IP → DHCP Server → Networks, misalnya `10.0.0.0/24`.
-4. **IP virtual**: kosongkan agar dipilih otomatis (`10.100.x.0/24`), atau isi sendiri. Tidak boleh sama dengan router lain.
+4. **IP virtual**: kosongkan agar dipilih otomatis (`10.100.x.0/24`), atau isi sendiri dengan IP private apa saja (misalnya `172.16.10.0/24`). GenieACS di VPS ikut menyesuaikan otomatis. Tidak boleh sama dengan router lain.
 5. **Simpan**.
 
 Lalu buka tab **Script MikroTik** → **Salin** → di Winbox buka **New Terminal** → klik kanan **Paste** → Enter. Script aman dijalankan ulang.
@@ -296,7 +291,7 @@ Jalankan dulu `bash cek.sh`. Sebagian besar masalah langsung terlihat di sana.
 | Router tetap **Menunggu pemasangan** / **Terputus** | UDP 1701 tertutup, Alamat VPS salah, atau script belum ditempel | Klik **Tes koneksi**. Di MikroTik cek **Interfaces → l2tp-acs** dan **Log** |
 | ONT tidak muncul di GenieACS | URL ACS salah, Periodic Inform mati, atau router belum tersambung | Cek [langkah 10](#10-atur-ont). Tes koneksi harus lolos langkah **Jaringan ONT** |
 | Summon gagal, `ConnectionRequestURL` berisi IP asli | Patch belum aktif, atau ONT belum Inform ulang setelah patch | `bash genieacs-virtualip.sh status`, tunggu Inform berikutnya (maks. 5 menit) |
-| Router diberi tanda "IP virtual di luar patch GenieACS" | IP virtual tidak masuk `VIRTUAL_CIDR` | Tambahkan rentangnya dan jalankan ulang [langkah 5](#5-patch-ip-virtual-genieacs) |
+| Router diberi tanda "IP virtual di luar patch GenieACS" | Panel gagal memperbarui `genieacs.env` | Buka menu **GenieACS** di panel, lalu cek `journalctl -u vpn-acs -n 50` |
 | Router ZeroTier tidak muncul di "Pilih router yang bergabung" | Paket zerotier belum terpasang, VPS belum dihubungkan, atau UDP 9993 tertutup | Cek [Fitur opsional C](#c-router-lewat-zerotier). Di MikroTik: **ZeroTier → Interfaces → zt-acs** |
 | Notifikasi Telegram tidak masuk | Bot bukan admin, topik salah, atau token dipakai webhook lain | **Kirim pesan tes** di panel, lalu **Hapus webhook** jika ditawarkan |
 | Domain gagal: "Domain tidak ditemukan di akun Cloudflare ini" / "Token tidak boleh membaca domain ini" | Token belum punya izin **Zone → Zone → Read** | Edit token di Cloudflare, tambahkan izin itu |
