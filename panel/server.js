@@ -51,7 +51,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.1.2";
+const VERSION = "2.1.3";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -4338,6 +4338,17 @@ async function handleApi(req, res, url) {
     if (typeof body.authorized === "boolean" && body.authorized !== !!m.authorized) {
       upd.authorized = body.authorized;
       notes.push(body.authorized ? "disetujui" : "izin dicabut");
+      // Disetujui tapi belum punya IP: langsung beri IP kosong di rentang (tidak menunggu controller)
+      if (body.authorized && body.ip === undefined && !(m.ipAssignments || []).length) {
+        const sub = parseCidr(z.subnet);
+        const used = new Set();
+        for (const o of Object.values(mi.members)) for (const ip of o.ipAssignments || []) used.add(ip);
+        const ip = sub && ztFreeIp(sub, used, 100);
+        if (ip) {
+          upd.ipAssignments = [ip];
+          notes.push(`IP ${ip}`);
+        }
+      }
     }
     if (body.ip !== undefined) {
       const ip = String(body.ip || "").trim();
