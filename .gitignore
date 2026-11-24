@@ -4,3 +4,5 @@ data.json
 .env
 sessions.json
 addon-job.json
+source-dir
+update-cache.json

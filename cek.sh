@@ -74,6 +74,8 @@ panel_get() {
     else if (k === "ztNwid") v = (s.zt && s.zt.nwid) || "";
     else if (k === "subHosts") v = Object.values(s.subdomains || {}).map((x) => x && x.host).filter(Boolean).join(" ");
     else if (k === "sites") v = String((d.sites || []).length);
+    else if (k === "stdHttp") v = String(s.stdHttp || 80);
+    else if (k === "stdHttps") v = String(s.stdHttps || 443);
     else if (k === "defaultPw") {
       const a = d.admin, c = require("crypto");
       v = a && a.salt && a.hash && c.scryptSync(process.argv[3], a.salt, 64).toString("hex") === a.hash ? "1" : "";
@@ -134,11 +136,12 @@ if [ -f "$PANEL_DIR/server.js" ]; then
     301|308) ok "Panel menjawab (dialihkan ke HTTPS)" ;;
     *) bad "Panel tidak menjawab di port ${PANEL_PORT} (HTTP ${c:-000})" "journalctl -u vpn-acs -n 50 --no-pager" ;;
   esac
-  if ss -Hltnp 2>/dev/null | grep -E '[:.]80[[:space:]]' | grep -q node; then ok "Panel juga di port 80/443 (alamat tanpa port)"
+  SP_HTTP="$(panel_get stdHttp)"; SP_HTTP="${SP_HTTP:-80}"; SP_HTTPS="$(panel_get stdHttps)"; SP_HTTPS="${SP_HTTPS:-443}"
+  if ss -Hltnp 2>/dev/null | grep -E "[:.]${SP_HTTP}[[:space:]]" | grep -q node; then ok "Panel juga di port ${SP_HTTP}/${SP_HTTPS}"
   else
-    who="$(ss -Hltnp 2>/dev/null | grep -E '[:.]80[[:space:]]' | grep -oP 'users:\(\("\K[^"]+' | head -1)"
-    if [ -n "$who" ]; then warn "Port 80 dipakai ${who}, panel hanya di port ${PANEL_PORT}" "Hentikan ${who} (systemctl disable --now ${who}), lalu systemctl restart vpn-acs"
-    else warn "Panel tidak memakai port 80/443" "Aktifkan di Pengaturan → Umum → Alamat tanpa port"; fi
+    who="$(ss -Hltnp 2>/dev/null | grep -E "[:.]${SP_HTTP}[[:space:]]" | grep -oP 'users:\(\("\K[^"]+' | head -1)"
+    if [ -n "$who" ]; then warn "Port ${SP_HTTP} dipakai ${who}, panel hanya di port ${PANEL_PORT}" "Hentikan ${who} atau ganti port di Pengaturan → Umum → Alamat panel"
+    else warn "Panel tidak memakai port ${SP_HTTP}/${SP_HTTPS}" "Aktifkan di Pengaturan → Umum → Alamat panel"; fi
   fi
   HTTPS_DOM="$(panel_get httpsDomain)"
   if [ -n "$HTTPS_DOM" ]; then

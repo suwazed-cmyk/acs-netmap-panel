@@ -51,7 +51,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.2.0";
+const VERSION = "2.3.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -578,8 +578,8 @@ function ensureJoinKey(site) {
 function panelPublicUrl(st, d) {
   const cf = d && d.settings && d.settings.cloudflare;
   const std = STD_ON;
-  if (cf && cf.https && cf.domain) return std ? `https://${cf.domain}` : `https://${cf.domain}:${PORT}`;
-  return st.publicIp ? (std ? `http://${st.publicIp}` : `http://${st.publicIp}:${PORT}`) : "";
+  if (cf && cf.https && cf.domain) return std ? `https://${cf.domain}${portSfx("https")}` : `https://${cf.domain}:${PORT}`;
+  return st.publicIp ? (std ? `http://${st.publicIp}${portSfx("http")}` : `http://${st.publicIp}:${PORT}`) : "";
 }
 function mikrotikScriptZt(s, st) {
   const c = st.brand;
@@ -2206,8 +2206,8 @@ const SUB_SERVICES = {
   acs: { label: "GenieACS", port: () => readGenieUiPort() || 3000, def: "acs" },
 };
 function subUrl(svc, host) {
-  if (STD_ON && HTTPS_ON) return `https://${host}`;
-  if (STD_ON) return `http://${host}`;
+  if (STD_ON && HTTPS_ON) return `https://${host}${portSfx("https")}`;
+  if (STD_ON) return `http://${host}${portSfx("http")}`;
   return `http://${host}:${SUB_SERVICES[svc].port()}`;
 }
 // Buat / perbarui record A (DNS only) untuk satu nama host
@@ -2319,6 +2319,143 @@ async function cfRollbackSub(job) {
 }
 
 // =====================================================================
+//  Pembaruan: panel (repo GitHub) dan add-on (git / apt)
+// =====================================================================
+const UPDATE_REPO = process.env.VPNACS_UPDATE_REPO || "suwazed-cmyk/acs-netmap-panel";
+const UPDATE_RAW = process.env.VPNACS_UPDATE_RAW || `https://raw.githubusercontent.com/${UPDATE_REPO}/main/panel/server.js`;
+const SOURCE_DIR_FILE = path.dirname(DATA_FILE) + "/source-dir";
+const UPDATE_FILE = path.dirname(DATA_FILE) + "/update-cache.json";
+let UPDATES = null;
+try {
+  UPDATES = JSON.parse(fs.readFileSync(UPDATE_FILE, "utf8"));
+} catch (e) {
+  UPDATES = null;
+}
+function verCmp(a, b) {
+  const pa = String(a).split(".").map((x) => parseInt(x, 10) || 0), pb = String(b).split(".").map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < 3; i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0) ? 1 : -1;
+  return 0;
+}
+// Folder repo tempat installer dijalankan (ditulis install-vpn-acs.sh)
+function sourceDir() {
+  try {
+    const d = fs.readFileSync(SOURCE_DIR_FILE, "utf8").trim();
+    return d && fs.existsSync(d + "/install-vpn-acs.sh") ? d : "";
+  } catch (e) {
+    return "";
+  }
+}
+async function checkPanelUpdate() {
+  const out = { current: VERSION, latest: "", available: false, error: "", notes: "", date: "" };
+  const r = await httpJson("GET", UPDATE_RAW, null, { Range: "bytes=0-6000", Accept: "text/plain" }, 15000);
+  const m = r.text && r.text.match(/const VERSION = "([\d.]+)"/);
+  if (!m) {
+    out.error = r.status ? `GitHub menjawab HTTP ${r.status}` : `Tidak bisa menghubungi GitHub (${r.error || "?"})`;
+    return out;
+  }
+  out.latest = m[1];
+  out.available = verCmp(out.latest, VERSION) > 0;
+  if (out.available) {
+    const c = await httpJson("GET", `https://api.github.com/repos/${UPDATE_REPO}/commits/main`, null, {}, 15000);
+    if (c.json && c.json.commit) {
+      out.notes = String(c.json.commit.message || "").split("\n")[0].slice(0, 160);
+      out.date = (c.json.commit.committer && c.json.commit.committer.date) || "";
+    }
+  }
+  return out;
+}
+async function checkAddonUpdate(id) {
+  const a = ADDONS[id];
+  if (a.kind === "aplikasi") {
+    const dir = addonDir(id);
+    if (!fs.existsSync(dir + "/.git")) return { available: false };
+    const f = await run("git", ["-C", dir, "fetch", "-q", "origin"], 30000);
+    if (f.code !== 0) return { available: false, error: "git fetch gagal" };
+    const n = await run("git", ["-C", dir, "rev-list", "--count", "HEAD..@{u}"]);
+    const behind = parseInt(n.out.trim(), 10) || 0;
+    const cur = (await run("git", ["-C", dir, "log", "-1", "--format=%h %cs"])).out.trim();
+    if (!behind) return { available: false, current: cur };
+    const up = (await run("git", ["-C", dir, "log", "-1", "--format=%h %cs|%s", "@{u}"])).out.trim().split("|");
+    return { available: true, behind, current: cur, latest: up[0] || "", notes: (up[1] || "").slice(0, 160) };
+  }
+  // ZeroTier: versi terpasang vs versi yang tersedia di apt
+  const pol = await run("apt-cache", ["policy", "zerotier-one"]);
+  const inst = (pol.out.match(/Installed:\s*(\S+)/) || [])[1] || "";
+  const cand = (pol.out.match(/Candidate:\s*(\S+)/) || [])[1] || "";
+  if (!inst || inst === "(none)" || !cand || cand === "(none)") return { available: false };
+  return { available: inst !== cand, current: inst, latest: cand };
+}
+async function checkUpdates() {
+  const d = loadData();
+  const out = { checkedAt: Date.now(), panel: await checkPanelUpdate(), addons: {} };
+  for (const id of Object.keys(ADDONS)) {
+    if (!addonInstalled(d, id)) continue;
+    try {
+      out.addons[id] = await checkAddonUpdate(id);
+    } catch (e) {
+      out.addons[id] = { available: false, error: e.message };
+    }
+  }
+  UPDATES = out;
+  try {
+    fs.writeFileSync(UPDATE_FILE, JSON.stringify(out));
+  } catch (e) {
+    // abaikan
+  }
+  return out;
+}
+function updateSummary() {
+  const U = UPDATES || {};
+  const addons = Object.entries(U.addons || {}).filter(([, x]) => x && x.available).map(([id]) => id);
+  return { checkedAt: U.checkedAt || 0, panel: !!(U.panel && U.panel.available), latest: (U.panel && U.panel.latest) || "", addons };
+}
+// Perbarui panel: git pull di folder repo lalu jalankan ulang installer (panel ikut di-restart)
+function selfUpdateSteps() {
+  return [
+    {
+      label: "Periksa folder repo",
+      run: async (job) => {
+        const src = sourceDir();
+        if (!src) return { error: "Folder repo tidak diketahui. Perbarui sekali lewat SSH: cd /root/acs-netmap-panel && git pull && bash install-vpn-acs.sh" };
+        job.src = src;
+        const st = await run("git", ["-C", src, "status", "--porcelain", "--untracked-files=no"]);
+        if (st.out.trim()) jobLog("Berkas yang diubah manual di repo:\n" + st.out.trim());
+        return { detail: src };
+      },
+    },
+    {
+      label: "Unduh versi terbaru",
+      weight: 2,
+      run: async (job) => {
+        const src = job.src || sourceDir();
+        const r = await runStream("git", ["-C", src, "pull", "--ff-only"], { timeoutMs: 5 * 60 * 1000 });
+        if (r.code !== 0) return { error: `git pull gagal (lihat log). Jika ada berkas yang diubah manual, kembalikan dulu: cd ${src} && git checkout -- .` };
+        const h = await run("git", ["-C", src, "log", "-1", "--format=%h %cs"]);
+        return { detail: "Versi " + h.out.trim() };
+      },
+    },
+    {
+      label: "Pasang ulang panel",
+      weight: 4,
+      run: async (job) => {
+        const src = job.src || sourceDir();
+        // Panel ikut di-restart oleh installer; proses tetap jalan dan panel menyambung lagi setelah menyala
+        const r = await runDetached(job, "selfupdate", `cd '${src.replace(/'/g, "")}' && bash install-vpn-acs.sh`, { timeoutMs: 20 * 60 * 1000 });
+        if (r.code !== 0) return { error: "Installer gagal (lihat log)." };
+        return { detail: "Installer selesai" };
+      },
+    },
+    {
+      label: "Selesai",
+      run: async () => {
+        await checkUpdates().catch(() => {});
+        return { detail: `Panel versi ${VERSION}. Muat ulang halaman (Ctrl+F5).` };
+      },
+    },
+  ];
+}
+
+// =====================================================================
 //  HTTPS panel: satu port untuk http & https
 //  - HTTPS aktif: koneksi TLS diteruskan ke router https internal,
 //    permintaan http biasa diarahkan (301) ke https://domain:PORT
@@ -2385,7 +2522,7 @@ function frontHandler(sock) {
         return httpServer.emit("connection", sock);
       }
       const host = hostOf(buf.toString("latin1"));
-      const base = STD_ON ? `https://${host && isOurHost(host) ? host : HTTPS_DOMAIN}` : `https://${HTTPS_DOMAIN}:${PORT}`;
+      const base = STD_ON ? `https://${host && isOurHost(host) ? host : HTTPS_DOMAIN}${portSfx("https")}` : `https://${HTTPS_DOMAIN}:${PORT}`;
       sock.end(`HTTP/1.1 301 Moved Permanently\r\nLocation: ${base}${p}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`);
       return;
     }
@@ -2508,9 +2645,9 @@ function jobRestore() {
   try {
     const j = JSON.parse(fs.readFileSync(JOB_FILE, "utf8"));
     if (!j || !j.steps) return;
-    if (!j.done && j.detached && ADDONS[j.addon] && (j.action === "install" || j.action === "update")) {
+    if (!j.done && j.detached && ((ADDONS[j.addon] && (j.action === "install" || j.action === "update")) || j.action === "selfupdate")) {
       const ad = ADDONS[j.addon];
-      const steps = ad.kind === "aplikasi" ? phpInstallSteps(j.addon, null, { update: j.action === "update" }) : ztInstallSteps();
+      const steps = j.action === "selfupdate" ? selfUpdateSteps() : ad.kind === "aplikasi" ? phpInstallSteps(j.addon, null, { update: j.action === "update" }) : j.action === "update" ? ztUpgradeSteps() : ztInstallSteps();
       j.resume = true;
       j.log = (j.log || []).concat(["", "== Panel ter-restart, menyambung lagi ke proses yang berjalan"]);
       logActivity(null, `${j.title} dilanjutkan`, "Panel ter-restart, proses dilanjutkan");
@@ -3194,6 +3331,33 @@ function ztInstallSteps() {
     },
   ];
 }
+// Perbarui ZeroTier lewat apt (repo resmi ZeroTier)
+function ztUpgradeSteps() {
+  return [
+    {
+      label: "Perbarui ZeroTier",
+      weight: 4,
+      run: async (job) => {
+        needrestartGuard();
+        const before = (await run("zerotier-cli", ["-v"])).out.trim();
+        const r = await runDetached(job, "ztup", 'echo "@@PROGRESS 20 apt-get update"\napt-get -o DPkg::Lock::Timeout=300 update -q\necho "@@PROGRESS 60 Memasang versi baru"\napt-get -o DPkg::Lock::Timeout=300 install -y -q --only-upgrade zerotier-one\nsystemctl restart zerotier-one', { timeoutMs: 15 * 60 * 1000 });
+        if (r.code !== 0) return { error: "Gagal memperbarui ZeroTier (lihat log)" };
+        await new Promise((z) => setTimeout(z, 3000));
+        const after = (await run("zerotier-cli", ["-v"])).out.trim();
+        return { detail: before === after ? `Sudah versi terbaru (${after})` : `${before} → ${after}` };
+      },
+    },
+    {
+      label: "Periksa controller",
+      run: async () => {
+        const st = await ztApi("GET", "/status");
+        if (!st.ok) return { error: "ZeroTier belum menjawab: " + st.error };
+        await checkUpdates().catch(() => {});
+        return { detail: `Node ${st.json.address} · versi ${st.json.version}` };
+      },
+    },
+  ];
+}
 // Pindahan dari ZTNET: salin nama perangkat ke panel, lalu lepas ZTNET (opsional PostgreSQL)
 function ztnetRemoveSteps(dropDb) {
   return [
@@ -3334,6 +3498,8 @@ async function addonList(d) {
       x.ztnet = fs.existsSync(ZTNET_DIR + "/.env");
       x.routers = d.sites.filter(isZt).length;
     }
+    const up = UPDATES && UPDATES.addons && UPDATES.addons[id];
+    if (st.installed && up && up.available) x.update = { latest: up.latest || "", behind: up.behind || 0, notes: up.notes || "" };
     out.push(x);
   }
   return out;
@@ -3464,7 +3630,7 @@ function handler80(sock) {
       sock.unshift(buf);
       return httpServer.emit("connection", sock);
     }
-    sock.end(`HTTP/1.1 301 Moved Permanently\r\nLocation: https://${host}${p}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`);
+    sock.end(`HTTP/1.1 301 Moved Permanently\r\nLocation: https://${host}${portSfx("https")}${p}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`);
   });
 }
 function handler443(sock) {
@@ -3482,21 +3648,43 @@ function listenPort(port, fn) {
     srv.listen(port, HOST, () => resolve({ srv }));
   });
 }
+// Port "alamat tanpa port": bawaan 80 (http) dan 443 (https), bisa diganti di Pengaturan
+const stdDef = (k) => (DRY_RUN ? (k === "https" ? STD_HTTPS : STD_HTTP) : k === "https" ? 443 : 80);
+function stdConf(d) {
+  const s = (d && d.settings) || {};
+  return { http: parseInt(s.stdHttp, 10) || stdDef("http"), https: parseInt(s.stdHttps, 10) || stdDef("https") };
+}
+let STD_PORTS = { http: 0, https: 0 }; // port yang sedang dipakai
+// ":port" di alamat bila bukan port standar
+const portSfx = (k) => (STD_PORTS[k] && STD_PORTS[k] !== stdDef(k) ? `:${STD_PORTS[k]}` : "");
+function stdPortCheck(d, http, https) {
+  for (const [k, v] of [["HTTP", http], ["HTTPS", https]]) {
+    if (!Number.isInteger(v) || v < 1 || v > 65535) return `Port ${k} harus angka 1-65535.`;
+    if (v === PORT) return `Port ${v} dipakai panel sendiri (cadangan).`;
+    const special = [22, 25, 53, 500, 1701, 3000, 4500, 5432, 7547, 7557, 7567, 9993, 27017];
+    if (special.includes(v)) return `Port ${v} dipakai layanan lain di VPS (SSH, VPN, GenieACS, database, atau ZeroTier).`;
+    if (v >= FWD_AUTO_START && v < FWD_AUTO_START + 5000 && usedPublicPorts(d).has(v)) return `Port ${v} sudah dipakai port forwarding router.`;
+  }
+  if (http === https) return "Port HTTP dan HTTPS tidak boleh sama.";
+  return null;
+}
 // Port 80/443 aktif secara bawaan; hanya mati bila admin mematikannya di Pengaturan
 function stdWanted(d) {
   return !(d && d.settings && d.settings.stdPorts === false);
 }
-async function stdPortsStart() {
+async function stdPortsStart(ports) {
   if (STD_ON) return { ok: true };
-  const a = await listenPort(DRY_RUN ? STD_HTTP : 80, handler80);
+  const P = ports || stdConf(loadData());
+  const a = await listenPort(P.http, handler80);
   if (a.error) return { error: a.error };
-  const b = await listenPort(DRY_RUN ? STD_HTTPS : 443, handler443);
+  const b = await listenPort(P.https, handler443);
   if (b.error) {
     a.srv.close();
     return { error: b.error };
   }
   std80 = a.srv;
   std443 = b.srv;
+  STD_PORTS = { http: P.http, https: P.https };
   STD_ON = true;
   STD_ERR = "";
   return { ok: true };
@@ -3505,13 +3693,15 @@ function stdPortsStop() {
   if (std80) std80.close();
   if (std443) std443.close();
   std80 = std443 = null;
+  STD_PORTS = { http: 0, https: 0 };
   STD_ON = false;
 }
 // Cek port 80/443 bisa dipakai, tanpa mengubah apa pun
-async function stdPortsProbe() {
-  if (STD_ON) return { ok: true };
+async function stdPortsProbe(ports) {
+  const P = ports || stdConf(loadData());
   const out = [];
-  for (const port of DRY_RUN ? [STD_HTTP, STD_HTTPS] : [80, 443]) {
+  for (const port of [P.http, P.https]) {
+    if (STD_ON && (port === STD_PORTS.http || port === STD_PORTS.https)) continue; // sedang dipakai panel sendiri
     const r = await listenPort(port, () => {});
     if (r.error) out.push(r.error);
     else await new Promise((z) => r.srv.close(z));
@@ -3541,14 +3731,16 @@ async function refreshSubUrls(d) {
   }
   return notes;
 }
-function stdOnSteps() {
+function stdOnSteps(want) {
+  // want: { http, https } port baru (opsional); bawaan dari pengaturan
+  const P = want || stdConf(loadData());
   return [
     {
-      label: "Periksa port 80 dan 443",
+      label: `Periksa port ${P.http} dan ${P.https}`,
       run: async () => {
-        const r = await stdPortsProbe();
-        if (r.error) return { error: r.error + ". Hentikan aplikasi itu (mis. nginx/apache) atau tetap pakai port " + PORT + "." };
-        return { detail: "Port kosong" };
+        const r = await stdPortsProbe(P);
+        if (r.error) return { error: r.error + ". Hentikan aplikasi itu (mis. nginx/apache) atau pilih port lain." };
+        return { detail: "Port bisa dipakai" };
       },
     },
     {
@@ -3565,12 +3757,20 @@ function stdOnSteps() {
       },
     },
     {
-      label: "Aktifkan port 80 dan 443",
+      label: `Aktifkan port ${P.http} dan ${P.https}`,
       run: async () => {
-        const r = await stdPortsStart();
-        if (r.error) return r;
+        const old = STD_ON ? Object.assign({}, STD_PORTS) : null;
+        if (STD_ON && (STD_PORTS.http !== P.http || STD_PORTS.https !== P.https)) stdPortsStop();
+        let r = await stdPortsStart(P);
+        if (r.error) {
+          if (old) await stdPortsStart(old); // kembali ke port lama
+          return r;
+        }
         const d = loadData();
         d.settings.stdPorts = true;
+        if (P.http === stdDef("http")) delete d.settings.stdHttp; else d.settings.stdHttp = P.http;
+        if (P.https === stdDef("https")) delete d.settings.stdHttps; else d.settings.stdHttps = P.https;
+        STD_ERR = "";
         const notes = await refreshSubUrls(d);
         saveData(d);
         return { detail: "Panel: " + panelPublicUrl(settings(d), d) + (notes.length ? " · " + notes.join(" · ") : "") };
@@ -3843,10 +4043,11 @@ async function handleApi(req, res, url) {
         autoPortStart: FWD_AUTO_START,
         reservedPorts: Array.from(RESERVED_PORTS),
         port: PORT,
-        stdPorts: { enabled: stdWanted(d), active: STD_ON, error: STD_ERR },
+        stdPorts: { enabled: stdWanted(d), active: STD_ON, error: STD_ERR, http: STD_ON ? STD_PORTS.http : stdConf(d).http, https: STD_ON ? STD_PORTS.https : stdConf(d).https, defHttp: stdDef("http"), defHttps: stdDef("https") },
         panelUrl: panelPublicUrl(st, d),
         addons: Object.fromEntries(Object.entries(ADDONS).map(([id, a]) => [id, { installed: addonInstalled(d, id), kind: a.kind, name: a.name, icon: a.icon, color: a.color || "blue", tagline: a.tagline || "", path: a.kind === "aplikasi" ? addonPath(d, id) : "" }])),
         version: VERSION,
+        updates: updateSummary(),
         panelName: st.brand,
         brandHistory: st.brands.filter((n) => n !== st.brand),
         timezone: tz,
@@ -4102,7 +4303,7 @@ async function handleApi(req, res, url) {
     if (!ADDON_JOB) return send(res, 200, { job: null });
     const j = ADDON_JOB;
     const now = Date.now();
-    return send(res, 200, { job: { id: j.id, addon: j.addon, title: j.title, pct: j.pct || 0, cur: j.cur, detail: j.detail || "", steps: j.steps, log: (j.log || []).slice(-120), done: !!j.done, ok: !!j.ok, error: j.error || "", interrupted: !!j.interrupted, elapsed: Math.round(((j.done ? j.finished || now : now) - (j.started || now)) / 1000), quiet: j.done ? 0 : Math.round((now - (j.lastOut || now)) / 1000) } });
+    return send(res, 200, { job: { id: j.id, addon: j.addon, action: j.action || "", title: j.title, pct: j.pct || 0, cur: j.cur, detail: j.detail || "", steps: j.steps, log: (j.log || []).slice(-120), done: !!j.done, ok: !!j.ok, error: j.error || "", interrupted: !!j.interrupted, elapsed: Math.round(((j.done ? j.finished || now : now) - (j.started || now)) / 1000), quiet: j.done ? 0 : Math.round((now - (j.lastOut || now)) / 1000) } });
   }
   const am = p.match(/^\/api\/addons\/([a-z-]+)(?:\/(install|update|remove|check))?$/);
   if (am && ADDONS[am[1]]) {
@@ -4146,7 +4347,7 @@ async function handleApi(req, res, url) {
       let label;
       if (action === "install" || action === "update") {
         if (action === "update" && !addonInstalled(d, id)) return send(res, 400, { error: "Add-on belum terpasang." });
-        steps = a.kind === "aplikasi" ? phpInstallSteps(id, req, { update: action === "update" }) : ztInstallSteps();
+        steps = a.kind === "aplikasi" ? phpInstallSteps(id, req, { update: action === "update" }) : action === "update" ? ztUpgradeSteps() : ztInstallSteps();
         label = action === "install" ? "dipasang" : "diperbarui";
       } else {
         steps = a.kind === "aplikasi" ? phpRemoveSteps(id, !!body.purge) : ztRemoveSteps(!!body.purge);
@@ -4160,12 +4361,36 @@ async function handleApi(req, res, url) {
       return send(res, 200, { ok: true, id: job.id });
     }
   }
+  // --- Pembaruan ---
+  if (p === "/api/updates" && method === "GET") {
+    if (url.searchParams.get("refresh") === "1" || !UPDATES) await checkUpdates();
+    return send(res, 200, Object.assign({}, UPDATES, { canSelfUpdate: !!sourceDir(), version: VERSION }));
+  }
+  if (p === "/api/updates/panel" && method === "POST") {
+    if (ADDON_JOB && !ADDON_JOB.done) return send(res, 409, { error: `Masih ada proses berjalan: ${ADDON_JOB.title}. Tunggu sampai selesai.` });
+    if (!sourceDir()) return send(res, 400, { error: "Folder repo tidak diketahui. Perbarui sekali lewat SSH: cd /root/acs-netmap-panel && git pull && bash install-vpn-acs.sh" });
+    const job = { id: crypto.randomBytes(6).toString("hex"), addon: "", action: "selfupdate", title: "Panel diperbarui", log: [], steps: [], pct: 0, req, created: Date.now() };
+    runJob(job, selfUpdateSteps()).catch((e) => {
+      job.done = true;
+      job.error = e.message;
+    });
+    return send(res, 200, { ok: true, id: job.id });
+  }
   // --- Port standar 80/443 ---
   if (p === "/api/stdports" && method === "POST") {
     if (ADDON_JOB && !ADDON_JOB.done) return send(res, 409, { error: `Masih ada proses berjalan: ${ADDON_JOB.title}. Tunggu sampai selesai.` });
     const on = !!body.enable;
-    const job = { id: crypto.randomBytes(6).toString("hex"), addon: "", action: on ? "on" : "off", title: on ? "Port 80/443 diaktifkan" : "Port 80/443 dimatikan", log: [], steps: [], pct: 0, req, created: Date.now() };
-    runJob(job, on ? stdOnSteps() : stdOffSteps()).catch((e) => {
+    let want = null;
+    if (on && (body.http !== undefined || body.https !== undefined)) {
+      const d0 = loadData();
+      const cur = stdConf(d0);
+      want = { http: body.http === undefined || body.http === "" ? cur.http : parseInt(body.http, 10), https: body.https === undefined || body.https === "" ? cur.https : parseInt(body.https, 10) };
+      const bad = stdPortCheck(d0, want.http, want.https);
+      if (bad) return send(res, 400, { error: bad });
+    }
+    const tt = want ? `Port panel ${want.http}/${want.https}` : "Port standar";
+    const job = { id: crypto.randomBytes(6).toString("hex"), addon: "", action: on ? "on" : "off", title: on ? `${tt} diaktifkan` : "Port standar dimatikan", log: [], steps: [], pct: 0, req, created: Date.now() };
+    runJob(job, on ? stdOnSteps(want) : stdOffSteps()).catch((e) => {
       job.done = true;
       job.error = e.message;
     });
@@ -4807,6 +5032,8 @@ if (process.argv[2] === "--set-password") {
     }
   }, 60 * 1000);
   setInterval(certReloadCheck, 3600 * 1000);
+  setTimeout(() => checkUpdates().catch(() => {}), 2 * 60 * 1000);
+  setInterval(() => checkUpdates().catch(() => {}), 12 * 3600 * 1000);
   needrestartGuard();
   jobRestore();
   httpServer.on("upgrade", onUpgrade);
@@ -4816,9 +5043,9 @@ if (process.argv[2] === "--set-password") {
     stdPortsStart().then((r) => {
       if (r.error) {
         STD_ERR = r.error;
-        logActivity(null, "Port 80/443 gagal", r.error + ". Panel tetap di port " + PORT);
-        console.error("Port 80/443 tidak bisa dipakai:", r.error, "- panel tetap di port", PORT);
-      } else console.log("Panel juga berjalan di port 80 dan 443");
+        logActivity(null, "Port standar gagal", r.error + ". Panel tetap di port " + PORT);
+        console.error("Port standar tidak bisa dipakai:", r.error, "- panel tetap di port", PORT);
+      } else console.log(`Panel juga berjalan di port ${STD_PORTS.http} dan ${STD_PORTS.https}`);
     });
   }
 }

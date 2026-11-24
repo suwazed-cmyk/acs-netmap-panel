@@ -194,7 +194,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.2.0";
+const VERSION = "2.3.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -721,8 +721,8 @@ function ensureJoinKey(site) {
 function panelPublicUrl(st, d) {
   const cf = d && d.settings && d.settings.cloudflare;
   const std = STD_ON;
-  if (cf && cf.https && cf.domain) return std ? `https://${cf.domain}` : `https://${cf.domain}:${PORT}`;
-  return st.publicIp ? (std ? `http://${st.publicIp}` : `http://${st.publicIp}:${PORT}`) : "";
+  if (cf && cf.https && cf.domain) return std ? `https://${cf.domain}${portSfx("https")}` : `https://${cf.domain}:${PORT}`;
+  return st.publicIp ? (std ? `http://${st.publicIp}${portSfx("http")}` : `http://${st.publicIp}:${PORT}`) : "";
 }
 function mikrotikScriptZt(s, st) {
   const c = st.brand;
@@ -2349,8 +2349,8 @@ const SUB_SERVICES = {
   acs: { label: "GenieACS", port: () => readGenieUiPort() || 3000, def: "acs" },
 };
 function subUrl(svc, host) {
-  if (STD_ON && HTTPS_ON) return `https://${host}`;
-  if (STD_ON) return `http://${host}`;
+  if (STD_ON && HTTPS_ON) return `https://${host}${portSfx("https")}`;
+  if (STD_ON) return `http://${host}${portSfx("http")}`;
   return `http://${host}:${SUB_SERVICES[svc].port()}`;
 }
 // Buat / perbarui record A (DNS only) untuk satu nama host
@@ -2462,6 +2462,143 @@ async function cfRollbackSub(job) {
 }
 
 // =====================================================================
+//  Pembaruan: panel (repo GitHub) dan add-on (git / apt)
+// =====================================================================
+const UPDATE_REPO = process.env.VPNACS_UPDATE_REPO || "suwazed-cmyk/acs-netmap-panel";
+const UPDATE_RAW = process.env.VPNACS_UPDATE_RAW || `https://raw.githubusercontent.com/${UPDATE_REPO}/main/panel/server.js`;
+const SOURCE_DIR_FILE = path.dirname(DATA_FILE) + "/source-dir";
+const UPDATE_FILE = path.dirname(DATA_FILE) + "/update-cache.json";
+let UPDATES = null;
+try {
+  UPDATES = JSON.parse(fs.readFileSync(UPDATE_FILE, "utf8"));
+} catch (e) {
+  UPDATES = null;
+}
+function verCmp(a, b) {
+  const pa = String(a).split(".").map((x) => parseInt(x, 10) || 0), pb = String(b).split(".").map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < 3; i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0) ? 1 : -1;
+  return 0;
+}
+// Folder repo tempat installer dijalankan (ditulis install-vpn-acs.sh)
+function sourceDir() {
+  try {
+    const d = fs.readFileSync(SOURCE_DIR_FILE, "utf8").trim();
+    return d && fs.existsSync(d + "/install-vpn-acs.sh") ? d : "";
+  } catch (e) {
+    return "";
+  }
+}
+async function checkPanelUpdate() {
+  const out = { current: VERSION, latest: "", available: false, error: "", notes: "", date: "" };
+  const r = await httpJson("GET", UPDATE_RAW, null, { Range: "bytes=0-6000", Accept: "text/plain" }, 15000);
+  const m = r.text && r.text.match(/const VERSION = "([\d.]+)"/);
+  if (!m) {
+    out.error = r.status ? `GitHub menjawab HTTP ${r.status}` : `Tidak bisa menghubungi GitHub (${r.error || "?"})`;
+    return out;
+  }
+  out.latest = m[1];
+  out.available = verCmp(out.latest, VERSION) > 0;
+  if (out.available) {
+    const c = await httpJson("GET", `https://api.github.com/repos/${UPDATE_REPO}/commits/main`, null, {}, 15000);
+    if (c.json && c.json.commit) {
+      out.notes = String(c.json.commit.message || "").split("\n")[0].slice(0, 160);
+      out.date = (c.json.commit.committer && c.json.commit.committer.date) || "";
+    }
+  }
+  return out;
+}
+async function checkAddonUpdate(id) {
+  const a = ADDONS[id];
+  if (a.kind === "aplikasi") {
+    const dir = addonDir(id);
+    if (!fs.existsSync(dir + "/.git")) return { available: false };
+    const f = await run("git", ["-C", dir, "fetch", "-q", "origin"], 30000);
+    if (f.code !== 0) return { available: false, error: "git fetch gagal" };
+    const n = await run("git", ["-C", dir, "rev-list", "--count", "HEAD..@{u}"]);
+    const behind = parseInt(n.out.trim(), 10) || 0;
+    const cur = (await run("git", ["-C", dir, "log", "-1", "--format=%h %cs"])).out.trim();
+    if (!behind) return { available: false, current: cur };
+    const up = (await run("git", ["-C", dir, "log", "-1", "--format=%h %cs|%s", "@{u}"])).out.trim().split("|");
+    return { available: true, behind, current: cur, latest: up[0] || "", notes: (up[1] || "").slice(0, 160) };
+  }
+  // ZeroTier: versi terpasang vs versi yang tersedia di apt
+  const pol = await run("apt-cache", ["policy", "zerotier-one"]);
+  const inst = (pol.out.match(/Installed:\s*(\S+)/) || [])[1] || "";
+  const cand = (pol.out.match(/Candidate:\s*(\S+)/) || [])[1] || "";
+  if (!inst || inst === "(none)" || !cand || cand === "(none)") return { available: false };
+  return { available: inst !== cand, current: inst, latest: cand };
+}
+async function checkUpdates() {
+  const d = loadData();
+  const out = { checkedAt: Date.now(), panel: await checkPanelUpdate(), addons: {} };
+  for (const id of Object.keys(ADDONS)) {
+    if (!addonInstalled(d, id)) continue;
+    try {
+      out.addons[id] = await checkAddonUpdate(id);
+    } catch (e) {
+      out.addons[id] = { available: false, error: e.message };
+    }
+  }
+  UPDATES = out;
+  try {
+    fs.writeFileSync(UPDATE_FILE, JSON.stringify(out));
+  } catch (e) {
+    // abaikan
+  }
+  return out;
+}
+function updateSummary() {
+  const U = UPDATES || {};
+  const addons = Object.entries(U.addons || {}).filter(([, x]) => x && x.available).map(([id]) => id);
+  return { checkedAt: U.checkedAt || 0, panel: !!(U.panel && U.panel.available), latest: (U.panel && U.panel.latest) || "", addons };
+}
+// Perbarui panel: git pull di folder repo lalu jalankan ulang installer (panel ikut di-restart)
+function selfUpdateSteps() {
+  return [
+    {
+      label: "Periksa folder repo",
+      run: async (job) => {
+        const src = sourceDir();
+        if (!src) return { error: "Folder repo tidak diketahui. Perbarui sekali lewat SSH: cd /root/acs-netmap-panel && git pull && bash install-vpn-acs.sh" };
+        job.src = src;
+        const st = await run("git", ["-C", src, "status", "--porcelain", "--untracked-files=no"]);
+        if (st.out.trim()) jobLog("Berkas yang diubah manual di repo:\n" + st.out.trim());
+        return { detail: src };
+      },
+    },
+    {
+      label: "Unduh versi terbaru",
+      weight: 2,
+      run: async (job) => {
+        const src = job.src || sourceDir();
+        const r = await runStream("git", ["-C", src, "pull", "--ff-only"], { timeoutMs: 5 * 60 * 1000 });
+        if (r.code !== 0) return { error: `git pull gagal (lihat log). Jika ada berkas yang diubah manual, kembalikan dulu: cd ${src} && git checkout -- .` };
+        const h = await run("git", ["-C", src, "log", "-1", "--format=%h %cs"]);
+        return { detail: "Versi " + h.out.trim() };
+      },
+    },
+    {
+      label: "Pasang ulang panel",
+      weight: 4,
+      run: async (job) => {
+        const src = job.src || sourceDir();
+        // Panel ikut di-restart oleh installer; proses tetap jalan dan panel menyambung lagi setelah menyala
+        const r = await runDetached(job, "selfupdate", `cd '${src.replace(/'/g, "")}' && bash install-vpn-acs.sh`, { timeoutMs: 20 * 60 * 1000 });
+        if (r.code !== 0) return { error: "Installer gagal (lihat log)." };
+        return { detail: "Installer selesai" };
+      },
+    },
+    {
+      label: "Selesai",
+      run: async () => {
+        await checkUpdates().catch(() => {});
+        return { detail: `Panel versi ${VERSION}. Muat ulang halaman (Ctrl+F5).` };
+      },
+    },
+  ];
+}
+
+// =====================================================================
 //  HTTPS panel: satu port untuk http & https
 //  - HTTPS aktif: koneksi TLS diteruskan ke router https internal,
 //    permintaan http biasa diarahkan (301) ke https://domain:PORT
@@ -2528,7 +2665,7 @@ function frontHandler(sock) {
         return httpServer.emit("connection", sock);
       }
       const host = hostOf(buf.toString("latin1"));
-      const base = STD_ON ? `https://${host && isOurHost(host) ? host : HTTPS_DOMAIN}` : `https://${HTTPS_DOMAIN}:${PORT}`;
+      const base = STD_ON ? `https://${host && isOurHost(host) ? host : HTTPS_DOMAIN}${portSfx("https")}` : `https://${HTTPS_DOMAIN}:${PORT}`;
       sock.end(`HTTP/1.1 301 Moved Permanently\r\nLocation: ${base}${p}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`);
       return;
     }
@@ -2651,9 +2788,9 @@ function jobRestore() {
   try {
     const j = JSON.parse(fs.readFileSync(JOB_FILE, "utf8"));
     if (!j || !j.steps) return;
-    if (!j.done && j.detached && ADDONS[j.addon] && (j.action === "install" || j.action === "update")) {
+    if (!j.done && j.detached && ((ADDONS[j.addon] && (j.action === "install" || j.action === "update")) || j.action === "selfupdate")) {
       const ad = ADDONS[j.addon];
-      const steps = ad.kind === "aplikasi" ? phpInstallSteps(j.addon, null, { update: j.action === "update" }) : ztInstallSteps();
+      const steps = j.action === "selfupdate" ? selfUpdateSteps() : ad.kind === "aplikasi" ? phpInstallSteps(j.addon, null, { update: j.action === "update" }) : j.action === "update" ? ztUpgradeSteps() : ztInstallSteps();
       j.resume = true;
       j.log = (j.log || []).concat(["", "== Panel ter-restart, menyambung lagi ke proses yang berjalan"]);
       logActivity(null, `${j.title} dilanjutkan`, "Panel ter-restart, proses dilanjutkan");
@@ -3337,6 +3474,33 @@ function ztInstallSteps() {
     },
   ];
 }
+// Perbarui ZeroTier lewat apt (repo resmi ZeroTier)
+function ztUpgradeSteps() {
+  return [
+    {
+      label: "Perbarui ZeroTier",
+      weight: 4,
+      run: async (job) => {
+        needrestartGuard();
+        const before = (await run("zerotier-cli", ["-v"])).out.trim();
+        const r = await runDetached(job, "ztup", 'echo "@@PROGRESS 20 apt-get update"\napt-get -o DPkg::Lock::Timeout=300 update -q\necho "@@PROGRESS 60 Memasang versi baru"\napt-get -o DPkg::Lock::Timeout=300 install -y -q --only-upgrade zerotier-one\nsystemctl restart zerotier-one', { timeoutMs: 15 * 60 * 1000 });
+        if (r.code !== 0) return { error: "Gagal memperbarui ZeroTier (lihat log)" };
+        await new Promise((z) => setTimeout(z, 3000));
+        const after = (await run("zerotier-cli", ["-v"])).out.trim();
+        return { detail: before === after ? `Sudah versi terbaru (${after})` : `${before} → ${after}` };
+      },
+    },
+    {
+      label: "Periksa controller",
+      run: async () => {
+        const st = await ztApi("GET", "/status");
+        if (!st.ok) return { error: "ZeroTier belum menjawab: " + st.error };
+        await checkUpdates().catch(() => {});
+        return { detail: `Node ${st.json.address} · versi ${st.json.version}` };
+      },
+    },
+  ];
+}
 // Pindahan dari ZTNET: salin nama perangkat ke panel, lalu lepas ZTNET (opsional PostgreSQL)
 function ztnetRemoveSteps(dropDb) {
   return [
@@ -3477,6 +3641,8 @@ async function addonList(d) {
       x.ztnet = fs.existsSync(ZTNET_DIR + "/.env");
       x.routers = d.sites.filter(isZt).length;
     }
+    const up = UPDATES && UPDATES.addons && UPDATES.addons[id];
+    if (st.installed && up && up.available) x.update = { latest: up.latest || "", behind: up.behind || 0, notes: up.notes || "" };
     out.push(x);
   }
   return out;
@@ -3607,7 +3773,7 @@ function handler80(sock) {
       sock.unshift(buf);
       return httpServer.emit("connection", sock);
     }
-    sock.end(`HTTP/1.1 301 Moved Permanently\r\nLocation: https://${host}${p}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`);
+    sock.end(`HTTP/1.1 301 Moved Permanently\r\nLocation: https://${host}${portSfx("https")}${p}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`);
   });
 }
 function handler443(sock) {
@@ -3625,21 +3791,43 @@ function listenPort(port, fn) {
     srv.listen(port, HOST, () => resolve({ srv }));
   });
 }
+// Port "alamat tanpa port": bawaan 80 (http) dan 443 (https), bisa diganti di Pengaturan
+const stdDef = (k) => (DRY_RUN ? (k === "https" ? STD_HTTPS : STD_HTTP) : k === "https" ? 443 : 80);
+function stdConf(d) {
+  const s = (d && d.settings) || {};
+  return { http: parseInt(s.stdHttp, 10) || stdDef("http"), https: parseInt(s.stdHttps, 10) || stdDef("https") };
+}
+let STD_PORTS = { http: 0, https: 0 }; // port yang sedang dipakai
+// ":port" di alamat bila bukan port standar
+const portSfx = (k) => (STD_PORTS[k] && STD_PORTS[k] !== stdDef(k) ? `:${STD_PORTS[k]}` : "");
+function stdPortCheck(d, http, https) {
+  for (const [k, v] of [["HTTP", http], ["HTTPS", https]]) {
+    if (!Number.isInteger(v) || v < 1 || v > 65535) return `Port ${k} harus angka 1-65535.`;
+    if (v === PORT) return `Port ${v} dipakai panel sendiri (cadangan).`;
+    const special = [22, 25, 53, 500, 1701, 3000, 4500, 5432, 7547, 7557, 7567, 9993, 27017];
+    if (special.includes(v)) return `Port ${v} dipakai layanan lain di VPS (SSH, VPN, GenieACS, database, atau ZeroTier).`;
+    if (v >= FWD_AUTO_START && v < FWD_AUTO_START + 5000 && usedPublicPorts(d).has(v)) return `Port ${v} sudah dipakai port forwarding router.`;
+  }
+  if (http === https) return "Port HTTP dan HTTPS tidak boleh sama.";
+  return null;
+}
 // Port 80/443 aktif secara bawaan; hanya mati bila admin mematikannya di Pengaturan
 function stdWanted(d) {
   return !(d && d.settings && d.settings.stdPorts === false);
 }
-async function stdPortsStart() {
+async function stdPortsStart(ports) {
   if (STD_ON) return { ok: true };
-  const a = await listenPort(DRY_RUN ? STD_HTTP : 80, handler80);
+  const P = ports || stdConf(loadData());
+  const a = await listenPort(P.http, handler80);
   if (a.error) return { error: a.error };
-  const b = await listenPort(DRY_RUN ? STD_HTTPS : 443, handler443);
+  const b = await listenPort(P.https, handler443);
   if (b.error) {
     a.srv.close();
     return { error: b.error };
   }
   std80 = a.srv;
   std443 = b.srv;
+  STD_PORTS = { http: P.http, https: P.https };
   STD_ON = true;
   STD_ERR = "";
   return { ok: true };
@@ -3648,13 +3836,15 @@ function stdPortsStop() {
   if (std80) std80.close();
   if (std443) std443.close();
   std80 = std443 = null;
+  STD_PORTS = { http: 0, https: 0 };
   STD_ON = false;
 }
 // Cek port 80/443 bisa dipakai, tanpa mengubah apa pun
-async function stdPortsProbe() {
-  if (STD_ON) return { ok: true };
+async function stdPortsProbe(ports) {
+  const P = ports || stdConf(loadData());
   const out = [];
-  for (const port of DRY_RUN ? [STD_HTTP, STD_HTTPS] : [80, 443]) {
+  for (const port of [P.http, P.https]) {
+    if (STD_ON && (port === STD_PORTS.http || port === STD_PORTS.https)) continue; // sedang dipakai panel sendiri
     const r = await listenPort(port, () => {});
     if (r.error) out.push(r.error);
     else await new Promise((z) => r.srv.close(z));
@@ -3684,14 +3874,16 @@ async function refreshSubUrls(d) {
   }
   return notes;
 }
-function stdOnSteps() {
+function stdOnSteps(want) {
+  // want: { http, https } port baru (opsional); bawaan dari pengaturan
+  const P = want || stdConf(loadData());
   return [
     {
-      label: "Periksa port 80 dan 443",
+      label: `Periksa port ${P.http} dan ${P.https}`,
       run: async () => {
-        const r = await stdPortsProbe();
-        if (r.error) return { error: r.error + ". Hentikan aplikasi itu (mis. nginx/apache) atau tetap pakai port " + PORT + "." };
-        return { detail: "Port kosong" };
+        const r = await stdPortsProbe(P);
+        if (r.error) return { error: r.error + ". Hentikan aplikasi itu (mis. nginx/apache) atau pilih port lain." };
+        return { detail: "Port bisa dipakai" };
       },
     },
     {
@@ -3708,12 +3900,20 @@ function stdOnSteps() {
       },
     },
     {
-      label: "Aktifkan port 80 dan 443",
+      label: `Aktifkan port ${P.http} dan ${P.https}`,
       run: async () => {
-        const r = await stdPortsStart();
-        if (r.error) return r;
+        const old = STD_ON ? Object.assign({}, STD_PORTS) : null;
+        if (STD_ON && (STD_PORTS.http !== P.http || STD_PORTS.https !== P.https)) stdPortsStop();
+        let r = await stdPortsStart(P);
+        if (r.error) {
+          if (old) await stdPortsStart(old); // kembali ke port lama
+          return r;
+        }
         const d = loadData();
         d.settings.stdPorts = true;
+        if (P.http === stdDef("http")) delete d.settings.stdHttp; else d.settings.stdHttp = P.http;
+        if (P.https === stdDef("https")) delete d.settings.stdHttps; else d.settings.stdHttps = P.https;
+        STD_ERR = "";
         const notes = await refreshSubUrls(d);
         saveData(d);
         return { detail: "Panel: " + panelPublicUrl(settings(d), d) + (notes.length ? " · " + notes.join(" · ") : "") };
@@ -3986,10 +4186,11 @@ async function handleApi(req, res, url) {
         autoPortStart: FWD_AUTO_START,
         reservedPorts: Array.from(RESERVED_PORTS),
         port: PORT,
-        stdPorts: { enabled: stdWanted(d), active: STD_ON, error: STD_ERR },
+        stdPorts: { enabled: stdWanted(d), active: STD_ON, error: STD_ERR, http: STD_ON ? STD_PORTS.http : stdConf(d).http, https: STD_ON ? STD_PORTS.https : stdConf(d).https, defHttp: stdDef("http"), defHttps: stdDef("https") },
         panelUrl: panelPublicUrl(st, d),
         addons: Object.fromEntries(Object.entries(ADDONS).map(([id, a]) => [id, { installed: addonInstalled(d, id), kind: a.kind, name: a.name, icon: a.icon, color: a.color || "blue", tagline: a.tagline || "", path: a.kind === "aplikasi" ? addonPath(d, id) : "" }])),
         version: VERSION,
+        updates: updateSummary(),
         panelName: st.brand,
         brandHistory: st.brands.filter((n) => n !== st.brand),
         timezone: tz,
@@ -4245,7 +4446,7 @@ async function handleApi(req, res, url) {
     if (!ADDON_JOB) return send(res, 200, { job: null });
     const j = ADDON_JOB;
     const now = Date.now();
-    return send(res, 200, { job: { id: j.id, addon: j.addon, title: j.title, pct: j.pct || 0, cur: j.cur, detail: j.detail || "", steps: j.steps, log: (j.log || []).slice(-120), done: !!j.done, ok: !!j.ok, error: j.error || "", interrupted: !!j.interrupted, elapsed: Math.round(((j.done ? j.finished || now : now) - (j.started || now)) / 1000), quiet: j.done ? 0 : Math.round((now - (j.lastOut || now)) / 1000) } });
+    return send(res, 200, { job: { id: j.id, addon: j.addon, action: j.action || "", title: j.title, pct: j.pct || 0, cur: j.cur, detail: j.detail || "", steps: j.steps, log: (j.log || []).slice(-120), done: !!j.done, ok: !!j.ok, error: j.error || "", interrupted: !!j.interrupted, elapsed: Math.round(((j.done ? j.finished || now : now) - (j.started || now)) / 1000), quiet: j.done ? 0 : Math.round((now - (j.lastOut || now)) / 1000) } });
   }
   const am = p.match(/^\/api\/addons\/([a-z-]+)(?:\/(install|update|remove|check))?$/);
   if (am && ADDONS[am[1]]) {
@@ -4289,7 +4490,7 @@ async function handleApi(req, res, url) {
       let label;
       if (action === "install" || action === "update") {
         if (action === "update" && !addonInstalled(d, id)) return send(res, 400, { error: "Add-on belum terpasang." });
-        steps = a.kind === "aplikasi" ? phpInstallSteps(id, req, { update: action === "update" }) : ztInstallSteps();
+        steps = a.kind === "aplikasi" ? phpInstallSteps(id, req, { update: action === "update" }) : action === "update" ? ztUpgradeSteps() : ztInstallSteps();
         label = action === "install" ? "dipasang" : "diperbarui";
       } else {
         steps = a.kind === "aplikasi" ? phpRemoveSteps(id, !!body.purge) : ztRemoveSteps(!!body.purge);
@@ -4303,12 +4504,36 @@ async function handleApi(req, res, url) {
       return send(res, 200, { ok: true, id: job.id });
     }
   }
+  // --- Pembaruan ---
+  if (p === "/api/updates" && method === "GET") {
+    if (url.searchParams.get("refresh") === "1" || !UPDATES) await checkUpdates();
+    return send(res, 200, Object.assign({}, UPDATES, { canSelfUpdate: !!sourceDir(), version: VERSION }));
+  }
+  if (p === "/api/updates/panel" && method === "POST") {
+    if (ADDON_JOB && !ADDON_JOB.done) return send(res, 409, { error: `Masih ada proses berjalan: ${ADDON_JOB.title}. Tunggu sampai selesai.` });
+    if (!sourceDir()) return send(res, 400, { error: "Folder repo tidak diketahui. Perbarui sekali lewat SSH: cd /root/acs-netmap-panel && git pull && bash install-vpn-acs.sh" });
+    const job = { id: crypto.randomBytes(6).toString("hex"), addon: "", action: "selfupdate", title: "Panel diperbarui", log: [], steps: [], pct: 0, req, created: Date.now() };
+    runJob(job, selfUpdateSteps()).catch((e) => {
+      job.done = true;
+      job.error = e.message;
+    });
+    return send(res, 200, { ok: true, id: job.id });
+  }
   // --- Port standar 80/443 ---
   if (p === "/api/stdports" && method === "POST") {
     if (ADDON_JOB && !ADDON_JOB.done) return send(res, 409, { error: `Masih ada proses berjalan: ${ADDON_JOB.title}. Tunggu sampai selesai.` });
     const on = !!body.enable;
-    const job = { id: crypto.randomBytes(6).toString("hex"), addon: "", action: on ? "on" : "off", title: on ? "Port 80/443 diaktifkan" : "Port 80/443 dimatikan", log: [], steps: [], pct: 0, req, created: Date.now() };
-    runJob(job, on ? stdOnSteps() : stdOffSteps()).catch((e) => {
+    let want = null;
+    if (on && (body.http !== undefined || body.https !== undefined)) {
+      const d0 = loadData();
+      const cur = stdConf(d0);
+      want = { http: body.http === undefined || body.http === "" ? cur.http : parseInt(body.http, 10), https: body.https === undefined || body.https === "" ? cur.https : parseInt(body.https, 10) };
+      const bad = stdPortCheck(d0, want.http, want.https);
+      if (bad) return send(res, 400, { error: bad });
+    }
+    const tt = want ? `Port panel ${want.http}/${want.https}` : "Port standar";
+    const job = { id: crypto.randomBytes(6).toString("hex"), addon: "", action: on ? "on" : "off", title: on ? `${tt} diaktifkan` : "Port standar dimatikan", log: [], steps: [], pct: 0, req, created: Date.now() };
+    runJob(job, on ? stdOnSteps(want) : stdOffSteps()).catch((e) => {
       job.done = true;
       job.error = e.message;
     });
@@ -4950,6 +5175,8 @@ if (process.argv[2] === "--set-password") {
     }
   }, 60 * 1000);
   setInterval(certReloadCheck, 3600 * 1000);
+  setTimeout(() => checkUpdates().catch(() => {}), 2 * 60 * 1000);
+  setInterval(() => checkUpdates().catch(() => {}), 12 * 3600 * 1000);
   needrestartGuard();
   jobRestore();
   httpServer.on("upgrade", onUpgrade);
@@ -4959,9 +5186,9 @@ if (process.argv[2] === "--set-password") {
     stdPortsStart().then((r) => {
       if (r.error) {
         STD_ERR = r.error;
-        logActivity(null, "Port 80/443 gagal", r.error + ". Panel tetap di port " + PORT);
-        console.error("Port 80/443 tidak bisa dipakai:", r.error, "- panel tetap di port", PORT);
-      } else console.log("Panel juga berjalan di port 80 dan 443");
+        logActivity(null, "Port standar gagal", r.error + ". Panel tetap di port " + PORT);
+        console.error("Port standar tidak bisa dipakai:", r.error, "- panel tetap di port", PORT);
+      } else console.log(`Panel juga berjalan di port ${STD_PORTS.http} dan ${STD_PORTS.https}`);
     });
   }
 }
@@ -5343,13 +5570,17 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .ad-info dt{width:130px;flex:none;color:var(--muted)}
   .ad-info dd{margin:0;min-width:0;word-break:break-word}
   .ad-mf{display:flex;align-items:center;gap:8px;width:100%;flex-wrap:wrap}
+  .ad-upd{display:flex;gap:8px;align-items:flex-start;margin:-4px 18px 14px;padding:9px 12px;border-radius:var(--r-sm);background:var(--primary-soft);color:var(--primary);font-size:12.5px;line-height:1.45}
+  .ad-upd svg{width:15px;height:15px;flex:none;margin-top:1px}
+  .ad-acts{gap:8px}
+  .upd-dot{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:99px;background:#f59e0b;color:#111;font-weight:600;font-size:10.5px;text-decoration:none}
   .dapps{list-style:none;margin:0;padding:4px 0}
   .dapps li{display:flex;align-items:center;gap:12px;padding:10px 20px}
   .dapps li+li{border-top:1px solid var(--line)}
   .dapps .grow{flex:1;min-width:0}
   .dapps b{display:block;font-weight:600;font-size:13.5px}
   .dapps small{display:block;color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  @media (max-width:720px){.ad-acts{width:100%}.ad-search{width:100%}.ad-feat{grid-template-columns:1fr}.ad-info dt{width:100px}.ad-row .pill{display:none}}
+  @media (max-width:720px){.ad-acts{width:100%;flex-wrap:wrap}.ad-search{width:100%}.ad-feat{grid-template-columns:1fr}.ad-info dt{width:100px}.ad-row .pill{display:none}}
   .nav .nav-ext{margin-left:auto;opacity:.55;display:inline-flex}
   .nav .nav-ext svg{width:13px;height:13px}
   /* Stepper tes */
@@ -5683,6 +5914,7 @@ const ICONS = {
   box: '<path d="M21 8l-9-5-9 5v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
   puzzle: '<path d="M10 3h4v3a2 2 0 1 0 4 0V6h3v5h-3a2 2 0 1 0 0 4h3v6h-5v-3a2 2 0 1 0-4 0v3H4v-6h3a2 2 0 1 0 0-4H4V6h6z"/>',
   wallet: '<rect x="3" y="6" width="18" height="14" rx="2"/><path d="M3 10h18"/><path d="M16 15h2"/><path d="M6 6V5a2 2 0 0 1 2-2h9"/>',
+  dl: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
   qr: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM21 14v.01M14 21h.01M17 21h4v-4"/>',
   hub: '<circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M12 7.2v4.3M12 11.5l-5.5 4.6M12 11.5l5.5 4.6"/>',
   bolt: '<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',
@@ -5779,7 +6011,12 @@ function modal(title, body, footer, opts = {}) {
   $("#mbg").addEventListener("mousedown", (e) => { if (e.target.id === "mbg") closeModal(); });
   const f = $("#modalRoot input:not([readonly]):not([type=radio]):not([type=checkbox])"); if (f) f.focus();
 }
-function closeModal() { $("#modalRoot").innerHTML = ""; if (TEST && !TEST.keep) TEST = null; }
+// Halaman yang perlu dimuat ulang setelah proses selesai, ditunda sampai jendela ditutup
+let ROUTE_AFTER_CLOSE = false;
+function closeModal() {
+  $("#modalRoot").innerHTML = ""; if (TEST && !TEST.keep) TEST = null;
+  if (ROUTE_AFTER_CLOSE) { ROUTE_AFTER_CLOSE = false; setTimeout(route, 0); }
+}
 function busyBtn(btn, on) {
   if (!btn) return;
   if (on) { btn.dataset.html = btn.innerHTML; btn.disabled = true; btn.innerHTML = `<span class="spin"></span>${btn.textContent.trim()}`; }
@@ -5833,7 +6070,9 @@ $("#loginForm").addEventListener("submit", async (e) => {
 async function load() {
   STATE = await api("/api/overview");
   LOADED = true;
-  $("#ver").textContent = STATE.settings.version ? "v" + STATE.settings.version : "";
+  const U = STATE.settings.updates || {};
+  const nUp = (U.panel ? 1 : 0) + (U.addons || []).length;
+  $("#ver").innerHTML = (STATE.settings.version ? "v" + esc(STATE.settings.version) : "") + (nUp ? ` <a class="upd-dot" href="${U.panel ? "#/pengaturan/umum" : "#/addon"}" title="${nUp} pembaruan tersedia">${nUp} pembaruan</a>` : "");
   setBrand(STATE.settings.panelName);
   const A = STATE.settings.addons || {};
   $("#navZt").classList.toggle("hidden", !(A.zerotier && A.zerotier.installed));
@@ -5851,7 +6090,7 @@ function topWarn(parts) {
   if (!st.defaultPassword) { el.innerHTML = ""; return; }
   const P = st.stdPorts || {};
   const onSet = parts[0] === "pengaturan" && (!parts[1] || parts[1] === "umum");
-  el.innerHTML = `<div class="note bad">${ic("alert")}<div><b>Password admin masih bawaan (Admin123)</b>${P.active ? "Panel terbuka di port 80/443 sehingga mudah ditemukan orang. " : ""}Siapa pun yang mencoba Admin123 bisa masuk dan mengubah router Anda. Segera ganti password.</div>${onSet ? "" : `<a class="btn pri" href="#/pengaturan/umum">Ganti password</a>`}</div>`;
+  el.innerHTML = `<div class="note bad">${ic("alert")}<div><b>Password admin masih bawaan (Admin123)</b>${P.active ? "Panel terbuka di port web standar sehingga mudah ditemukan orang. " : ""}Siapa pun yang mencoba Admin123 bisa masuk dan mengubah router Anda. Segera ganti password.</div>${onSet ? "" : `<a class="btn pri" href="#/pengaturan/umum">Ganti password</a>`}</div>`;
 }
 function route() {
   if (!LOADED) return;
@@ -5917,6 +6156,9 @@ function issues() {
   for (const x of STATE.sites) {
     if (x.inGenie === false) list.push({ t: `${x.name}: IP virtual di luar patch GenieACS`, d: `${x.virtualSubnet} tidak dikenali GenieACS, Summon akan gagal.`, go: `#/router/${x.id}` });
   }
+  const UP = STATE.settings.updates || {};
+  if (UP.panel) list.push({ k: "info", t: `Pembaruan panel v${UP.latest} tersedia`, d: "Perbarui dari Pengaturan → Umum → Pembaruan panel.", go: "#/pengaturan/umum" });
+  if ((UP.addons || []).length) list.push({ k: "info", t: `${UP.addons.length} add-on punya pembaruan`, d: UP.addons.map((id) => ((STATE.settings.addons || {})[id] || {}).name || id).join(", "), go: "#/addon" });
   const pend = STATE.sites.filter((x) => x.state === "pending");
   for (const x of STATE.sites.filter((y) => y.transport === "zt" && !y.ztNode)) list.push({ k: "info", t: `${x.name}: router ZeroTier belum dipilih`, d: "Pasang script, lalu pilih router dari daftar yang bergabung.", go: `#/router/${x.id}` });
   if (pend.length === 1) list.push({ k: "info", t: `${pend[0].name} menunggu pemasangan`, d: "Script MikroTik belum dipasang atau belum pernah tersambung.", go: `#/router/${pend[0].id}/script` });
@@ -6293,9 +6535,15 @@ function viewAddons(v) {
   crumb([["Add-on"]]);
   v.innerHTML = `
     <div class="ph"><div><h1>Add-on</h1><p>Tambahkan fitur ke panel sesuai kebutuhan. Aplikasi yang terpasang bisa dibuka dari sini dan dari Dashboard.</p></div>
-      <div class="acts ad-acts"><div class="search ad-search">${ic("search", "")}<input id="adQ" type="text" placeholder="Cari add-on" value="${esc(ADV.q)}" aria-label="Cari add-on"></div></div></div>
+      <div class="acts ad-acts"><div class="search ad-search">${ic("search", "")}<input id="adQ" type="text" placeholder="Cari add-on" value="${esc(ADV.q)}" aria-label="Cari add-on"></div><button class="btn" id="adUpd" title="Periksa pembaruan add-on">${ic("refresh")}Periksa pembaruan</button></div></div>
     <div id="adBody"><div class="card"><div class="empty"><span class="spin"></span><p style="margin-top:10px">Memuat add-on…</p></div></div></div>`;
   $("#adQ").addEventListener("input", (e) => { ADV.q = e.target.value; paintAddons(); });
+  $("#adUpd").onclick = async () => {
+    const btn = $("#adUpd"); busyBtn(btn, true);
+    try { const u = await api("/api/updates?refresh=1"); await load(); await fillAddons(); const n = Object.values(u.addons || {}).filter((x) => x && x.available).length; toast(n ? `${n} add-on punya pembaruan` : "Semua add-on sudah versi terbaru"); }
+    catch (e) { toast(e.message); }
+    busyBtn(btn, false);
+  };
   fillAddons();
 }
 const ADV = { q: "", list: null, job: null };
@@ -6334,21 +6582,23 @@ function paintAddons() {
         <div class="ad-tn"><b>${esc(a.name)}</b><span class="ad-st"><i class="dot ${st.c}"></i>${esc(st.t)} · ${meta}</span></div>
         <div class="menu"><button class="btn ghost icon sm" data-admenu="${esc(a.id)}" title="Aksi lainnya" aria-label="Aksi lainnya">${ic("dots")}</button>
           <div class="menu-list hidden" id="adm-${esc(a.id)}">
-            ${a.kind === "aplikasi" ? `<button data-ad="update" data-id="${esc(a.id)}">${ic("refresh")}Perbarui</button><button data-ad="path" data-id="${esc(a.id)}">${ic("edit")}Ubah alamat</button>` : ""}
+            <button data-ad="update" data-id="${esc(a.id)}">${ic("refresh")}Perbarui</button>
+            ${a.kind === "aplikasi" ? `<button data-ad="path" data-id="${esc(a.id)}">${ic("edit")}Ubah alamat</button>` : ""}
             <button data-ad="check" data-id="${esc(a.id)}">${ic("check")}Periksa</button>
             <button data-ad="detail" data-id="${esc(a.id)}">${ic("info")}Detail</button>
             <hr><button class="d" data-ad="remove" data-id="${esc(a.id)}">${ic("trash")}Lepas</button>
           </div></div>
       </div>
       <p class="ad-tg">${esc(a.tagline || a.desc)}</p>
-      <div class="ad-tf"><button class="btn" data-ad="detail" data-id="${esc(a.id)}">Detail</button>${adOpen(a)}</div>
+      ${a.update ? `<div class="ad-upd">${ic("dl")}<span>Pembaruan tersedia${a.update.latest ? ` · <span class="mono">${esc(a.update.latest.split(" ")[0])}</span>` : ""}${a.update.notes ? ` — ${esc(a.update.notes)}` : ""}</span></div>` : ""}
+      <div class="ad-tf">${a.update ? `<button class="btn" data-ad="update" data-id="${esc(a.id)}">${ic("dl")}Perbarui</button>` : `<button class="btn" data-ad="detail" data-id="${esc(a.id)}">Detail</button>`}${adOpen(a)}</div>
     </div>`;
   };
   const row = (a) => {
     const st = adState(a);
     return `<li><button class="ad-row" data-ad="detail" data-id="${esc(a.id)}">${adIcon(a, "sm")}
       <span class="ad-rb"><span class="ad-rn">${esc(a.name)} <span class="tag gray">${adCat(a)}</span></span><span class="ad-rd">${esc(a.tagline || a.desc)}</span></span>
-      <span class="pill ${st.c}">${esc(st.t)}</span><span class="chev">${ic("chev")}</span></button></li>`;
+      ${a.update ? `<span class="pill info">Pembaruan</span>` : ""}<span class="pill ${st.c}">${esc(st.t)}</span><span class="chev">${ic("chev")}</span></button></li>`;
   };
   b.innerHTML = `
     ${ADV.job ? `<div class="note info">${ic("clock")}<div><b>${esc(ADV.job.title.replace(/ (dipasang|diperbarui|dilepas)$/, ""))} sedang diproses</b><a href="#" id="adJob">Lihat progres</a></div></div>` : ""}
@@ -6404,10 +6654,11 @@ function adDetail(a) {
   if (a.installed && a.at) info.push(["Dipasang", esc(fmtT(Date.parse(a.at), true))]);
   if (a.repo) info.push(["Sumber", `<a href="${esc(a.repo)}" target="_blank" rel="noopener">${esc(a.repo.replace(/^https:\/\/github.com\//, "github.com/"))}</a>`]);
   if (a.note) info.push(["Catatan", esc(a.note)]);
+  if (a.update) info.push(["Pembaruan", `<b style="color:var(--primary)">Tersedia</b>${a.update.latest ? ` · <span class="mono">${esc(a.update.latest)}</span>` : ""}${a.update.behind ? ` · ${a.update.behind} perubahan` : ""}${a.update.notes ? `<div class="muted" style="font-size:12.5px;margin-top:2px">${esc(a.update.notes)}</div>` : ""}`]);
   const left = a.installed ? `<button class="btn ghost danger" data-add="remove">${ic("trash")}Lepas</button><span class="sp"></span>` : "";
   const right = a.installed
-    ? `${a.kind === "aplikasi" ? `<button class="btn" data-add="update">${ic("refresh")}Perbarui</button>` : ""}<button class="btn" data-add="check">${ic("check")}Periksa</button>${adOpen(a)}`
-    : `<button class="btn" data-act="closemodal">Tutup</button><button class="btn pri" data-add="install">${ic("down")}Install</button>`;
+    ? `<button class="btn" data-add="check">${ic("check")}Periksa</button><button class="btn" data-add="update">${ic(a.update ? "dl" : "refresh")}Perbarui</button>${adOpen(a)}`
+    : `<button class="btn" data-act="closemodal">Tutup</button><button class="btn pri" data-add="install">${ic("dl")}Install</button>`;
   modal(`<span class="ad-mh">${adIcon(a, "sm")}${esc(a.name)}</span>`, `
     <div class="ad-dh"><span class="pill ${st.c}">${esc(st.t)}</span><span class="tag gray">${adCat(a)}</span></div>
     <p class="ad-lead">${esc(a.tagline || "")}</p>
@@ -6484,12 +6735,12 @@ function openJob(after) {
     lg.textContent = r.log.join("\n"); if (atEnd) lg.scrollTop = lg.scrollHeight;
     if (r.done) {
       clearInterval(JOBPOLL);
-      $("#jSum").innerHTML = r.ok ? `<div class="tst-sum ok">${ic("check")}${esc(r.title)}.</div>` : `<div class="tst-sum fail">${ic("alert")}${esc(r.error)}</div>`;
+      $("#jSum").innerHTML = r.ok ? `<div class="tst-sum ok">${ic("check")}${esc(r.title)}.${r.action === "selfupdate" ? ` <span style="flex:1"></span><button class="btn pri sm" onclick="location.reload()">${ic("refresh")}Muat ulang halaman</button>` : ""}</div>` : `<div class="tst-sum fail">${ic("alert")}${esc(r.error)}</div>`;
       if (!r.ok) $(".jlog").open = true;
       await load().catch(() => {});
       if (after) after(r);
       if (location.hash.startsWith("#/addon")) fillAddons();
-      else if (location.hash.startsWith("#/pengaturan")) route();
+      else if (location.hash.startsWith("#/pengaturan")) ROUTE_AFTER_CLOSE = true;
     }
   };
   tick(); JOBPOLL = setInterval(tick, 1000);
@@ -6731,17 +6982,18 @@ ${ztOn() ? `    <div class="card"><div class="ch"><h2>Router lewat ZeroTier (ops
 }
 
 /* ================= Pengaturan ================= */
-const SET_TABS = [["umum", "Umum", "sliders"], ["telegram", "Notifikasi Telegram", "send"], ["domain", "Domain & HTTPS", "globe"]];
+const SET_TABS = [["umum", "Umum", "sliders"], ["vpn", "VPN L2TP", "lock"], ["telegram", "Notifikasi Telegram", "send"], ["domain", "Domain & HTTPS", "globe"]];
 function viewSettings(v, tab) {
   if (!SET_TABS.some(([k]) => k === tab)) tab = "umum";
   crumb([["Pengaturan", "#/pengaturan"], [SET_TABS.find(([k]) => k === tab)[1]]]);
   v.innerHTML = `
-    <div class="ph"><div><h1>Pengaturan</h1><p>Pengaturan VPS, notifikasi, dan domain panel.</p></div></div>
+    <div class="ph"><div><h1>Pengaturan</h1><p>Pengaturan VPS, VPN L2TP, notifikasi, dan domain panel.</p></div></div>
     ${tabsHtml(SET_TABS, tab, "#/pengaturan")}
     <div id="setBody"></div>`;
   const b = $("#setBody");
   if (tab === "telegram") setTelegram(b);
   else if (tab === "domain") setDomain(b);
+  else if (tab === "vpn") setVpn(b);
   else setGeneral(b);
 }
 function setGeneral(b) {
@@ -6761,35 +7013,24 @@ function setGeneral(b) {
       <label for="sTz">Zona waktu</label>
       <select id="sTz">${(s.timezones || []).map((z) => `<option value="${z.id}" ${z.id === tzId() ? "selected" : ""}>${z.label} (${z.id})</option>`).join("")}</select>
       <div class="help">Untuk jam di riwayat, log aktivitas, dan pesan Telegram.</div>
-      <label class="check" style="margin-top:16px"><input id="sIpsec" type="checkbox" ${s.useIpsec ? "checked" : ""}>Pakai IPsec (enkripsi)</label>
-      <div class="help">Setelah diubah, pasang ulang script di semua MikroTik.</div>
-      <div id="pskBox" class="${s.useIpsec ? "" : "hidden"}"><label>Kunci IPsec (PSK)</label><input type="text" readonly value="${esc(s.psk || "")}"></div>
       <div class="err" id="vpsErr"></div>
       <div class="form-actions"><button class="btn pri">Simpan</button></div>
     </form></div>
-    <div class="card"><div class="ch"><h2>Jaringan VPN (L2TP)</h2></div>
-      <div class="kv"><span>Jaringan</span><b>${esc(s.tunnelNet || "")}</b></div>
-      <div class="kv"><span>IP VPS (URL ACS)</span><b>${esc(s.tunnelLocal || "")}</b></div>
-      <div class="kv"><span>IP tetap MikroTik</span><b>${esc(s.tunnelStatic || "")} · maks. ${s.tunnelMax || 0}</b></div>
-      <div class="kv"><span>Pool dinamis</span><b>${esc(s.tunnelPool || "")}</b></div>
-      <form class="cb" id="tunForm" style="border-top:1px solid var(--line)">
-        <div class="note warn" style="margin:0 0 4px">${ic("alert")}<div><b>Sebaiknya ditentukan sekali di awal</b>Jika diganti, semua VPN terputus sebentar, script di semua MikroTik harus dipasang ulang, dan URL ACS di semua ONT berubah.</div></div>
-        <label for="tNet">Jaringan VPN baru</label>
-        <input id="tNet" type="text" placeholder="contoh: 172.31.0.0/24">
-        <div class="err" id="tErr"></div>
-        <div class="form-actions"><button class="btn danger">Ganti jaringan VPN</button></div>
-      </form>
-    </div>
+    <div class="card" id="updCard"><div class="ch"><h2>Pembaruan panel</h2><span id="updPill"></span></div><div class="cb" id="updBody" style="padding-top:4px"><p class="muted">Memeriksa…</p></div></div>
     ${(() => {
       const P = STATE.settings.stdPorts || {}, https = !!(STATE.settings.cloudflare && STATE.settings.cloudflare.https);
-      const url = STATE.settings.panelUrl || "";
-      return `<div class="card"><div class="ch"><h2>Alamat tanpa port (80 / 443)</h2>${P.enabled ? (P.active ? `<span class="pill ok">Aktif</span>` : `<span class="pill bad">Gagal</span>`) : `<span class="pill wait">Tidak aktif</span>`}</div><div class="cb" style="padding-top:4px">
-        <p style="color:var(--text-2)">Panel juga dibuka lewat port standar, jadi alamatnya tanpa <code>:${esc(String(STATE.settings.port || 8088))}</code>: ${https ? "<b>443</b> (https) dengan domain, dan port <b>80</b> dialihkan ke https" : "port <b>80</b> (http)"}. Port ${esc(String(STATE.settings.port || 8088))} tetap bisa dipakai.${https ? " Subdomain GenieACS dan ZTNET juga ikut tanpa port dan ber-HTTPS." : ""}</p>
-        ${P.error ? `<div class="note bad" style="margin:10px 0 0">${ic("alert")}<div><b>Port 80/443 tidak bisa dipakai</b>${esc(P.error)}. Panel tetap di port ${esc(String(STATE.settings.port || 8088))}.</div></div>` : ""}
+      const url = STATE.settings.panelUrl || "", bp = esc(String(STATE.settings.port || 8088));
+      const pill = P.enabled ? (P.active ? `<span class="pill ok">Aktif</span>` : `<span class="pill bad">Gagal</span>`) : `<span class="pill wait">Tidak aktif</span>`;
+      return `<div class="card"><div class="ch"><h2>Alamat panel</h2>${pill}</div><form class="cb" id="portForm" style="padding-top:4px">
+        <p style="color:var(--text-2);margin:0 0 4px">Panel dibuka lewat port web standar sehingga alamatnya tanpa nomor port. Bawaan <b>${P.defHttp || 80}</b> (http) dan <b>${P.defHttps || 443}</b> (https${https ? ", dipakai karena domain ber-HTTPS" : ""}). Bila port itu dipakai aplikasi lain, ganti dengan port lain. Port ${bp} tetap jalan sebagai cadangan.</p>
+        ${P.error ? `<div class="note bad" style="margin:10px 0 0">${ic("alert")}<div><b>Port tidak bisa dipakai</b>${esc(P.error)}. Panel tetap di port ${bp}.</div></div>` : ""}
         ${P.enabled && P.active ? `<div class="kv" style="padding:10px 0 0;border:0"><span>Alamat panel</span><b><a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a></b></div>` : ""}
-        <div class="help">Aktif secara bawaan. Syarat: port 80/443 tidak dipakai aplikasi lain (mis. nginx/apache), dan TCP 80 + 443 dibuka di firewall provider VPS.</div>
-        <div class="form-actions">${P.enabled ? `<button class="btn" id="stdOff" type="button">Matikan</button>` : `<button class="btn pri" id="stdOn" type="button">${ic("globe")}Aktifkan port 80/443</button>`}</div>
-      </div></div>`;
+        <div class="f2"><div><label for="pHttp">Port HTTP</label><input id="pHttp" type="number" min="1" max="65535" value="${esc(String(P.http || P.defHttp || 80))}"></div>
+          <div><label for="pHttps">Port HTTPS</label><input id="pHttps" type="number" min="1" max="65535" value="${esc(String(P.https || P.defHttps || 443))}"></div></div>
+        <div class="help">Buka port ini (TCP) di firewall provider VPS. Bila bukan ${P.defHttp || 80}/${P.defHttps || 443}, alamat panel ikut memakai nomor port, misalnya <code>http://IP-VPS:8000</code>.</div>
+        <div class="err" id="portErr"></div>
+        <div class="form-actions">${P.enabled ? `<button class="btn" id="stdOff" type="button">Matikan</button>` : ""}<button class="btn" id="portDef" type="button">Kembalikan bawaan</button><button class="btn pri" id="portSave">${P.enabled ? "Simpan port" : `${ic("globe")}Aktifkan`}</button></div>
+      </form></div>`;
     })()}
     <div class="card"><div class="ch"><h2>Password admin</h2></div><form class="cb" id="pwForm" style="padding-top:4px">
       ${STATE.settings.defaultPassword ? `<div class="note warn" style="margin-bottom:12px">${ic("alert")}<div><b>Masih memakai password bawaan</b>Isi password lama dengan <code>Admin123</code>, lalu buat password baru.</div></div>` : ""}
@@ -6808,13 +7049,68 @@ function setGeneral(b) {
       doneDialog("Nama panel disimpan", changed ? `<p>Komentar di script MikroTik sekarang memakai <b>${esc(STATE.settings.panelName)}</b>.</p><p>Router yang sudah terpasang tetap jalan. Pasang ulang script terbaru bila ingin komentarnya ikut berubah; script baru otomatis menghapus aturan dengan nama lama.</p>` : "", "ok", !changed);
     } catch (err) { $("#brandErr").textContent = err.message; busyBtn(btn, false); }
   };
-  $("#sIpsec").onchange = () => $("#pskBox").classList.toggle("hidden", !$("#sIpsec").checked);
   $("#vpsForm").onsubmit = async (e) => {
     e.preventDefault(); $("#vpsErr").textContent = "";
-    const changed = $("#sIpsec").checked !== !!s.useIpsec;
     const btn = e.submitter || $("#vpsForm button"); busyBtn(btn, true);
-    try { await api("/api/settings", { method: "PUT", body: { publicIp: $("#sIp").value, useIpsec: $("#sIpsec").checked, timezone: $("#sTz").value } }); await load(); route(); doneDialog("Pengaturan disimpan", changed ? "IPsec diubah. Pasang ulang script di semua MikroTik." : "", "ok", !changed); }
+    try { await api("/api/settings", { method: "PUT", body: { publicIp: $("#sIp").value, timezone: $("#sTz").value } }); await load(); route(); toast("Pengaturan disimpan"); }
     catch (err) { $("#vpsErr").textContent = err.message; busyBtn(btn, false); }
+  };
+  const off = $("#stdOff");
+  if (off) off.onclick = async () => {
+    busyBtn(off, true);
+    try { await api("/api/stdports", { method: "POST", body: { enable: false } }); openJob(); }
+    catch (err) { busyBtn(off, false); toast(err.message); }
+  };
+  $("#portDef").onclick = () => { const P = STATE.settings.stdPorts || {}; $("#pHttp").value = P.defHttp || 80; $("#pHttps").value = P.defHttps || 443; };
+  $("#portForm").onsubmit = async (e) => {
+    e.preventDefault(); $("#portErr").textContent = "";
+    const btn = $("#portSave"); busyBtn(btn, true);
+    try { await api("/api/stdports", { method: "POST", body: { enable: true, http: $("#pHttp").value.trim(), https: $("#pHttps").value.trim() } }); openJob(); }
+    catch (err) { $("#portErr").textContent = err.message; busyBtn(btn, false); }
+  };
+  fillUpdate();
+  $("#pwForm").onsubmit = async (e) => {
+    e.preventDefault(); $("#pwErr").textContent = "";
+    const btn = $("#pwForm button"); busyBtn(btn, true);
+    try { await api("/api/settings", { method: "PUT", body: { oldPassword: $("#pOld").value, newPassword: $("#pNew").value } }); $("#pOld").value = ""; $("#pNew").value = ""; await load(); route(); doneDialog("Password admin diganti", "Gunakan password baru saat login berikutnya."); }
+    catch (err) { $("#pwErr").textContent = err.message; }
+    busyBtn(btn, false);
+  };
+}
+
+// Tab VPN L2TP: enkripsi IPsec dan jaringan VPN
+function setVpn(b) {
+  const s = STATE.settings;
+  b.innerHTML = `
+    <div class="card"><div class="ch"><h2>Enkripsi IPsec</h2>${s.useIpsec ? `<span class="pill ok">${ic("lock", "")}Aktif</span>` : `<span class="pill wait">Tidak aktif</span>`}</div><form class="cb" id="ipsecForm" style="padding-top:4px">
+      <p style="color:var(--text-2);margin:0">L2TP tanpa IPsec tidak dienkripsi tetapi lebih ringan dan didukung semua MikroTik. IPsec menambah enkripsi untuk VPN.</p>
+      <label class="check" style="margin-top:14px"><input id="sIpsec" type="checkbox" ${s.useIpsec ? "checked" : ""}>Pakai IPsec (enkripsi)</label>
+      <div class="help">Setelah diubah, pasang ulang script di semua MikroTik.</div>
+      <div id="pskBox" class="${s.useIpsec ? "" : "hidden"}"><label>Kunci IPsec (PSK)</label><div style="display:flex;gap:8px"><input type="text" readonly class="mono" value="${esc(s.psk || "")}" style="flex:1">${s.psk ? copyBtn(s.psk, "PSK tersalin") : ""}</div></div>
+      <div class="err" id="ipsecErr"></div>
+      <div class="form-actions"><button class="btn pri">Simpan</button></div>
+    </form></div>
+    <div class="card"><div class="ch"><h2>Jaringan VPN</h2></div>
+      <div class="kv"><span>Jaringan</span><b>${esc(s.tunnelNet || "")}</b></div>
+      <div class="kv"><span>IP VPS (URL ACS)</span><b>${esc(s.tunnelLocal || "")}</b></div>
+      <div class="kv"><span>IP tetap MikroTik</span><b>${esc(s.tunnelStatic || "")} · maks. ${s.tunnelMax || 0}</b></div>
+      <div class="kv"><span>Pool dinamis</span><b>${esc(s.tunnelPool || "")}</b></div>
+      <form class="cb" id="tunForm" style="border-top:1px solid var(--line)">
+        <div class="note warn" style="margin:0 0 4px">${ic("alert")}<div><b>Sebaiknya ditentukan sekali di awal</b>Jika diganti, semua VPN terputus sebentar, script di semua MikroTik harus dipasang ulang, dan URL ACS di semua ONT berubah.</div></div>
+        <label for="tNet">Jaringan VPN baru</label>
+        <input id="tNet" type="text" placeholder="contoh: 172.31.0.0/24">
+        <div class="err" id="tErr"></div>
+        <div class="form-actions"><button class="btn danger">Ganti jaringan VPN</button></div>
+      </form>
+    </div>
+`;
+  $("#sIpsec").onchange = () => $("#pskBox").classList.toggle("hidden", !$("#sIpsec").checked);
+  $("#ipsecForm").onsubmit = async (e) => {
+    e.preventDefault(); $("#ipsecErr").textContent = "";
+    const changed = $("#sIpsec").checked !== !!s.useIpsec;
+    const btn = $("#ipsecForm button"); busyBtn(btn, true);
+    try { await api("/api/settings", { method: "PUT", body: { useIpsec: $("#sIpsec").checked } }); await load(); route(); doneDialog("Pengaturan disimpan", changed ? "IPsec diubah. Pasang ulang script di semua MikroTik." : "", "ok", !changed); }
+    catch (err) { $("#ipsecErr").textContent = err.message; busyBtn(btn, false); }
   };
   $("#tunForm").onsubmit = (e) => {
     e.preventDefault(); $("#tErr").textContent = "";
@@ -6826,20 +7122,31 @@ function setGeneral(b) {
       onOk: async () => { await api("/api/settings", { method: "PUT", body: { tunnelNet: val } }); await load(); route(); doneDialog("Jaringan VPN diganti", `Sekarang ${esc(STATE.settings.tunnelNet)}. Pasang ulang script di semua MikroTik dan perbarui URL ACS di ONT.`, "ok", false); },
     });
   };
-  const stdBtn = $("#stdOn") || $("#stdOff");
-  if (stdBtn) stdBtn.onclick = async () => {
-    const on = stdBtn.id === "stdOn";
-    busyBtn(stdBtn, true);
-    try { await api("/api/stdports", { method: "POST", body: { enable: on } }); openJob(); }
-    catch (err) { busyBtn(stdBtn, false); toast(err.message); }
-  };
-  $("#pwForm").onsubmit = async (e) => {
-    e.preventDefault(); $("#pwErr").textContent = "";
-    const btn = $("#pwForm button"); busyBtn(btn, true);
-    try { await api("/api/settings", { method: "PUT", body: { oldPassword: $("#pOld").value, newPassword: $("#pNew").value } }); $("#pOld").value = ""; $("#pNew").value = ""; await load(); route(); doneDialog("Password admin diganti", "Gunakan password baru saat login berikutnya."); }
-    catch (err) { $("#pwErr").textContent = err.message; }
-    busyBtn(btn, false);
-  };
+}
+// Kartu pembaruan panel (Pengaturan → Umum)
+async function fillUpdate(refresh) {
+  const b = $("#updBody"); if (!b) return;
+  let u;
+  try { u = await api("/api/updates" + (refresh ? "?refresh=1" : "")); }
+  catch (e) { b.innerHTML = `<div class="note bad">${ic("alert")}<div><b>Gagal memeriksa pembaruan</b>${esc(e.message)}</div></div>`; return; }
+  if (!$("#updBody")) return;
+  const P = u.panel || {};
+  $("#updPill").innerHTML = P.available ? `<span class="pill info">Versi ${esc(P.latest)} tersedia</span>` : P.error ? `<span class="pill wait">Tidak bisa dicek</span>` : `<span class="pill ok">Terbaru</span>`;
+  b.innerHTML = `
+    ${P.available ? `<div class="note info" style="margin:0 0 12px">${ic("dl")}<div><b>Versi ${esc(P.latest)} tersedia</b>${P.notes ? esc(P.notes) : "Ada pembaruan panel di GitHub."}${P.date ? ` <span class="muted">· ${esc(fmtT(Date.parse(P.date), true))}</span>` : ""}</div></div>` : ""}
+    ${P.error ? `<div class="note warn" style="margin:0 0 12px">${ic("alert")}<div><b>Tidak bisa menghubungi GitHub</b>${esc(P.error)}</div></div>` : ""}
+    <div class="kv" style="padding:0 0 8px;border:0"><span>Versi terpasang</span><b>v${esc(u.version || "")}</b></div>
+    <div class="kv" style="padding:0 0 8px;border:0"><span>Versi terbaru</span><b>${P.latest ? "v" + esc(P.latest) : "—"}</b></div>
+    <div class="kv" style="padding:0;border:0"><span>Terakhir diperiksa</span><b>${u.checkedAt ? esc(fmtT(u.checkedAt, true)) : "—"}</b></div>
+    <div class="help">Diperiksa otomatis tiap 12 jam. ${u.canSelfUpdate ? "Pembaruan menjalankan <code>git pull</code> lalu installer di folder repo; panel menyala ulang beberapa detik, data tetap aman." : "Perbarui lewat SSH: <code>cd /root/acs-netmap-panel &amp;&amp; git pull &amp;&amp; bash install-vpn-acs.sh</code> (setelah itu tombol Perbarui tersedia di sini)."}</div>
+    <div class="form-actions"><button class="btn" id="updCheck" type="button">${ic("refresh")}Periksa sekarang</button>${P.available && u.canSelfUpdate ? `<button class="btn pri" id="updGo" type="button">${ic("dl")}Perbarui ke v${esc(P.latest)}</button>` : ""}</div>`;
+  $("#updCheck").onclick = async () => { busyBtn($("#updCheck"), true); await fillUpdate(true); await load().catch(() => {}); };
+  const go = $("#updGo");
+  if (go) go.onclick = () => confirmDialog({
+    title: `Perbarui panel ke v${esc(P.latest)}?`, icon: "dl", ok: "Perbarui",
+    text: `<p>Panel menjalankan <code>git pull</code> lalu installer. Panel menyala ulang beberapa detik; VPN, GenieACS, dan data router tidak terganggu.</p>`,
+    onOk: async () => { await api("/api/updates/panel", { method: "POST", body: {} }); openJob(); },
+  });
 }
 
 /* ================= GenieACS ================= */
@@ -7698,6 +8005,8 @@ for f in ringkasan.sh cek.sh; do
   [ -f "$SCRIPT_DIR/$f" ] && install -m 700 "$SCRIPT_DIR/$f" "$APP_DIR/scripts/$f"
 done
 ok "Script add-on disalin ke $APP_DIR/scripts"
+# Folder repo ini dicatat agar panel bisa memperbarui dirinya sendiri (menu Pengaturan → Pembaruan)
+if [ -d "$SCRIPT_DIR/.git" ]; then echo "$SCRIPT_DIR" > "$APP_DIR/source-dir"; chmod 600 "$APP_DIR/source-dir"; fi
 
 # ---------- Password admin ----------
 if [ ! -f "$APP_DIR/data.json" ] || ! grep -q '"admin"' "$APP_DIR/data.json"; then
@@ -7764,14 +8073,16 @@ systemctl is-active --quiet vpn-acs || fail "Panel gagal berjalan. Cek: journalc
 
 echo
 ok "Panel VPN ACS berjalan"
-# Panel memakai port 80/443 secara bawaan; beri tahu bila port itu dipakai program lain
-for i in 1 2 3; do ss -Hltnp 2>/dev/null | grep -E '[:.]80[[:space:]]' | grep -q node && break; sleep 1; done
-if ss -Hltnp 2>/dev/null | grep -E '[:.]80[[:space:]]' | grep -q node; then
-  ok "Panel juga dibuka di port 80/443 (alamat tanpa port)"
+# Panel memakai port 80/443 secara bawaan (bisa diganti di Pengaturan); beri tahu bila port itu dipakai program lain
+SP_HTTP="$("$NODE_BIN" -e 'try{console.log(require(process.argv[1]).settings.stdHttp||80)}catch(e){console.log(80)}' "$APP_DIR/data.json" 2>/dev/null)"; SP_HTTP="${SP_HTTP:-80}"
+SP_HTTPS="$("$NODE_BIN" -e 'try{console.log(require(process.argv[1]).settings.stdHttps||443)}catch(e){console.log(443)}' "$APP_DIR/data.json" 2>/dev/null)"; SP_HTTPS="${SP_HTTPS:-443}"
+for i in 1 2 3; do ss -Hltnp 2>/dev/null | grep -E "[:.]${SP_HTTP}[[:space:]]" | grep -q node && break; sleep 1; done
+if ss -Hltnp 2>/dev/null | grep -E "[:.]${SP_HTTP}[[:space:]]" | grep -q node; then
+  ok "Panel juga dibuka di port ${SP_HTTP}/${SP_HTTPS}"
 else
-  WHO80="$(ss -Hltnp 2>/dev/null | grep -E '[:.](80|443)[[:space:]]' | grep -oP 'users:\(\("\K[^"]+' | sort -u | tr '\n' ' ')"
+  WHO80="$(ss -Hltnp 2>/dev/null | grep -E "[:.](${SP_HTTP}|${SP_HTTPS})[[:space:]]" | grep -oP 'users:\(\("\K[^"]+' | sort -u | tr '\n' ' ')"
   if [ -n "$WHO80" ]; then
-    warn "Port 80/443 dipakai: ${WHO80}— panel hanya di port ${PANEL_PORT}. Hentikan program itu lalu: systemctl restart vpn-acs"
+    warn "Port ${SP_HTTP}/${SP_HTTPS} dipakai: ${WHO80}— panel hanya di port ${PANEL_PORT}. Ganti port di Pengaturan → Umum → Alamat panel"
   fi
 fi
 SUMMARY="$SCRIPT_DIR/ringkasan.sh"

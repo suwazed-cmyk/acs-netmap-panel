@@ -53,6 +53,8 @@ panel_get() {
     else if (k === "panelName") v = s.panelName || "VPN ACS";
     else if (k === "useIpsec") v = s.useIpsec ? "1" : "";
     else if (k === "sites") v = String((d.sites || []).length);
+    else if (k === "stdHttp") v = String(s.stdHttp || 80);
+    else if (k === "stdHttps") v = String(s.stdHttps || 443);
     else if (k === "ztNet") v = s.zt && s.zt.nwid ? `${s.zt.name || s.zt.nwid} (${s.zt.subnet || "-"})` : "";
     else if (k === "tunnelLocal") {
       const net = s.tunnelNet || "192.168.42.0/24";
@@ -90,18 +92,21 @@ head1 "Panel VPN ACS"
 if [ -f "$PANEL_DIR/server.js" ]; then
   HTTPS_DOM="$(panel_get httpsDomain)"
   # Panel memakai port 80/443 bila tidak dipakai aplikasi lain (bawaan), selain port 8088
-  if ss -Hltnp 2>/dev/null | grep -E '[:.]80[[:space:]]' | grep -q node; then STD=1; else STD=""; fi
+  SP_HTTP="$(panel_get stdHttp)"; SP_HTTP="${SP_HTTP:-80}"; SP_HTTPS="$(panel_get stdHttps)"; SP_HTTPS="${SP_HTTPS:-443}"
+  if ss -Hltnp 2>/dev/null | grep -E "[:.]${SP_HTTP}[[:space:]]" | grep -q node; then STD=1; else STD=""; fi
+  SFX_HTTP=""; [ "$SP_HTTP" != "80" ] && SFX_HTTP=":$SP_HTTP"
+  SFX_HTTPS=""; [ "$SP_HTTPS" != "443" ] && SFX_HTTPS=":$SP_HTTPS"
   if [ -n "$HTTPS_DOM" ]; then
-    if [ -n "$STD" ]; then PANEL_URL="https://${HTTPS_DOM}"; else PANEL_URL="https://${HTTPS_DOM}:${PANEL_PORT}"; fi
+    if [ -n "$STD" ]; then PANEL_URL="https://${HTTPS_DOM}${SFX_HTTPS}"; else PANEL_URL="https://${HTTPS_DOM}:${PANEL_PORT}"; fi
   else
-    if [ -n "$STD" ]; then PANEL_URL="http://${VPS_ADDR}"; else PANEL_URL="http://${VPS_ADDR}:${PANEL_PORT}"; fi
+    if [ -n "$STD" ]; then PANEL_URL="http://${VPS_ADDR}${SFX_HTTP}"; else PANEL_URL="http://${VPS_ADDR}:${PANEL_PORT}"; fi
   fi
   line "Status" "$(badge "$(svc_state vpn-acs)")"
   line "Alamat web" "${GREEN}${PANEL_URL}${NC}"
   if [ -n "$STD" ]; then
     line "Cadangan" "port ${PANEL_PORT} tetap bisa dipakai"
   else
-    line "Port 80/443" "${YELLOW}tidak aktif${NC} (dipakai aplikasi lain atau dimatikan di Pengaturan)"
+    line "Port ${SP_HTTP}/${SP_HTTPS}" "${YELLOW}tidak aktif${NC} (dipakai aplikasi lain atau dimatikan di Pengaturan)"
   fi
   line "Nama panel" "$(panel_get panelName)"
   line "Router" "$(panel_get sites) terdaftar"
@@ -110,8 +115,8 @@ if [ -f "$PANEL_DIR/server.js" ]; then
   else
     line "Password" "sesuai yang Anda buat"
   fi
-  TCP_OPEN+=("80|Panel (http)")
-  TCP_OPEN+=("443|Panel (https)")
+  TCP_OPEN+=("${SP_HTTP}|Panel (http)")
+  TCP_OPEN+=("${SP_HTTPS}|Panel (https)")
   TCP_OPEN+=("${PANEL_PORT}|Panel VPN ACS (cadangan)")
 else
   line "Status" "${DIM}belum dipasang${NC}"

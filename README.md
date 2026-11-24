@@ -247,7 +247,7 @@ Penting:
 - **Segera ganti password `Admin123`.** Selama masih bawaan, panel menampilkan peringatan merah di setiap halaman.
 - Buka TCP **80** dan **443** di firewall provider.
 - Jika port 80/443 sudah dipakai program lain (misalnya nginx/apache), panel tetap berjalan di port 8088. `bash cek.sh` memberi tahu program mana yang memakainya.
-- Bisa dimatikan di **Pengaturan → Umum → Alamat tanpa port → Matikan**.
+- **Port bisa diganti** di **Pengaturan → Umum → Alamat panel** (misalnya 8000/8443 bila 80/443 dipakai aplikasi lain). Alamat panel ikut memakai nomor port itu. **Kembalikan bawaan** = 80/443, **Matikan** = hanya port 8088.
 
 ### D. Menu Add-on
 Menu **Add-on**: cari add-on, klik untuk melihat detail dan fiturnya, lalu **Install**. Panel menampilkan progres langkah demi langkah (0–100%) beserta log. Add-on yang terpasang tampil di bagian **Terpasang** (dan kartu **Aplikasi** di Dashboard) dengan tombol **Buka**; Perbarui, Periksa, Ubah alamat, dan Lepas ada di menu ⋯. Aplikasi (Panel ACS, Bilingku) tidak lagi ditaruh di menu samping.
@@ -344,6 +344,11 @@ journalctl -u zerotier-one -n 50 --no-pager
 ---
 
 ## Update dari GitHub
+Panel memeriksa pembaruan otomatis tiap 12 jam. Jika ada versi baru, muncul tanda **pembaruan** di bawah menu samping dan di Dashboard:
+- **Panel:** Pengaturan → Umum → **Pembaruan panel** → **Perbarui**. Panel menjalankan `git pull` dan installer di folder repo, menyala ulang beberapa detik, lalu muat ulang halaman. (Tombol ini tersedia setelah sekali update lewat SSH dengan installer versi terbaru.)
+- **Add-on:** menu Add-on menandai add-on yang punya versi baru; klik **Perbarui**. **Periksa pembaruan** untuk mengecek saat itu juga.
+
+Update manual lewat SSH tetap bisa:
 Repo ini dulu bernama `suwazed-panel`. Jika VPS Anda masih memakai folder lama `/root/suwazed-panel`, pindahkan sekali saja:
 ```bash
 mv /root/suwazed-panel /root/acs-netmap-panel
