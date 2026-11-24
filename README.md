@@ -260,6 +260,10 @@ Router **ARM/ARM64 dengan RouterOS v7** bisa tersambung ke VPS lewat ZeroTier, b
 
 Panel otomatis menyetujui router, memberi IP ZeroTier, dan memasang route ke IP virtual. Nama perangkat dari ZTNET juga tampil di tabel **Anggota jaringan** di menu ZeroTier.
 
+Pengelolaan ZeroTier dari menu **ZeroTier** di panel (tanpa membuka ZTNET):
+- **Ubah** nama jaringan dan akses **Private/Public**. Private sangat disarankan: dengan Public, siapa pun yang tahu Network ID bisa masuk ke jaringan GenieACS.
+- Di tabel **Anggota jaringan**: **Setujui** / **Cabut** izin perangkat dan **Ubah IP** ZeroTier-nya. Route IP virtual router ikut diperbarui otomatis.
+
 **Mengganti rentang IP di ZTNET belakangan** boleh: panel memeriksa ulang jaringan setiap 5 menit dan setiap halaman ZeroTier dibuka, lalu menyesuaikan rentang, IP VPS, IP router, dan route secara otomatis (tercatat di Log aktivitas). Jika IP ZeroTier VPS ikut berubah, router ZeroTier diberi tanda **Pasang ulang script ZeroTier**. Rentang baru yang bentrok dengan jaringan lain ditolak dan ditampilkan sebagai peringatan.
 
 URL ACS di ONT tetap `http://192.168.42.1:7547`. Status, riwayat, notifikasi Telegram, tes koneksi, dan port forwarding berlaku untuk kedua jalur.

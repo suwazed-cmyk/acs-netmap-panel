@@ -41,7 +41,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "1.9.0";
+const VERSION = "1.9.1";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -1102,7 +1102,10 @@ async function ztStatus(d) {
   const z = ztCfg(d);
   if (z) {
     const j = await ztApi("GET", `/network/${z.nwid}`);
+    const cn = await ztApi("GET", `/controller/network/${z.nwid}`);
     out.current = Object.assign({}, z, {
+      name: cn.ok ? cn.json.name || z.name : z.name,
+      private: cn.ok ? cn.json.private !== false : true,
       status: j.ok ? j.json.status : "TIDAK TERGABUNG",
       iface: j.ok ? j.json.portDeviceName || z.iface : "",
       sites: d.sites.filter(isZt).length,
@@ -1205,6 +1208,14 @@ function ztnetNames(nwid) {
       resolve(map);
     });
   });
+}
+
+// Samakan nama jaringan di database ZTNET (ZTNET menampilkan nama dari databasenya sendiri)
+function ztnetSetNetworkName(nwid, name) {
+  const url = ztnetDbUrl();
+  if (!url || !/^[0-9a-f]{16}$/.test(nwid) || !/^[\w .-]{1,64}$/.test(name)) return Promise.resolve(false);
+  const sql = `update network set name='${name.replace(/'/g, "''")}' where nwid='${nwid}'`;
+  return new Promise((resolve) => execFile("psql", [url, "-X", "-q", "-c", sql], { timeout: 5000, cwd: "/" }, (err) => resolve(!err)));
 }
 
 // Periksa ulang jaringan ZeroTier: rentang IP bisa diganti di ZTNET setelah VPS dihubungkan.
@@ -2761,6 +2772,74 @@ async function handleApi(req, res, url) {
     saveData(d);
     logActivity(req, "ZeroTier dihubungkan", `Jaringan ${d.settings.zt.name || d.settings.zt.nwid} (${r.subnet}) · IP VPS ${r.vpsIp}`);
     return send(res, 200, r);
+  }
+  // Ubah nama jaringan dan akses (private/public)
+  if (p === "/api/zt/network" && method === "PUT") {
+    const d = loadData();
+    const z = ztCfg(d);
+    if (!z) return send(res, 400, { error: "ZeroTier belum dihubungkan." });
+    const name = String(body.name || "").trim();
+    if (!/^[\w .-]{1,64}$/.test(name)) return send(res, 400, { error: "Nama jaringan 1-64 karakter: huruf, angka, spasi, titik, minus, atau garis bawah." });
+    const priv = body.private !== false;
+    const cur = await ztApi("GET", `/controller/network/${z.nwid}`);
+    if (!cur.ok) return send(res, 500, { error: "Tidak bisa membaca jaringan: " + cur.error });
+    const r = await ztApi("POST", `/controller/network/${z.nwid}`, { name, private: priv });
+    if (!r.ok) return send(res, 500, { error: "Gagal menyimpan ke controller ZeroTier: " + r.error });
+    await ztnetSetNetworkName(z.nwid, name);
+    const ZN = ZTNET_NAMES.get(z.nwid); if (ZN) ZN.t = 0;
+    const d2 = loadData();
+    if (d2.settings && d2.settings.zt) { d2.settings.zt.name = name; saveData(d2); }
+    const changes = [];
+    if ((cur.json.name || "") !== name) changes.push(`nama ${cur.json.name || "-"} → ${name}`);
+    if ((cur.json.private !== false) !== priv) changes.push(priv ? "akses → private" : "akses → PUBLIC");
+    if (changes.length) logActivity(req, "Jaringan ZeroTier diubah", changes.join(" · "));
+    return send(res, 200, { ok: true });
+  }
+  // Setujui / cabut izin anggota dan ubah IP-nya
+  const zm = p.match(/^\/api\/zt\/member\/([0-9a-f]{10})$/);
+  if (zm && method === "POST") {
+    const node = zm[1];
+    const d = loadData();
+    const z = ztCfg(d);
+    if (!z) return send(res, 400, { error: "ZeroTier belum dihubungkan." });
+    if (node === z.vpsNode) return send(res, 400, { error: "Izin dan IP VPS diatur otomatis oleh panel." });
+    const site = d.sites.find((x) => isZt(x) && x.ztNode === node);
+    const mi = await ztMemberIps(z.nwid);
+    if (mi.error) return send(res, 500, { error: mi.error });
+    const m = mi.members[node];
+    if (!m) return send(res, 404, { error: "Perangkat tidak ada di jaringan ini." });
+    const upd = {};
+    const notes = [];
+    if (typeof body.authorized === "boolean" && body.authorized !== !!m.authorized) {
+      upd.authorized = body.authorized;
+      notes.push(body.authorized ? "disetujui" : "izin dicabut");
+    }
+    if (body.ip !== undefined) {
+      const ip = String(body.ip || "").trim();
+      const sub = parseCidr(z.subnet);
+      const n = ipToInt(ip);
+      if (n === null || !inSubnet(ip, sub)) return send(res, 400, { error: `IP harus di dalam rentang ${z.subnet}.` });
+      if (n === sub.net || n === sub.net + sub.size - 1) return send(res, 400, { error: "IP itu alamat jaringan/broadcast, pilih yang lain." });
+      if (ip === z.vpsIp) return send(res, 400, { error: "IP itu dipakai VPS." });
+      for (const [id, o] of Object.entries(mi.members)) if (id !== node && (o.ipAssignments || []).includes(ip)) return send(res, 400, { error: `IP ${ip} sudah dipakai perangkat ${id}.` });
+      if (!((m.ipAssignments || []).length === 1 && m.ipAssignments[0] === ip)) {
+        upd.ipAssignments = [ip];
+        notes.push(`IP ${(m.ipAssignments || []).join(", ") || "-"} → ${ip}`);
+      }
+    }
+    if (!Object.keys(upd).length) return send(res, 200, { ok: true, changed: false });
+    const r = await ztApi("POST", `/controller/network/${z.nwid}/member/${node}`, upd);
+    if (!r.ok) return send(res, 500, { error: "Gagal menyimpan ke controller ZeroTier: " + r.error });
+    if (site && upd.ipAssignments) {
+      site.ztIp = upd.ipAssignments[0];
+      const sr = await syncZtRoutes(d);
+      if (sr.error) console.error("Sinkron route ZeroTier gagal:", sr.error);
+      saveData(d);
+      await applyFirewall(d);
+    }
+    ztPingAll(loadData()).catch(() => {});
+    logActivity(req, "Anggota ZeroTier diubah", `${site ? site.name : node} · ${notes.join(" · ")}`);
+    return send(res, 200, { ok: true, changed: true });
   }
   if (p === "/api/zt/leave" && method === "POST") {
     const d = loadData();
