@@ -41,7 +41,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "1.8.0";
+const VERSION = "1.8.1";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -1092,6 +1092,7 @@ async function ztStatus(d) {
     const pmap = {};
     if (peers.ok) for (const p of peers.json || []) pmap[p.address] = p;
     out.members = [];
+    const names = await ztnetNames(z.nwid);
     for (const [id, m] of Object.entries(mi.members || {})) {
       const site = d.sites.find((s) => s.ztNode === id);
       const p = pmap[id];
@@ -1100,6 +1101,7 @@ async function ztStatus(d) {
         node: id,
         role: id === z.vpsNode ? "vps" : site ? "router" : "other",
         name: id === z.vpsNode ? "VPS (panel ini)" : site ? site.name : "",
+        ztName: (names[id] || {}).name || "",
         siteId: site ? site.id : "",
         authorized: !!m.authorized,
         ips: m.ipAssignments || [],
@@ -1151,6 +1153,39 @@ async function ztUse(d, nwid) {
   d.settings.zt = { nwid, name: n.json.name || "", subnet: sub.text, vpsNode, vpsIp, iface, managedRoutes: (z && z.nwid === nwid && z.managedRoutes) || [] };
   return { ok: true, vpsIp, iface, subnet: sub.text, ready: !!iface };
 }
+// Nama perangkat dari ZTNET (disimpan di database PostgreSQL ZTNET, bukan di controller).
+// Hanya membaca. Jika ZTNET/psql tidak ada, hasilnya kosong dan panel tetap berjalan.
+const ZTNET_NAMES = new Map(); // nwid -> { t, map }
+function ztnetDbUrl() {
+  try {
+    const t = fs.readFileSync(ZTNET_DIR + "/.env", "utf8");
+    const m = t.match(/^DATABASE_URL=["']?([^"'\r\n]+)/m);
+    return m ? m[1].replace(/\?.*$/, "") : ""; // psql tidak mengenal ?schema=public
+  } catch (e) {
+    return "";
+  }
+}
+function ztnetNames(nwid) {
+  const c = ZTNET_NAMES.get(nwid);
+  if (c && Date.now() - c.t < 30000) return Promise.resolve(c.map);
+  const url = ztnetDbUrl();
+  if (!url || !/^[0-9a-f]{16}$/.test(nwid)) return Promise.resolve({});
+  const sql = `select id, coalesce(name,''), coalesce(description,'') from network_members where nwid='${nwid}' and coalesce(deleted,false)=false`;
+  return new Promise((resolve) => {
+    execFile("psql", [url, "-X", "-A", "-t", "-F", "\t", "-c", sql], { timeout: 5000, cwd: "/" }, (err, stdout) => {
+      const map = {};
+      if (!err) {
+        for (const line of String(stdout).split("\n")) {
+          const [id, name, desc] = line.split("\t");
+          if (/^[0-9a-f]{10}$/.test(id || "")) map[id] = { name: (name || "").trim(), desc: (desc || "").trim() };
+        }
+      }
+      ZTNET_NAMES.set(nwid, { t: Date.now(), map });
+      resolve(map);
+    });
+  });
+}
+
 // Periksa ulang jaringan ZeroTier: rentang IP bisa diganti di ZTNET setelah VPS dihubungkan.
 // Tahap 1 (async): baca controller, setujui ulang IP yang perlu dipindah, hasilkan rencana.
 async function ztCheck(d) {
@@ -1280,6 +1315,7 @@ async function ztPending(d) {
   const mi = await ztMemberIps(z.nwid);
   if (mi.error) return { error: mi.error };
   const bound = new Set(d.sites.map((s) => s.ztNode).filter(Boolean));
+  const names = await ztnetNames(z.nwid);
   const peers = await ztApi("GET", "/peer");
   const pmap = {};
   if (peers.ok) for (const p of peers.json || []) pmap[p.address] = p;
@@ -1288,9 +1324,9 @@ async function ztPending(d) {
     if (id === z.vpsNode || bound.has(id)) continue;
     const p = pmap[id];
     const path = p && (p.paths || []).find((x) => x.active || x.preferred);
-    list.push({ node: id, authorized: !!m.authorized, ips: m.ipAssignments || [], seen: !!p, physical: path ? String(path.address).split("/")[0] : "", latency: p ? p.latency : null });
+    list.push({ node: id, name: (names[id] || {}).name || "", authorized: !!m.authorized, ips: m.ipAssignments || [], seen: !!p, physical: path ? String(path.address).split("/")[0] : "", latency: p ? p.latency : null });
   }
-  list.sort((a, b) => Number(a.authorized) - Number(b.authorized) || Number(b.seen) - Number(a.seen));
+  list.sort((a, b) => Number(b.seen) - Number(a.seen) || Number(a.authorized) - Number(b.authorized) || (a.name || a.node).localeCompare(b.name || b.node));
   return { list };
 }
 // Pasangkan router dengan anggota ZeroTier: setujui + beri IP + route
@@ -2664,6 +2700,12 @@ async function handleApi(req, res, url) {
   if (p === "/api/zt" && method === "GET") {
     await ztRefresh(req).catch((e) => console.error("Pemeriksaan ZeroTier gagal:", e.message));
     return send(res, 200, await ztStatus(loadData()));
+  }
+  if (p === "/api/zt/free" && method === "GET") {
+    await ztRefresh(req).catch(() => {});
+    const r = await ztPending(loadData());
+    if (r.error) return send(res, 400, { error: r.error });
+    return send(res, 200, r);
   }
   if (p === "/api/zt/use" && method === "POST") {
     const d = loadData();

@@ -184,7 +184,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "1.8.0";
+const VERSION = "1.8.1";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -1235,6 +1235,7 @@ async function ztStatus(d) {
     const pmap = {};
     if (peers.ok) for (const p of peers.json || []) pmap[p.address] = p;
     out.members = [];
+    const names = await ztnetNames(z.nwid);
     for (const [id, m] of Object.entries(mi.members || {})) {
       const site = d.sites.find((s) => s.ztNode === id);
       const p = pmap[id];
@@ -1243,6 +1244,7 @@ async function ztStatus(d) {
         node: id,
         role: id === z.vpsNode ? "vps" : site ? "router" : "other",
         name: id === z.vpsNode ? "VPS (panel ini)" : site ? site.name : "",
+        ztName: (names[id] || {}).name || "",
         siteId: site ? site.id : "",
         authorized: !!m.authorized,
         ips: m.ipAssignments || [],
@@ -1294,6 +1296,39 @@ async function ztUse(d, nwid) {
   d.settings.zt = { nwid, name: n.json.name || "", subnet: sub.text, vpsNode, vpsIp, iface, managedRoutes: (z && z.nwid === nwid && z.managedRoutes) || [] };
   return { ok: true, vpsIp, iface, subnet: sub.text, ready: !!iface };
 }
+// Nama perangkat dari ZTNET (disimpan di database PostgreSQL ZTNET, bukan di controller).
+// Hanya membaca. Jika ZTNET/psql tidak ada, hasilnya kosong dan panel tetap berjalan.
+const ZTNET_NAMES = new Map(); // nwid -> { t, map }
+function ztnetDbUrl() {
+  try {
+    const t = fs.readFileSync(ZTNET_DIR + "/.env", "utf8");
+    const m = t.match(/^DATABASE_URL=["']?([^"'\r\n]+)/m);
+    return m ? m[1].replace(/\?.*$/, "") : ""; // psql tidak mengenal ?schema=public
+  } catch (e) {
+    return "";
+  }
+}
+function ztnetNames(nwid) {
+  const c = ZTNET_NAMES.get(nwid);
+  if (c && Date.now() - c.t < 30000) return Promise.resolve(c.map);
+  const url = ztnetDbUrl();
+  if (!url || !/^[0-9a-f]{16}$/.test(nwid)) return Promise.resolve({});
+  const sql = `select id, coalesce(name,''), coalesce(description,'') from network_members where nwid='${nwid}' and coalesce(deleted,false)=false`;
+  return new Promise((resolve) => {
+    execFile("psql", [url, "-X", "-A", "-t", "-F", "\t", "-c", sql], { timeout: 5000, cwd: "/" }, (err, stdout) => {
+      const map = {};
+      if (!err) {
+        for (const line of String(stdout).split("\n")) {
+          const [id, name, desc] = line.split("\t");
+          if (/^[0-9a-f]{10}$/.test(id || "")) map[id] = { name: (name || "").trim(), desc: (desc || "").trim() };
+        }
+      }
+      ZTNET_NAMES.set(nwid, { t: Date.now(), map });
+      resolve(map);
+    });
+  });
+}
+
 // Periksa ulang jaringan ZeroTier: rentang IP bisa diganti di ZTNET setelah VPS dihubungkan.
 // Tahap 1 (async): baca controller, setujui ulang IP yang perlu dipindah, hasilkan rencana.
 async function ztCheck(d) {
@@ -1423,6 +1458,7 @@ async function ztPending(d) {
   const mi = await ztMemberIps(z.nwid);
   if (mi.error) return { error: mi.error };
   const bound = new Set(d.sites.map((s) => s.ztNode).filter(Boolean));
+  const names = await ztnetNames(z.nwid);
   const peers = await ztApi("GET", "/peer");
   const pmap = {};
   if (peers.ok) for (const p of peers.json || []) pmap[p.address] = p;
@@ -1431,9 +1467,9 @@ async function ztPending(d) {
     if (id === z.vpsNode || bound.has(id)) continue;
     const p = pmap[id];
     const path = p && (p.paths || []).find((x) => x.active || x.preferred);
-    list.push({ node: id, authorized: !!m.authorized, ips: m.ipAssignments || [], seen: !!p, physical: path ? String(path.address).split("/")[0] : "", latency: p ? p.latency : null });
+    list.push({ node: id, name: (names[id] || {}).name || "", authorized: !!m.authorized, ips: m.ipAssignments || [], seen: !!p, physical: path ? String(path.address).split("/")[0] : "", latency: p ? p.latency : null });
   }
-  list.sort((a, b) => Number(a.authorized) - Number(b.authorized) || Number(b.seen) - Number(a.seen));
+  list.sort((a, b) => Number(b.seen) - Number(a.seen) || Number(a.authorized) - Number(b.authorized) || (a.name || a.node).localeCompare(b.name || b.node));
   return { list };
 }
 // Pasangkan router dengan anggota ZeroTier: setujui + beri IP + route
@@ -2808,6 +2844,12 @@ async function handleApi(req, res, url) {
     await ztRefresh(req).catch((e) => console.error("Pemeriksaan ZeroTier gagal:", e.message));
     return send(res, 200, await ztStatus(loadData()));
   }
+  if (p === "/api/zt/free" && method === "GET") {
+    await ztRefresh(req).catch(() => {});
+    const r = await ztPending(loadData());
+    if (r.error) return send(res, 400, { error: r.error });
+    return send(res, 200, r);
+  }
   if (p === "/api/zt/use" && method === "POST") {
     const d = loadData();
     const r = await ztUse(d, String(body.nwid || "").trim().toLowerCase());
@@ -4164,7 +4206,7 @@ async function openZtPick(id) {
     let r;
     try { r = await api(`/api/sites/${id}/zt-pending`); } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
     if (!$("#zpList")) return;
-    el.innerHTML = r.list.length ? r.list.map((m) => `<div class="pick"><span class="dot ${m.seen ? "ok" : "wait"}"></span><span class="grow"><b>${esc(m.node)}</b>
+    el.innerHTML = r.list.length ? r.list.map((m) => `<div class="pick"><span class="dot ${m.seen ? "ok" : "wait"}"></span><span class="grow"><b>${esc(m.name || m.node)}</b>${m.name ? ` <span class="muted mono" style="font-size:12px">${esc(m.node)}</span>` : ""}${m.ips && m.ips.length ? ` <span class="muted mono" style="font-size:12px">· ${esc(m.ips[0])}</span>` : ""}
         <small>${m.seen ? `Terlihat online${m.physical ? " dari " + esc(m.physical) : ""}${m.latency >= 0 && m.latency != null ? ` · ${m.latency} ms` : ""}` : "Belum terlihat online"}${m.authorized ? " · sudah disetujui (mungkin perangkat lain)" : " · menunggu persetujuan"}</small></span>
         <button class="btn sm pri" data-node="${esc(m.node)}">Pilih</button></div>`).join("")
       : `<div class="empty" style="padding:22px 10px"><p>Belum ada perangkat yang bergabung.<br>Pasang script di MikroTik, tunggu sekitar 30 detik, lalu klik Muat ulang.</p></div>`;
@@ -4342,8 +4384,12 @@ function siteForm(x) {
     <label>Jalur ke VPS</label>
     <div class="seg"><label><input type="radio" name="fTr" value="l2tp" ${cur !== "zt" ? "checked" : ""}>L2TP</label><label ${z ? "" : 'class="netopt dis" style="margin:0;padding:8px 12px" title="Hubungkan VPS ke jaringan di menu ZeroTier dulu"'}><input type="radio" name="fTr" value="zt" ${cur === "zt" ? "checked" : ""} ${z ? "" : "disabled"}>ZeroTier</label></div>
     <div class="help">${z ? "ZeroTier butuh RouterOS v7 dengan paket zerotier (router ARM/ARM64). Router lain pakai L2TP." : 'ZeroTier belum diatur. Buka <a href="#/zerotier">menu ZeroTier</a> untuk mengaktifkan.'}</div>
-    <div id="fZtBox" class="${cur === "zt" ? "" : "hidden"}"><label for="fZtNode">Node ID ZeroTier router <span class="muted" style="font-weight:400">(opsional)</span></label>
-      <input id="fZtNode" type="text" maxlength="10" placeholder="Bisa dipilih nanti setelah script dipasang" value="${esc(x?.ztNode || "")}"></div>
+    <div id="fZtBox" class="${cur === "zt" ? "" : "hidden"}">${x && x.ztNode ? `<label for="fZtNode">Node ID ZeroTier router</label>
+      <input id="fZtNode" type="text" maxlength="10" value="${esc(x.ztNode)}"><div class="help">Untuk mengganti, pakai tombol Ganti router di tab Ringkasan.</div>`
+      : `<label for="fZtSel">Perangkat ZeroTier <span class="muted" style="font-weight:400">(opsional)</span></label>
+      <select id="fZtSel"><option value="">Memuat perangkat yang bergabung…</option></select>
+      <input id="fZtNode" type="text" maxlength="10" class="hidden" style="margin-top:8px" placeholder="Node ID 10 karakter, contoh: 1a2b3c4d5e">
+      <div class="help" id="fZtHelp">Pilih MikroTik yang sudah bergabung ke jaringan ZeroTier (nama dari ZTNET). Jika belum bergabung, pilih nanti setelah script dipasang.</div>`}</div>
     <label for="fName">Nama router</label>
     <input id="fName" type="text" maxlength="40" placeholder="contoh: Nangahale" value="${esc(x?.name || "")}">
     <label for="fSub">Subnet ONT di MikroTik</label>
@@ -4357,7 +4403,42 @@ function siteForm(x) {
     <div class="err" id="fErr"></div>`;
 }
 const readForm = () => ({ name: $("#fName").value, realSubnet: $("#fSub").value, virtualSubnet: $("#fVirt").value, note: $("#fNote").value, transport: (document.querySelector("input[name=fTr]:checked") || {}).value || "l2tp", ztNode: $("#fZtNode") ? $("#fZtNode").value.trim() : "" });
-function bindTrForm() { document.querySelectorAll("input[name=fTr]").forEach((r) => (r.onchange = () => $("#fZtBox").classList.toggle("hidden", r.value !== "zt" || !r.checked))); }
+let ZTFREE = null; // cache daftar perangkat ZeroTier untuk form
+async function loadZtFree() {
+  const sel = $("#fZtSel"); if (!sel) return;
+  const keep = sel.value;
+  let list = [];
+  try { list = (await api("/api/zt/free")).list || []; } catch (e) { list = null; }
+  if (!$("#fZtSel")) return;
+  ZTFREE = list || [];
+  const opt = (v, t) => `<option value="${esc(v)}">${esc(t)}</option>`;
+  sel.innerHTML = opt("", list && list.length ? "Pilih nanti, setelah script dipasang" : "Belum ada perangkat yang bergabung, pilih nanti")
+    + (list || []).map((m) => opt(m.node, `${m.name || "Tanpa nama"} · ${m.node}${m.ips && m.ips.length ? " · " + m.ips[0] : ""} · ${m.seen ? "online" : "offline"}`)).join("")
+    + opt("__manual", "Isi Node ID manual…");
+  if (keep && [...sel.options].some((o) => o.value === keep)) sel.value = keep;
+  if (list === null) $("#fZtHelp").textContent = "Daftar perangkat tidak bisa dibaca. Isi Node ID manual atau pilih nanti setelah script dipasang.";
+}
+function bindTrForm() {
+  const sel = $("#fZtSel");
+  const showZt = () => {
+    const zt = (document.querySelector("input[name=fTr]:checked") || {}).value === "zt";
+    $("#fZtBox").classList.toggle("hidden", !zt);
+    if (zt && sel && ZTFREE === null) loadZtFree();
+  };
+  document.querySelectorAll("input[name=fTr]").forEach((r) => (r.onchange = showZt));
+  if (sel) {
+    ZTFREE = null;
+    sel.onchange = () => {
+      const v = sel.value, inp = $("#fZtNode");
+      inp.classList.toggle("hidden", v !== "__manual");
+      if (v === "__manual") { inp.value = ""; inp.focus(); return; }
+      inp.value = v;
+      const m = (ZTFREE || []).find((y) => y.node === v);
+      if (m && m.name && !$("#fName").value.trim()) $("#fName").value = m.name;
+    };
+  }
+  showZt();
+}
 function openAdd() {
   modal("Tambah router", siteForm(null), `<button class="btn" data-act="closemodal">Batal</button><button class="btn pri" id="fSave">Simpan</button>`);
   bindTrForm(); $("#fName").focus();
@@ -4720,7 +4801,7 @@ async function setZerotier(b) {
     ${cur && z.members ? `<div class="card"><div class="ch"><h2>Anggota jaringan</h2><span class="muted" style="font-size:12.5px">${z.members.length} perangkat</span></div>
       <table class="t"><thead><tr><th>Perangkat</th><th>Node ID</th><th>IP ZeroTier</th><th class="hide-sm">Asal</th><th class="r">Status</th></tr></thead><tbody>
       ${z.members.map((m) => `<tr${m.siteId ? ` class="click" data-go="#/router/${m.siteId}"` : ""}>
-        <td>${m.role === "vps" ? `<b style="font-weight:550">VPS</b> <span class="tag gray">panel ini</span>` : m.role === "router" ? `<b style="font-weight:550">${esc(m.name)}</b> <span class="tag">Router</span>` : `<span class="muted">Perangkat lain</span>`}</td>
+        <td>${m.role === "vps" ? `<b style="font-weight:550">VPS</b> <span class="tag gray">panel ini</span>` : m.role === "router" ? `<b style="font-weight:550">${esc(m.name)}</b> <span class="tag">Router</span>${m.ztName && m.ztName !== m.name ? `<div class="muted" style="font-size:12px">ZTNET: ${esc(m.ztName)}</div>` : ""}` : m.ztName ? `<b style="font-weight:550">${esc(m.ztName)}</b> <span class="tag gray">Belum dipakai</span>` : `<span class="muted">Perangkat lain</span>`}</td>
         <td class="mono">${esc(m.node)}</td><td class="mono">${esc((m.ips || []).join(", ") || "—")}</td>
         <td class="hide-sm mono muted">${esc(m.physical || "—")}</td>
         <td class="r">${!m.authorized ? `<span class="pill wait">Belum disetujui</span>` : m.online ? `<span class="pill ok">Online</span>` : `<span class="pill bad">Offline</span>`}</td></tr>`).join("")}

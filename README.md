@@ -254,7 +254,11 @@ Router **ARM/ARM64 dengan RouterOS v7** bisa tersambung ke VPS lewat ZeroTier, b
 3. Seret file `zerotier-7.x-arm.npk` (atau `-arm64.npk`) ke Winbox → **Files**.
 4. **System → Reboot**. Setelah menyala, `zerotier` muncul di **System → Packages**.
 
-**Tambah router:** panel → **Tambah router** → jalur **ZeroTier** → **Simpan** → tab **Script MikroTik** → tempel di New Terminal → tab **Ringkasan** → **Pilih router yang bergabung**. Panel otomatis menyetujui router, memberi IP ZeroTier, dan memasang route ke IP virtual.
+**Tambah router:** panel → **Tambah router** → jalur **ZeroTier**.
+- Jika MikroTik **sudah bergabung** ke jaringan (terlihat di ZTNET), pilih dari daftar **Perangkat ZeroTier**. Daftar memakai nama perangkat dari ZTNET, dan nama router terisi otomatis.
+- Jika **belum bergabung**, biarkan "Pilih nanti" → **Simpan** → tab **Script MikroTik** → tempel di New Terminal → tab **Ringkasan** → **Pilih router yang bergabung**.
+
+Panel otomatis menyetujui router, memberi IP ZeroTier, dan memasang route ke IP virtual. Nama perangkat dari ZTNET juga tampil di tabel **Anggota jaringan** di menu ZeroTier.
 
 **Mengganti rentang IP di ZTNET belakangan** boleh: panel memeriksa ulang jaringan setiap 5 menit dan setiap halaman ZeroTier dibuka, lalu menyesuaikan rentang, IP VPS, IP router, dan route secara otomatis (tercatat di Log aktivitas). Jika IP ZeroTier VPS ikut berubah, router ZeroTier diberi tanda **Pasang ulang script ZeroTier**. Rentang baru yang bentrok dengan jaringan lain ditolak dan ditampilkan sebagai peringatan.
 
