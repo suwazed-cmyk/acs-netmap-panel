@@ -194,7 +194,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.3.0";
+const VERSION = "2.4.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -1287,6 +1287,7 @@ async function ztStatus(d) {
       routes: cn.ok ? (cn.json.routes || []).map((r) => ({ target: r.target, via: r.via || "", panel: !!(r.via && (z.managedRoutes || []).includes(r.target)) })) : [],
       dns: cn.ok && cn.json.dns ? { domain: cn.json.dns.domain || "", servers: cn.json.dns.servers || [] } : { domain: "", servers: [] },
       created: cn.ok ? cn.json.creationTime || null : null,
+      desc: ((d.ztNets || {})[z.nwid] || {}).desc || "",
       status: j.ok ? j.json.status : "TIDAK TERGABUNG",
       iface: j.ok ? j.json.portDeviceName || z.iface : "",
       sites: d.sites.filter(isZt).length,
@@ -2344,14 +2345,29 @@ async function cfRollback(job) {
   return notes;
 }
 
-// ---------- Subdomain layanan (GenieACS) ----------
-const SUB_SERVICES = {
-  acs: { label: "GenieACS", port: () => readGenieUiPort() || 3000, def: "acs" },
-};
+// ---------- Subdomain layanan (GenieACS + aplikasi add-on yang terpasang) ----------
+const SUB_DEF = { "panel-acs": "ont", bilingku: "billing" };
+function subServices(d) {
+  d = d || loadData();
+  const out = { acs: { label: "GenieACS", port: () => readGenieUiPort() || 3000, def: "acs", stdOnly: false } };
+  for (const [id, a] of Object.entries(ADDONS)) {
+    if (a.kind !== "aplikasi" || !addonInstalled(d, id)) continue;
+    // Aplikasi hanya mendengar di 127.0.0.1, jadi subdomainnya dilayani panel lewat port web (80/443)
+    out[id] = { label: a.name, port: () => a.port, def: SUB_DEF[id] || id, stdOnly: true, addon: true };
+  }
+  return out;
+}
+// Alamat aplikasi add-on: subdomain sendiri bila diatur, selain itu path di alamat panel
+function addonUrl(d, id) {
+  const x = ((d.settings || {}).subdomains || {})[id];
+  if (x && x.host && STD_ON) return subUrl(id, x.host);
+  return "";
+}
 function subUrl(svc, host) {
   if (STD_ON && HTTPS_ON) return `https://${host}${portSfx("https")}`;
   if (STD_ON) return `http://${host}${portSfx("http")}`;
-  return `http://${host}:${SUB_SERVICES[svc].port()}`;
+  const S = subServices()[svc];
+  return S && !S.stdOnly ? `http://${host}:${S.port()}` : `http://${host}`;
 }
 // Buat / perbarui record A (DNS only) untuk satu nama host
 async function cfUpsertA(job, host, ip) {
@@ -2374,6 +2390,7 @@ async function cfUpsertA(job, host, ip) {
   return { ok: true, detail: `Record A dibuat: ${host} → ${ip} (DNS only)`, recordId: r.result.id, created: r.result.id };
 }
 function cfSubSteps(subs) {
+  const SUB_SERVICES = subServices();
   const steps = [
     { key: "token", label: "Cek token", desc: "Token Cloudflare yang tersimpan masih aktif" },
     { key: "ip", label: "IP publik VPS", desc: "Mendeteksi IP publik VPS ini" },
@@ -2385,6 +2402,7 @@ function cfSubSteps(subs) {
     steps.push({ key: "sdns:" + svc, label: `Record ${L}`, desc: `Membuat / memperbarui ${host} (DNS only)` });
     steps.push({ key: "sres:" + svc, label: `Cek ${host}`, desc: `${host} sudah mengarah ke IP VPS` });
   }
+  steps.push({ key: "scert", label: "Sertifikat HTTPS", desc: "Sertifikat mencakup semua subdomain (bila HTTPS aktif)" });
   steps.push({ key: "sapply", label: "Terapkan", desc: "Link di dashboard memakai subdomain baru" });
   return steps;
 }
@@ -2409,8 +2427,18 @@ async function cfRunSubStep(job, key) {
     }
     return { ok: false, detail: last && last.ips.length ? `${host} masih mengarah ke ${last.ips.join(", ")}` : `${host} belum bisa ditemukan di DNS`, hint: "DNS belum menyebar. Tunggu beberapa menit lalu coba lagi." };
   }
+  if (key === "scert") {
+    const d = loadData();
+    const cf = d.settings.cloudflare;
+    const hosts = Object.values(job.subs).filter(Boolean);
+    if (!(cf && cf.https && HTTPS_ON) || !hosts.length) return { ok: null, detail: "Dilewati: panel tidak memakai HTTPS" };
+    const r = await certExpand(cf.domain, hosts);
+    if (r.error) return { ok: false, detail: r.error, hint: "Coba lagi beberapa menit lagi." };
+    return { ok: true, detail: `Sertifikat mencakup ${[cf.domain].concat(hosts).join(", ")}` };
+  }
   if (key === "sapply") {
     const d = loadData();
+    const SUB_SERVICES = subServices(d);
     const s = (d.settings = d.settings || {});
     const old = s.subdomains || {};
     const next = {};
@@ -2418,15 +2446,14 @@ async function cfRunSubStep(job, key) {
     for (const svc of Object.keys(SUB_SERVICES)) {
       const host = job.subs[svc];
       const prev = old[svc];
-      const urlKey = "genieUrl";
       if (host) {
         const r = (c.subRes || {})[svc] || {};
         const sameHost = prev && prev.host === host;
         next[svc] = { host, recordId: r.recordId || (prev && prev.recordId) || "", created: !!r.created || !!(sameHost && prev.created) };
-        s[urlKey] = subUrl(svc, host);
-        notes.push(`${SUB_SERVICES[svc].label}: ${s[urlKey]}`);
+        if (svc === "acs") s.genieUrl = subUrl(svc, host);
+        notes.push(`${SUB_SERVICES[svc].label}: ${subUrl(svc, host)}`);
       } else if (prev) {
-        if (s[urlKey] === subUrl(svc, prev.host)) s[urlKey] = "";
+        if (svc === "acs" && s.genieUrl === subUrl(svc, prev.host)) s.genieUrl = "";
         notes.push(`${SUB_SERVICES[svc].label}: subdomain dimatikan`);
       }
       // Record lama buatan panel yang tidak dipakai lagi dihapus
@@ -3627,6 +3654,7 @@ async function addonList(d) {
     const x = { id, kind: a.kind, name: a.name, icon: a.icon, color: a.color || "blue", tagline: a.tagline || "", features: a.features || [], desc: a.desc, note: a.note || "", installed: !!st.installed, at: st.at || null, updatedAt: st.updatedAt || null };
     if (a.kind === "aplikasi") {
       x.path = addonPath(d, id);
+      x.url = addonUrl(d, id);
       x.repo = a.repo.replace(/\.git$/, "");
       x.port = a.port;
       const dir = addonDir(id);
@@ -3679,7 +3707,8 @@ function isOurHost(h) {
 function proxyHostTarget(h) {
   if (!STD_ON || !h) return 0;
   const subs = (loadData().settings || {}).subdomains || {};
-  for (const [svc, x] of Object.entries(subs)) if (x && x.host === h && SUB_SERVICES[svc]) return SUB_SERVICES[svc].port();
+  const S = subServices();
+  for (const [svc, x] of Object.entries(subs)) if (x && x.host === h && S[svc]) return S[svc].port();
   return 0;
 }
 // Path add-on: "/acs/..." -> { port, prefix }
@@ -3867,9 +3896,9 @@ async function refreshSubUrls(d) {
   const s = d.settings || {};
   const notes = [];
   for (const [svc, x] of Object.entries(s.subdomains || {})) {
-    if (!x || !x.host || !SUB_SERVICES[svc]) continue;
+    if (!x || !x.host || !subServices(d)[svc]) continue;
     const want = subUrl(svc, x.host);
-    s.genieUrl = want;
+    if (svc === "acs") s.genieUrl = want;
     notes.push(want);
   }
   return notes;
@@ -3892,7 +3921,8 @@ function stdOnSteps(want) {
       run: async () => {
         const d = loadData();
         const cf = d.settings.cloudflare;
-        const hosts = Object.entries(d.settings.subdomains || {}).filter(([k, x]) => SUB_SERVICES[k] && x && x.host).map(([, x]) => x.host);
+        const SV = subServices(d);
+        const hosts = Object.entries(d.settings.subdomains || {}).filter(([k, x]) => SV[k] && x && x.host).map(([, x]) => x.host);
         if (!(cf && cf.https && HTTPS_ON) || !hosts.length) return { skip: true, detail: "Tidak diperlukan" };
         const r = await certExpand(cf.domain, hosts);
         if (r.error) return r;
@@ -4188,7 +4218,7 @@ async function handleApi(req, res, url) {
         port: PORT,
         stdPorts: { enabled: stdWanted(d), active: STD_ON, error: STD_ERR, http: STD_ON ? STD_PORTS.http : stdConf(d).http, https: STD_ON ? STD_PORTS.https : stdConf(d).https, defHttp: stdDef("http"), defHttps: stdDef("https") },
         panelUrl: panelPublicUrl(st, d),
-        addons: Object.fromEntries(Object.entries(ADDONS).map(([id, a]) => [id, { installed: addonInstalled(d, id), kind: a.kind, name: a.name, icon: a.icon, color: a.color || "blue", tagline: a.tagline || "", path: a.kind === "aplikasi" ? addonPath(d, id) : "" }])),
+        addons: Object.fromEntries(Object.entries(ADDONS).map(([id, a]) => [id, { installed: addonInstalled(d, id), kind: a.kind, name: a.name, icon: a.icon, color: a.color || "blue", tagline: a.tagline || "", path: a.kind === "aplikasi" ? addonPath(d, id) : "", url: a.kind === "aplikasi" ? addonUrl(d, id) : "" }])),
         version: VERSION,
         updates: updateSummary(),
         panelName: st.brand,
@@ -4215,7 +4245,7 @@ async function handleApi(req, res, url) {
           lastErrorAt: TG_STATUS.lastErrorAt,
         },
         cloudflare: cf
-          ? { domain: cf.domain, zoneName: cf.zoneName, ip: cf.ip, https: !!cf.https, subdomains: d.settings.subdomains || {}, httpsActive: HTTPS_ON, appliedAt: cf.appliedAt, certExpiry: cf.https ? certExpiry(cf.domain) : null, publicIpBefore: d.settings.publicIpBeforeCf || "" }
+          ? { domain: cf.domain, zoneName: cf.zoneName, ip: cf.ip, https: !!cf.https, subdomains: d.settings.subdomains || {}, subServices: Object.entries(subServices(d)).map(([k, x]) => ({ key: k, label: x.label, def: x.def, port: x.stdOnly ? 0 : x.port(), addon: !!x.addon })), stdActive: STD_ON, httpsActive: HTTPS_ON, appliedAt: cf.appliedAt, certExpiry: cf.https ? certExpiry(cf.domain) : null, publicIpBefore: d.settings.publicIpBeforeCf || "" }
           : null,
       },
       sites: d.sites.map((s) => {
@@ -4347,12 +4377,15 @@ async function handleApi(req, res, url) {
     const cf = d.settings && d.settings.cloudflare;
     if (!cf || !cf.token || !cf.zoneId) return send(res, 400, { error: "Hubungkan domain Cloudflare dulu." });
     const subs = {};
+    const SUB_SERVICES = subServices(d);
     for (const svc of Object.keys(SUB_SERVICES)) {
       const label = String((body[svc] === undefined ? "" : body[svc]) || "").trim().toLowerCase();
       if (!label) continue;
       if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) return send(res, 400, { error: `Nama subdomain ${SUB_SERVICES[svc].label} tidak valid. Pakai huruf kecil, angka, atau tanda minus, contoh: ${SUB_SERVICES[svc].def}` });
       const host = `${label}.${cf.zoneName}`;
       if (host === cf.domain) return send(res, 400, { error: `${host} sudah dipakai panel. Pilih nama lain.` });
+      if (Object.values(subs).includes(host)) return send(res, 400, { error: `Subdomain ${host} dipakai dua kali. Pilih nama yang berbeda.` });
+      if (SUB_SERVICES[svc].stdOnly && !STD_ON) return send(res, 400, { error: `Subdomain ${SUB_SERVICES[svc].label} butuh Alamat panel (port web) aktif di Pengaturan → Umum.` });
       subs[svc] = host;
     }
     if (CF_JOB && !CF_JOB.done) await (CF_JOB.kind === "sub" ? cfRollbackSub(CF_JOB) : cfRollback(CF_JOB));
@@ -4610,6 +4643,17 @@ async function handleApi(req, res, url) {
       if (!/^[\w .-]{1,64}$/.test(name)) return send(res, 400, { error: "Nama jaringan 1-64 karakter: huruf, angka, spasi, titik, minus, atau garis bawah." });
       if ((C.name || "") !== name) { upd.name = name; changes.push(`nama ${C.name || "-"} → ${name}`); }
     }
+    // Deskripsi disimpan di panel (controller ZeroTier tidak menyimpan deskripsi)
+    if (body.description !== undefined) {
+      const desc = String(body.description || "").trim().slice(0, 200);
+      const N = (d.ztNets = d.ztNets || {});
+      if (((N[z.nwid] || {}).desc || "") !== desc) {
+        N[z.nwid] = Object.assign({}, N[z.nwid] || {}, { desc });
+        if (!desc) delete N[z.nwid].desc;
+        saveData(d);
+        changes.push(desc ? "deskripsi diubah" : "deskripsi dihapus");
+      }
+    }
     if (body.private !== undefined) {
       const priv = body.private !== false;
       if ((C.private !== false) !== priv) { upd.private = priv; changes.push(priv ? "akses → private" : "akses → PUBLIC"); }
@@ -4645,7 +4689,10 @@ async function handleApi(req, res, url) {
         changes.push(dom ? `DNS ${dom} (${servers.join(", ") || "-"})` : "DNS dikosongkan");
       }
     }
-    if (!Object.keys(upd).length) return send(res, 200, { ok: true, changed: false });
+    if (!Object.keys(upd).length) {
+      if (changes.length) logActivity(req, "Jaringan ZeroTier diubah", changes.join(" · "));
+      return send(res, 200, { ok: true, changed: !!changes.length });
+    }
     const r = await ztApi("POST", `/controller/network/${z.nwid}`, upd);
     if (!r.ok) return send(res, 500, { error: "Gagal menyimpan ke controller ZeroTier: " + r.error });
     const d2 = loadData();
@@ -5436,6 +5483,34 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .zt-empty .big svg{width:24px;height:24px}
   .zt-empty p{max-width:460px;margin:6px auto 0;line-height:1.55}
   .zt-hero{overflow:hidden}
+  .zt-hb{display:flex;gap:24px;align-items:flex-start;padding:22px 22px 18px}
+  .zt-hinfo{flex:1;min-width:0}
+  .zt-hrow{display:grid;grid-template-columns:150px minmax(0,1fr);align-items:center;gap:12px;min-height:40px}
+  .zt-hl{font-weight:650;color:var(--text);font-size:14px}
+  .zt-hv{display:flex;align-items:center;gap:8px;min-width:0}
+  .zt-nwid{font-size:26px;font-weight:600;letter-spacing:.03em;color:var(--text);line-height:1.2;word-break:break-all}
+  .zt-nname{font-size:18px;font-weight:550;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .zt-nin{max-width:320px;height:36px!important;font-size:15px!important}
+  .zt-ib{width:32px;height:32px;flex:none;display:grid;place-items:center;border:1px solid transparent;border-radius:8px;background:none;color:var(--primary);cursor:pointer;transition:background .12s,border-color .12s}
+  .zt-ib:hover{background:var(--primary-soft);border-color:color-mix(in srgb,var(--primary) 25%,transparent)}
+  .zt-ib svg{width:17px;height:17px}
+  .zt-ib.ok{color:var(--ok)}
+  .zt-desc{margin:14px 0 0;padding:6px 0 6px 14px;border-left:3px solid var(--primary);color:var(--text-2);font-size:14px;line-height:1.55;cursor:text;border-radius:0;white-space:pre-wrap;word-break:break-word}
+  .zt-desc.empty{color:var(--muted)}
+  .zt-desc:hover:not(.editing){background:var(--hover)}
+  .zt-desc:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+  .zt-desc.editing{cursor:default;padding-right:0}
+  .zt-dact{display:flex;align-items:center;gap:8px;margin-top:8px}
+  .zt-dact .sp{flex:1}
+  .zt-hmeta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:16px;font-size:12.5px}
+  .zt-hmeta .pill svg{width:11px;height:11px;margin-right:3px;vertical-align:-1px}
+  .zt-hside{display:flex;flex-direction:column;align-items:center;gap:6px;flex:none}
+  .zt-qrmini{width:132px;height:132px;padding:10px;border-radius:12px;background:#fff;border:1px solid var(--line);cursor:zoom-in;transition:box-shadow .15s,transform .15s}
+  .zt-qrmini:hover{box-shadow:0 10px 24px -12px rgba(16,24,40,.35);transform:translateY(-1px)}
+  .zt-qrmini svg{width:100%;height:100%;display:block}
+  .zt-qrcap{font-size:11.5px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+  .zt-hbar{display:flex;align-items:center;gap:10px;padding:12px 22px;border-top:1px solid var(--line);background:var(--subtle)}
+  .zt-hbar .sp{flex:1}
   .zt-hh{display:flex;align-items:center;gap:14px;padding:18px 20px;border-bottom:1px solid var(--line)}
   .zt-hic{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;background:linear-gradient(135deg,var(--primary),#3b82f6);color:#fff;flex:none;box-shadow:0 6px 16px -6px rgba(29,78,216,.55)}
   .zt-hic svg{width:22px;height:22px}
@@ -5511,7 +5586,9 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   @media (max-width:1024px){.zt-g2{grid-template-columns:1fr}}
   @media (max-width:720px){
     .stats.zt-stats{grid-template-columns:1fr 1fr}.zt-stats .stat:nth-child(2){border-right:0}.zt-stats .stat:nth-child(-n+2){border-bottom:1px solid var(--line)}
-    .zt-hh{flex-wrap:wrap;gap:12px}.zt-ht{flex:1 1 calc(100% - 60px)}.zt-ha{flex-basis:100%}.zt-ha .btn{flex:1;justify-content:center}
+    .zt-hb{flex-direction:column-reverse;align-items:stretch;gap:16px;padding:18px 16px}.zt-hside{align-self:center}
+    .zt-hrow{grid-template-columns:1fr;gap:2px;min-height:0;margin-bottom:10px}.zt-nwid{font-size:21px}
+    .zt-hbar{flex-wrap:wrap;padding:12px 16px}.zt-hbar .muted{flex-basis:100%}.zt-hbar .btn{flex:1;justify-content:center}
     .zt-2col{grid-template-columns:1fr}
     .zt-qr{flex-direction:column;align-items:center}.zt-qrinfo{width:100%}
     .zt-t .zt-colnode,.zt-t .zt-act,.zt-t th.r{display:none}.zt-nodesm{display:block}.zt-t tr.zt-tap{cursor:pointer}.zt-t .zt-apm{display:inline-flex}
@@ -5570,6 +5647,11 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .ad-info dt{width:130px;flex:none;color:var(--muted)}
   .ad-info dd{margin:0;min-width:0;word-break:break-word}
   .ad-mf{display:flex;align-items:center;gap:8px;width:100%;flex-wrap:wrap}
+  .subl{display:grid;gap:14px;margin-top:12px}
+  .subi{padding:12px 14px;border:1px solid var(--line);border-radius:var(--r-sm)}
+  .subi .check{margin:0}
+  .subr{display:flex;align-items:center;gap:8px;margin-top:8px}
+  .subr input{max-width:220px}
   .ad-upd{display:flex;gap:8px;align-items:flex-start;margin:-4px 18px 14px;padding:9px 12px;border-radius:var(--r-sm);background:var(--primary-soft);color:var(--primary);font-size:12.5px;line-height:1.45}
   .ad-upd svg{width:15px;height:15px;flex:none;margin-top:1px}
   .ad-acts{gap:8px}
@@ -6207,7 +6289,7 @@ function dashApps() {
   A.sort((x, y) => (x.kind === y.kind ? x.name.localeCompare(y.name) : x.kind === "aplikasi" ? -1 : 1));
   return `<div class="card"><div class="ch"><h2>Aplikasi</h2><a href="#/addon">Kelola</a></div>
     <ul class="dapps">${A.map((a) => `<li>${adIcon(a, "sm")}<span class="grow"><b>${esc(a.name)}</b><small>${esc(a.tagline || "")}</small></span>${a.kind === "aplikasi"
-      ? `<a class="btn sm" href="${esc(a.path)}/" target="_blank" rel="noopener">${ic("ext")}Buka</a>`
+      ? `<a class="btn sm" href="${esc(adHref(a))}" target="_blank" rel="noopener">${ic("ext")}Buka</a>`
       : `<a class="btn sm" href="#/${esc(a.id)}">Buka</a>`}</li>`).join("")}</ul></div>`;
 }
 function uptimeTable(S) {
@@ -6555,8 +6637,9 @@ function adState(a) {
   return { c: "ok", t: a.kind === "sistem" ? "Aktif" : "Berjalan" };
 }
 // Tombol "Buka": aplikasi di tab baru, add-on sistem ke menunya sendiri
+const adHref = (a) => a.url || a.path + "/";
 const adOpen = (a, cls) => a.kind === "aplikasi"
-  ? `<a class="btn pri ${cls || ""}" href="${esc(a.path)}/" target="_blank" rel="noopener">${ic("ext")}Buka</a>`
+  ? `<a class="btn pri ${cls || ""}" href="${esc(adHref(a))}" target="_blank" rel="noopener">${ic("ext")}Buka</a>`
   : `<a class="btn pri ${cls || ""}" href="#/${esc(a.id)}">Buka</a>`;
 async function fillAddons() {
   try {
@@ -6576,7 +6659,7 @@ function paintAddons() {
   const all = ADV.list.filter(hit);
   const tile = (a) => {
     const st = adState(a);
-    const meta = a.kind === "aplikasi" ? `<span class="mono">${esc(a.path)}/</span>${a.version ? ` · ${esc(a.version.split(" ")[0])}` : ""}` : `${a.routers || 0} router memakai`;
+    const meta = a.kind === "aplikasi" ? `<span class="mono">${esc(a.url ? a.url.replace(/^https?:\/\//, "") : a.path + "/")}</span>${a.version ? ` · ${esc(a.version.split(" ")[0])}` : ""}` : `${a.routers || 0} router memakai`;
     return `<div class="card ad-tile">
       <div class="ad-tt">${adIcon(a)}
         <div class="ad-tn"><b>${esc(a.name)}</b><span class="ad-st"><i class="dot ${st.c}"></i>${esc(st.t)} · ${meta}</span></div>
@@ -6647,7 +6730,7 @@ function adDetail(a) {
   const info = [];
   info.push(["Kategori", adCat(a)]);
   if (a.installed && a.kind === "aplikasi") {
-    info.push(["Alamat", `<a href="${esc(a.path)}/" target="_blank" rel="noopener" class="mono">${esc((STATE.settings.panelUrl || "").replace(/\/$/, "") + a.path)}/</a>`]);
+    info.push(["Alamat", `<a href="${esc(adHref(a))}" target="_blank" rel="noopener" class="mono">${esc(a.url || (STATE.settings.panelUrl || "").replace(/\/$/, "") + a.path + "/")}</a>${a.url ? `<div class="muted" style="font-size:12.5px">juga di ${esc((STATE.settings.panelUrl || "").replace(/\/$/, "") + a.path)}/</div>` : `<div class="muted" style="font-size:12.5px">Subdomain sendiri bisa diatur di <a href="#/pengaturan/domain">Domain &amp; HTTPS</a></div>`}`]);
     if (a.version) info.push(["Versi", `<span class="mono">${esc(a.version)}</span>`]);
   } else if (a.kind === "aplikasi") info.push(["Alamat", `<span class="mono">${esc(a.path)}/</span> <span class="muted">(bisa diganti setelah dipasang)</span>`]);
   if (a.kind === "sistem" && a.installed) info.push(["Router memakai", String(a.routers || 0)]);
@@ -7321,14 +7404,19 @@ async function setZerotier(b) {
     ${pending.length ? `<div class="note warn zt-pend">${ic("clock")}<div><b>${pending.length} perangkat menunggu persetujuan</b>${pending.slice(0, 3).map((m) => `<span class="mono">${esc(m.node)}</span>${m.name ? ` (${esc(m.name)})` : ""}`).join(", ")}${pending.length > 3 ? " dan lainnya" : ""}. Router yang dipasang dari panel disetujui otomatis.
       <div style="margin-top:10px"><button class="btn sm" id="ztShowPend">Lihat &amp; setujui</button></div></div></div>` : ""}
     <div class="card zt-hero">
-      <div class="zt-hh">
-        <span class="zt-hic">${ic("hub")}</span>
-        <div class="zt-ht">
-          <h2>${esc(cur.name || "(tanpa nama)")} ${cur.private ? `<span class="pill ok">${ic("lock", "")}Private</span>` : `<span class="pill bad">Public</span>`} ${okNet ? `<span class="pill info">Dipakai panel</span>` : ""}</h2>
-          <div class="zt-id"><span class="mono">${esc(cur.nwid)}</span>${copyBtn(cur.nwid, "Network ID tersalin")}<span class="sep">·</span>interface ${esc(cur.iface || "—")}</div>
+      <div class="zt-hb">
+        <div class="zt-hinfo">
+          <div class="zt-hrow"><span class="zt-hl">Network ID</span><span class="zt-hv"><span class="zt-nwid mono">${esc(cur.nwid)}</span><button class="zt-ib" data-copy="${esc(cur.nwid)}" data-msg="Network ID tersalin" title="Salin Network ID" aria-label="Salin Network ID">${ic("copy")}</button></span></div>
+          <div class="zt-hrow"><span class="zt-hl">Nama jaringan</span><span class="zt-hv" id="ztNameBox"><span class="zt-nname">${esc(cur.name || "(tanpa nama)")}</span><button class="zt-ib" id="ztNameEdit" title="Ganti nama" aria-label="Ganti nama">${ic("edit")}</button></span></div>
+          <div class="zt-desc${cur.desc ? "" : " empty"}" id="ztDesc" role="button" tabindex="0" title="Klik untuk mengubah deskripsi">${cur.desc ? esc(cur.desc) : "Tambah deskripsi"}</div>
+          <div class="zt-hmeta">${cur.private ? `<span class="pill ok">${ic("lock", "")}Private</span>` : `<span class="pill bad">Public</span>`}${okNet ? `<span class="pill info">Dipakai panel</span>` : ""}<span class="muted">interface <span class="mono">${esc(cur.iface || "—")}</span></span></div>
         </div>
-        <div class="zt-ha"><button class="btn" id="ztQr">${ic("qr")}Gabung dari HP</button><button class="btn" id="ztSet">${ic("sliders")}Pengaturan</button></div>
+        <div class="zt-hside">
+          <button class="zt-qrmini" id="ztQr" title="Perbesar QR Network ID" aria-label="QR Network ID">${(() => { try { const q = qrcode(0, "M"); q.addData(cur.nwid); q.make(); return q.createSvgTag({ cellSize: 4, margin: 0, scalable: true }); } catch (e) { return ic("qr"); } })()}</button>
+          <span class="zt-qrcap">QR Network ID</span>
+        </div>
       </div>
+      <div class="zt-hbar"><span class="muted zt-small">Pindai QR dengan HP untuk menyalin Network ID ke aplikasi ZeroTier One.</span><span class="sp"></span><button class="btn" id="ztSet">${ic("sliders")}Pengaturan</button></div>
       <div class="stats zt-stats">
         <div class="stat"><span>Rentang IP</span><b class="mono">${esc(cur.subnet)}</b><small>${cur.poolStart && cur.poolEnd ? `Pool ${esc(cur.poolStart)} – .${esc(cur.poolEnd.split(".").pop())}` : "Pool otomatis (seluruh rentang)"}</small></div>
         <div class="stat"><span>IP VPS</span><b class="mono">${esc(cur.vpsIp)}</b><small>gateway router ZeroTier</small></div>
@@ -7408,6 +7496,7 @@ async function setZerotier(b) {
   const sp = $("#ztShowPend"); if (sp) sp.onclick = () => { ZTV.f = "wait"; ZTV.q = ""; setZerotier(b).then(() => { const el = $("#ztMembers"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }); };
   $("#ztSet").onclick = () => ztSettingsDialog(cur, b);
   $("#ztQr").onclick = () => ztQrDialog(cur);
+  ztInlineEdit(cur, b);
   $("#ztLeave").onclick = () => confirmDialog({
     title: "Lepas VPS dari jaringan ini?", danger: true, icon: "hub", ok: "Lepas",
     text: `<p>VPS keluar dari jaringan <b>${esc(cur.name || cur.nwid)}</b>. Jaringan dan perangkatnya tetap tersimpan di controller dan bisa dihubungkan lagi. Router yang memakai ZeroTier harus dipindah ke L2TP atau dihapus dulu.</p>`,
@@ -7427,16 +7516,53 @@ function ztAutoRefresh(b, members) {
   const sig = ztSig(members);
   ZTPOLL = setInterval(async () => {
     if (!location.hash.startsWith("#/zerotier") || !document.body.contains(b)) { clearInterval(ZTPOLL); return; }
-    if ($("#modalRoot").innerHTML || document.activeElement === $("#ztQ") || document.hidden) return;
+    if ($("#modalRoot").innerHTML || document.activeElement === $("#ztQ") || $("#ztNameIn") || $("#ztDescIn") || document.hidden) return;
     let z;
     try { z = await api("/api/zt"); } catch (e) { return; }
     if (ztSig(z.members) !== sig) setZerotier(b);
   }, 10000);
 }
+// Ganti nama & deskripsi jaringan langsung di kartu
+function ztInlineEdit(cur, b) {
+  const save = async (bodyData, msg) => { await api("/api/zt/network", { method: "PUT", body: bodyData }); await load(); setZerotier(b); toast(msg); };
+  $("#ztNameEdit").onclick = () => {
+    const box = $("#ztNameBox");
+    box.innerHTML = `<input id="ztNameIn" type="text" maxlength="64" value="${esc(cur.name || "")}" class="zt-nin"><button class="zt-ib ok" id="ztNameOk" title="Simpan">${ic("check")}</button><button class="zt-ib" id="ztNameNo" title="Batal">${ic("x")}</button>`;
+    const inp = $("#ztNameIn"); inp.focus(); inp.select();
+    const go = async () => {
+      const v = inp.value.trim();
+      if (v === (cur.name || "")) return setZerotier(b);
+      busyBtn($("#ztNameOk"), true);
+      try { await save({ name: v }, "Nama jaringan disimpan"); } catch (e) { toast(e.message); busyBtn($("#ztNameOk"), false); inp.focus(); }
+    };
+    $("#ztNameOk").onclick = go;
+    $("#ztNameNo").onclick = () => setZerotier(b);
+    inp.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } else if (e.key === "Escape") { e.stopPropagation(); setZerotier(b); } };
+  };
+  const desc = $("#ztDesc");
+  const editDesc = () => {
+    if (desc.classList.contains("editing")) return;
+    desc.classList.add("editing"); desc.classList.remove("empty");
+    desc.innerHTML = `<textarea id="ztDescIn" class="zt-ta" rows="2" maxlength="200" placeholder="contoh: Jaringan router pelanggan area Maumere">${esc(cur.desc || "")}</textarea>
+      <div class="zt-dact"><span class="muted zt-small">Enter untuk simpan · Esc untuk batal</span><span class="sp"></span><button class="btn sm" id="ztDescNo" type="button">Batal</button><button class="btn sm pri" id="ztDescOk" type="button">Simpan</button></div>`;
+    const ta = $("#ztDescIn"); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+    const go = async () => {
+      const v = ta.value.trim();
+      if (v === (cur.desc || "")) return setZerotier(b);
+      busyBtn($("#ztDescOk"), true);
+      try { await save({ description: v }, v ? "Deskripsi disimpan" : "Deskripsi dihapus"); } catch (e) { toast(e.message); busyBtn($("#ztDescOk"), false); }
+    };
+    $("#ztDescOk").onclick = (e) => { e.stopPropagation(); go(); };
+    $("#ztDescNo").onclick = (e) => { e.stopPropagation(); setZerotier(b); };
+    ta.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); go(); } else if (e.key === "Escape") { e.stopPropagation(); setZerotier(b); } };
+  };
+  desc.onclick = editDesc;
+  desc.onkeydown = (e) => { if (e.key === "Enter" && !desc.classList.contains("editing")) { e.preventDefault(); editDesc(); } };
+}
 function ztQrDialog(cur) {
   let svg = "";
   try { const q = qrcode(0, "M"); q.addData(cur.nwid); q.make(); svg = q.createSvgTag({ cellSize: 6, margin: 3, scalable: true }); } catch (e) { svg = ""; }
-  modal("Gabung dari HP", `
+  modal("QR Network ID", `
     <div class="zt-qr">
       <div class="zt-qrbox">${svg || `<p class="muted">QR tidak bisa dibuat</p>`}</div>
       <div class="zt-qrinfo">
@@ -7791,14 +7917,17 @@ function setDomain(b) {
         <button class="btn" id="cfAgain">${ic("refresh")}Verifikasi ulang</button>
       </div></div>
     <div class="card"><div class="ch"><h2>Subdomain layanan</h2></div><form class="cb" id="subForm" style="padding-top:6px">
-      <p class="help" style="margin-top:4px">Panel membuat record DNS (DNS only) untuk GenieACS di <b>${esc(c.zoneName)}</b>, lalu memasang link-nya di dashboard. Nama subdomain bisa diganti kapan saja; record lama buatan panel ikut dihapus.</p>
-      ${[["acs", "GenieACS", 3000, "acs"]].map(([k, L, port, def]) => {
-        const cur = (c.subdomains || {})[k];
-        const val = cur ? cur.host.slice(0, -(c.zoneName.length + 1)) : def;
-        return `<label class="check" style="margin-top:14px"><input type="checkbox" id="subOn_${k}" ${cur || !c.subdomains || !Object.keys(c.subdomains).length ? "checked" : ""}>${L}</label>
-          <div style="display:flex;align-items:center;gap:8px;margin-top:6px"><input id="sub_${k}" type="text" value="${esc(val)}" style="max-width:200px"><span class="mono muted">.${esc(c.zoneName)}:${port}</span></div>
-          ${cur ? `<div class="help">Aktif: <a class="ext" href="http://${esc(cur.host)}:${port}" target="_blank" rel="noopener">${esc(cur.host)}:${port}${ic("ext", "")}</a></div>` : ""}`;
-      }).join("")}
+      <p class="help" style="margin-top:4px">Panel membuat record DNS (DNS only) di <b>${esc(c.zoneName)}</b> untuk GenieACS dan aplikasi add-on yang terpasang, lalu memasang link-nya di panel. ${c.https ? "Sertifikat HTTPS ikut diperluas otomatis. " : ""}Nama subdomain bisa diganti kapan saja; record lama buatan panel ikut dihapus.</p>
+      <div class="subl">${(c.subServices || []).map((x) => {
+        const k = x.key, cur = (c.subdomains || {})[k];
+        const val = cur ? cur.host.slice(0, -(c.zoneName.length + 1)) : x.def;
+        const sfx = x.port && !c.stdActive ? ":" + x.port : "";
+        const scheme = c.https && c.stdActive ? "https" : "http";
+        const blocked = x.addon && !c.stdActive;
+        return `<div class="subi"><label class="check"><input type="checkbox" id="subOn_${esc(k)}" ${blocked ? "disabled" : cur || (!x.addon && !Object.keys(c.subdomains || {}).length) ? "checked" : ""}>${esc(x.label)} ${x.addon ? `<span class="tag gray">Add-on</span>` : ""}</label>
+          <div class="subr"><input id="sub_${esc(k)}" type="text" value="${esc(val)}"><span class="mono muted">.${esc(c.zoneName)}${sfx}</span></div>
+          ${blocked ? `<div class="help">Butuh <a href="#/pengaturan/umum">Alamat panel</a> (port web) aktif.</div>` : cur ? `<div class="help">Aktif: <a class="ext" href="${scheme}://${esc(cur.host)}${sfx}" target="_blank" rel="noopener">${esc(cur.host)}${sfx}${ic("ext", "")}</a></div>` : ""}</div>`;
+      }).join("")}</div>
       <div class="err" id="subErr"></div>
       <div class="form-actions"><button class="btn pri" id="subGo">${ic("play")}Terapkan subdomain</button></div>
     </form></div>` : ""}
@@ -7831,12 +7960,13 @@ function setDomain(b) {
   const sf = $("#subForm");
   if (sf) {
     const sync = (k) => { $("#sub_" + k).disabled = !$("#subOn_" + k).checked; };
-    ["acs"].forEach((k) => { $("#subOn_" + k).onchange = () => sync(k); sync(k); });
+    const SK = (c.subServices || []).map((x) => x.key);
+    SK.forEach((k) => { $("#subOn_" + k).onchange = () => sync(k); sync(k); });
     sf.onsubmit = (e) => {
       e.preventDefault(); $("#subErr").textContent = "";
       const body = {};
-      ["acs"].forEach((k) => { body[k] = $("#subOn_" + k).checked ? $("#sub_" + k).value.trim() : ""; });
-      if (!body.acs && !body.zt && !Object.keys(c.subdomains || {}).length) { $("#subErr").textContent = "Aktifkan minimal satu subdomain."; return; }
+      SK.forEach((k) => { body[k] = $("#subOn_" + k).checked ? $("#sub_" + k).value.trim() : ""; });
+      if (!SK.some((k) => body[k]) && !Object.keys(c.subdomains || {}).length) { $("#subErr").textContent = "Aktifkan minimal satu subdomain."; return; }
       runCf(c.zoneName, "", false, { path: "/api/cloudflare/subs", body, title: "subdomain", errEl: "#subErr" });
     };
   }

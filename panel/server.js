@@ -51,7 +51,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.3.0";
+const VERSION = "2.4.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -1144,6 +1144,7 @@ async function ztStatus(d) {
       routes: cn.ok ? (cn.json.routes || []).map((r) => ({ target: r.target, via: r.via || "", panel: !!(r.via && (z.managedRoutes || []).includes(r.target)) })) : [],
       dns: cn.ok && cn.json.dns ? { domain: cn.json.dns.domain || "", servers: cn.json.dns.servers || [] } : { domain: "", servers: [] },
       created: cn.ok ? cn.json.creationTime || null : null,
+      desc: ((d.ztNets || {})[z.nwid] || {}).desc || "",
       status: j.ok ? j.json.status : "TIDAK TERGABUNG",
       iface: j.ok ? j.json.portDeviceName || z.iface : "",
       sites: d.sites.filter(isZt).length,
@@ -2201,14 +2202,29 @@ async function cfRollback(job) {
   return notes;
 }
 
-// ---------- Subdomain layanan (GenieACS) ----------
-const SUB_SERVICES = {
-  acs: { label: "GenieACS", port: () => readGenieUiPort() || 3000, def: "acs" },
-};
+// ---------- Subdomain layanan (GenieACS + aplikasi add-on yang terpasang) ----------
+const SUB_DEF = { "panel-acs": "ont", bilingku: "billing" };
+function subServices(d) {
+  d = d || loadData();
+  const out = { acs: { label: "GenieACS", port: () => readGenieUiPort() || 3000, def: "acs", stdOnly: false } };
+  for (const [id, a] of Object.entries(ADDONS)) {
+    if (a.kind !== "aplikasi" || !addonInstalled(d, id)) continue;
+    // Aplikasi hanya mendengar di 127.0.0.1, jadi subdomainnya dilayani panel lewat port web (80/443)
+    out[id] = { label: a.name, port: () => a.port, def: SUB_DEF[id] || id, stdOnly: true, addon: true };
+  }
+  return out;
+}
+// Alamat aplikasi add-on: subdomain sendiri bila diatur, selain itu path di alamat panel
+function addonUrl(d, id) {
+  const x = ((d.settings || {}).subdomains || {})[id];
+  if (x && x.host && STD_ON) return subUrl(id, x.host);
+  return "";
+}
 function subUrl(svc, host) {
   if (STD_ON && HTTPS_ON) return `https://${host}${portSfx("https")}`;
   if (STD_ON) return `http://${host}${portSfx("http")}`;
-  return `http://${host}:${SUB_SERVICES[svc].port()}`;
+  const S = subServices()[svc];
+  return S && !S.stdOnly ? `http://${host}:${S.port()}` : `http://${host}`;
 }
 // Buat / perbarui record A (DNS only) untuk satu nama host
 async function cfUpsertA(job, host, ip) {
@@ -2231,6 +2247,7 @@ async function cfUpsertA(job, host, ip) {
   return { ok: true, detail: `Record A dibuat: ${host} → ${ip} (DNS only)`, recordId: r.result.id, created: r.result.id };
 }
 function cfSubSteps(subs) {
+  const SUB_SERVICES = subServices();
   const steps = [
     { key: "token", label: "Cek token", desc: "Token Cloudflare yang tersimpan masih aktif" },
     { key: "ip", label: "IP publik VPS", desc: "Mendeteksi IP publik VPS ini" },
@@ -2242,6 +2259,7 @@ function cfSubSteps(subs) {
     steps.push({ key: "sdns:" + svc, label: `Record ${L}`, desc: `Membuat / memperbarui ${host} (DNS only)` });
     steps.push({ key: "sres:" + svc, label: `Cek ${host}`, desc: `${host} sudah mengarah ke IP VPS` });
   }
+  steps.push({ key: "scert", label: "Sertifikat HTTPS", desc: "Sertifikat mencakup semua subdomain (bila HTTPS aktif)" });
   steps.push({ key: "sapply", label: "Terapkan", desc: "Link di dashboard memakai subdomain baru" });
   return steps;
 }
@@ -2266,8 +2284,18 @@ async function cfRunSubStep(job, key) {
     }
     return { ok: false, detail: last && last.ips.length ? `${host} masih mengarah ke ${last.ips.join(", ")}` : `${host} belum bisa ditemukan di DNS`, hint: "DNS belum menyebar. Tunggu beberapa menit lalu coba lagi." };
   }
+  if (key === "scert") {
+    const d = loadData();
+    const cf = d.settings.cloudflare;
+    const hosts = Object.values(job.subs).filter(Boolean);
+    if (!(cf && cf.https && HTTPS_ON) || !hosts.length) return { ok: null, detail: "Dilewati: panel tidak memakai HTTPS" };
+    const r = await certExpand(cf.domain, hosts);
+    if (r.error) return { ok: false, detail: r.error, hint: "Coba lagi beberapa menit lagi." };
+    return { ok: true, detail: `Sertifikat mencakup ${[cf.domain].concat(hosts).join(", ")}` };
+  }
   if (key === "sapply") {
     const d = loadData();
+    const SUB_SERVICES = subServices(d);
     const s = (d.settings = d.settings || {});
     const old = s.subdomains || {};
     const next = {};
@@ -2275,15 +2303,14 @@ async function cfRunSubStep(job, key) {
     for (const svc of Object.keys(SUB_SERVICES)) {
       const host = job.subs[svc];
       const prev = old[svc];
-      const urlKey = "genieUrl";
       if (host) {
         const r = (c.subRes || {})[svc] || {};
         const sameHost = prev && prev.host === host;
         next[svc] = { host, recordId: r.recordId || (prev && prev.recordId) || "", created: !!r.created || !!(sameHost && prev.created) };
-        s[urlKey] = subUrl(svc, host);
-        notes.push(`${SUB_SERVICES[svc].label}: ${s[urlKey]}`);
+        if (svc === "acs") s.genieUrl = subUrl(svc, host);
+        notes.push(`${SUB_SERVICES[svc].label}: ${subUrl(svc, host)}`);
       } else if (prev) {
-        if (s[urlKey] === subUrl(svc, prev.host)) s[urlKey] = "";
+        if (svc === "acs" && s.genieUrl === subUrl(svc, prev.host)) s.genieUrl = "";
         notes.push(`${SUB_SERVICES[svc].label}: subdomain dimatikan`);
       }
       // Record lama buatan panel yang tidak dipakai lagi dihapus
@@ -3484,6 +3511,7 @@ async function addonList(d) {
     const x = { id, kind: a.kind, name: a.name, icon: a.icon, color: a.color || "blue", tagline: a.tagline || "", features: a.features || [], desc: a.desc, note: a.note || "", installed: !!st.installed, at: st.at || null, updatedAt: st.updatedAt || null };
     if (a.kind === "aplikasi") {
       x.path = addonPath(d, id);
+      x.url = addonUrl(d, id);
       x.repo = a.repo.replace(/\.git$/, "");
       x.port = a.port;
       const dir = addonDir(id);
@@ -3536,7 +3564,8 @@ function isOurHost(h) {
 function proxyHostTarget(h) {
   if (!STD_ON || !h) return 0;
   const subs = (loadData().settings || {}).subdomains || {};
-  for (const [svc, x] of Object.entries(subs)) if (x && x.host === h && SUB_SERVICES[svc]) return SUB_SERVICES[svc].port();
+  const S = subServices();
+  for (const [svc, x] of Object.entries(subs)) if (x && x.host === h && S[svc]) return S[svc].port();
   return 0;
 }
 // Path add-on: "/acs/..." -> { port, prefix }
@@ -3724,9 +3753,9 @@ async function refreshSubUrls(d) {
   const s = d.settings || {};
   const notes = [];
   for (const [svc, x] of Object.entries(s.subdomains || {})) {
-    if (!x || !x.host || !SUB_SERVICES[svc]) continue;
+    if (!x || !x.host || !subServices(d)[svc]) continue;
     const want = subUrl(svc, x.host);
-    s.genieUrl = want;
+    if (svc === "acs") s.genieUrl = want;
     notes.push(want);
   }
   return notes;
@@ -3749,7 +3778,8 @@ function stdOnSteps(want) {
       run: async () => {
         const d = loadData();
         const cf = d.settings.cloudflare;
-        const hosts = Object.entries(d.settings.subdomains || {}).filter(([k, x]) => SUB_SERVICES[k] && x && x.host).map(([, x]) => x.host);
+        const SV = subServices(d);
+        const hosts = Object.entries(d.settings.subdomains || {}).filter(([k, x]) => SV[k] && x && x.host).map(([, x]) => x.host);
         if (!(cf && cf.https && HTTPS_ON) || !hosts.length) return { skip: true, detail: "Tidak diperlukan" };
         const r = await certExpand(cf.domain, hosts);
         if (r.error) return r;
@@ -4045,7 +4075,7 @@ async function handleApi(req, res, url) {
         port: PORT,
         stdPorts: { enabled: stdWanted(d), active: STD_ON, error: STD_ERR, http: STD_ON ? STD_PORTS.http : stdConf(d).http, https: STD_ON ? STD_PORTS.https : stdConf(d).https, defHttp: stdDef("http"), defHttps: stdDef("https") },
         panelUrl: panelPublicUrl(st, d),
-        addons: Object.fromEntries(Object.entries(ADDONS).map(([id, a]) => [id, { installed: addonInstalled(d, id), kind: a.kind, name: a.name, icon: a.icon, color: a.color || "blue", tagline: a.tagline || "", path: a.kind === "aplikasi" ? addonPath(d, id) : "" }])),
+        addons: Object.fromEntries(Object.entries(ADDONS).map(([id, a]) => [id, { installed: addonInstalled(d, id), kind: a.kind, name: a.name, icon: a.icon, color: a.color || "blue", tagline: a.tagline || "", path: a.kind === "aplikasi" ? addonPath(d, id) : "", url: a.kind === "aplikasi" ? addonUrl(d, id) : "" }])),
         version: VERSION,
         updates: updateSummary(),
         panelName: st.brand,
@@ -4072,7 +4102,7 @@ async function handleApi(req, res, url) {
           lastErrorAt: TG_STATUS.lastErrorAt,
         },
         cloudflare: cf
-          ? { domain: cf.domain, zoneName: cf.zoneName, ip: cf.ip, https: !!cf.https, subdomains: d.settings.subdomains || {}, httpsActive: HTTPS_ON, appliedAt: cf.appliedAt, certExpiry: cf.https ? certExpiry(cf.domain) : null, publicIpBefore: d.settings.publicIpBeforeCf || "" }
+          ? { domain: cf.domain, zoneName: cf.zoneName, ip: cf.ip, https: !!cf.https, subdomains: d.settings.subdomains || {}, subServices: Object.entries(subServices(d)).map(([k, x]) => ({ key: k, label: x.label, def: x.def, port: x.stdOnly ? 0 : x.port(), addon: !!x.addon })), stdActive: STD_ON, httpsActive: HTTPS_ON, appliedAt: cf.appliedAt, certExpiry: cf.https ? certExpiry(cf.domain) : null, publicIpBefore: d.settings.publicIpBeforeCf || "" }
           : null,
       },
       sites: d.sites.map((s) => {
@@ -4204,12 +4234,15 @@ async function handleApi(req, res, url) {
     const cf = d.settings && d.settings.cloudflare;
     if (!cf || !cf.token || !cf.zoneId) return send(res, 400, { error: "Hubungkan domain Cloudflare dulu." });
     const subs = {};
+    const SUB_SERVICES = subServices(d);
     for (const svc of Object.keys(SUB_SERVICES)) {
       const label = String((body[svc] === undefined ? "" : body[svc]) || "").trim().toLowerCase();
       if (!label) continue;
       if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) return send(res, 400, { error: `Nama subdomain ${SUB_SERVICES[svc].label} tidak valid. Pakai huruf kecil, angka, atau tanda minus, contoh: ${SUB_SERVICES[svc].def}` });
       const host = `${label}.${cf.zoneName}`;
       if (host === cf.domain) return send(res, 400, { error: `${host} sudah dipakai panel. Pilih nama lain.` });
+      if (Object.values(subs).includes(host)) return send(res, 400, { error: `Subdomain ${host} dipakai dua kali. Pilih nama yang berbeda.` });
+      if (SUB_SERVICES[svc].stdOnly && !STD_ON) return send(res, 400, { error: `Subdomain ${SUB_SERVICES[svc].label} butuh Alamat panel (port web) aktif di Pengaturan → Umum.` });
       subs[svc] = host;
     }
     if (CF_JOB && !CF_JOB.done) await (CF_JOB.kind === "sub" ? cfRollbackSub(CF_JOB) : cfRollback(CF_JOB));
@@ -4467,6 +4500,17 @@ async function handleApi(req, res, url) {
       if (!/^[\w .-]{1,64}$/.test(name)) return send(res, 400, { error: "Nama jaringan 1-64 karakter: huruf, angka, spasi, titik, minus, atau garis bawah." });
       if ((C.name || "") !== name) { upd.name = name; changes.push(`nama ${C.name || "-"} → ${name}`); }
     }
+    // Deskripsi disimpan di panel (controller ZeroTier tidak menyimpan deskripsi)
+    if (body.description !== undefined) {
+      const desc = String(body.description || "").trim().slice(0, 200);
+      const N = (d.ztNets = d.ztNets || {});
+      if (((N[z.nwid] || {}).desc || "") !== desc) {
+        N[z.nwid] = Object.assign({}, N[z.nwid] || {}, { desc });
+        if (!desc) delete N[z.nwid].desc;
+        saveData(d);
+        changes.push(desc ? "deskripsi diubah" : "deskripsi dihapus");
+      }
+    }
     if (body.private !== undefined) {
       const priv = body.private !== false;
       if ((C.private !== false) !== priv) { upd.private = priv; changes.push(priv ? "akses → private" : "akses → PUBLIC"); }
@@ -4502,7 +4546,10 @@ async function handleApi(req, res, url) {
         changes.push(dom ? `DNS ${dom} (${servers.join(", ") || "-"})` : "DNS dikosongkan");
       }
     }
-    if (!Object.keys(upd).length) return send(res, 200, { ok: true, changed: false });
+    if (!Object.keys(upd).length) {
+      if (changes.length) logActivity(req, "Jaringan ZeroTier diubah", changes.join(" · "));
+      return send(res, 200, { ok: true, changed: !!changes.length });
+    }
     const r = await ztApi("POST", `/controller/network/${z.nwid}`, upd);
     if (!r.ok) return send(res, 500, { error: "Gagal menyimpan ke controller ZeroTier: " + r.error });
     const d2 = loadData();

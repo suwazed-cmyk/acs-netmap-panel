@@ -18,9 +18,9 @@ ONT ─ OLT ─ MikroTik router C ═══ VPN L2TP / ZeroTier ═══╝    
   - Akun VPN dan **script MikroTik siap salin**, mengikuti nama panel Anda
   - **Tes koneksi** bertahap, status **tersambung/terputus**, dan **riwayat uptime** 24 jam / 7 hari / 30 hari
   - **Port forwarding** untuk remote Winbox / WebFig / web ONT lewat IP publik VPS
-  - Halaman **GenieACS** (status layanan, patch, jumlah ONT per router) dan **ZeroTier** (controller lengkap: jaringan, rentang IP, perangkat, rute)
+  - Halaman **GenieACS** (status layanan, patch, jumlah ONT per router) dan **ZeroTier** (controller lengkap: jaringan, rentang IP, perangkat, rute; Network ID besar + tombol salin, ganti nama dan deskripsi langsung di kartu, QR Network ID)
   - **Notifikasi Telegram** saat VPN putus, dikirim ke grup bertopik
-  - **Domain Cloudflare + HTTPS** otomatis, termasuk subdomain untuk GenieACS
+  - **Domain Cloudflare + HTTPS** otomatis, termasuk subdomain untuk GenieACS dan add-on (Panel ACS, Bilingku)
   - **Log aktivitas** dan **nama panel** yang bisa diganti
   - **Alamat tanpa port**: panel dibuka di port 80/443 (`http://IP-VPS` atau `https://domain`)
   - Menu **Add-on** dengan tombol **Install** dan progres 0–100%:
@@ -235,6 +235,8 @@ Setelah berhasil:
 - Record harus **DNS only** (awan abu-abu). Proxy Cloudflare (awan oranye) tidak bisa meneruskan L2TP dan Winbox; panel mengaturnya otomatis.
 
 **Subdomain layanan:** di halaman yang sama, bagian **Subdomain layanan** membuat record DNS otomatis untuk **GenieACS** (bawaan `acs`, misalnya `http://acs.domainanda.com:3000`). Link di panel ikut diperbarui, dan namanya bisa diganti kapan saja. Pakai subdomain ini untuk GenieACS, **jangan domain panel**: domain panel yang ber-HTTPS membuat browser memaksa https di port lain.
+
+**Subdomain add-on:** setelah Panel ACS atau Bilingku terpasang, keduanya ikut muncul di **Subdomain layanan** (bawaan `ont` dan `billing`, misalnya `https://billing.domainanda.com`). Syaratnya **Alamat panel** (port web 80/443) aktif, karena add-on dibuka lewat panel tanpa port. Bila HTTPS aktif, sertifikat diperluas otomatis ke subdomain baru. Tombol **Buka** di Dashboard dan halaman Add-on langsung memakai subdomain; alamat lama (`/acs/`, `/billing/`) tetap bisa dipakai.
 
 ### C. Alamat tanpa port (80/443)
 Panel **langsung memakai port 80/443** setelah instal:
