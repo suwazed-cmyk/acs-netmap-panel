@@ -187,7 +187,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.0.2";
+const VERSION = "2.0.3";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -2566,9 +2566,30 @@ function jobSave() {
 }
 // Saat panel menyala: proses yang terputus ditandai gagal agar tidak terlihat macet
 function jobRestore() {
+  // log proses lama (lebih dari 7 hari) dibersihkan
+  try {
+    for (const f of fs.readdirSync(JOB_DIR)) {
+      const fp = JOB_DIR + "/" + f;
+      if (Date.now() - fs.statSync(fp).mtimeMs > 7 * 86400 * 1000) fs.unlinkSync(fp);
+    }
+  } catch (e) {
+    // belum ada
+  }
   try {
     const j = JSON.parse(fs.readFileSync(JOB_FILE, "utf8"));
     if (!j || !j.steps) return;
+    if (!j.done && j.detached && ADDONS[j.addon] && (j.action === "install" || j.action === "update")) {
+      const ad = ADDONS[j.addon];
+      const steps = ad.kind === "aplikasi" ? phpInstallSteps(j.addon, null, { update: j.action === "update" }) : ztInstallSteps();
+      j.resume = true;
+      j.log = (j.log || []).concat(["", "== Panel ter-restart, menyambung lagi ke proses yang berjalan"]);
+      logActivity(null, `${j.title} dilanjutkan`, "Panel ter-restart, proses dilanjutkan");
+      runJob(j, steps).catch((e) => {
+        j.done = true;
+        j.error = e.message;
+      });
+      return;
+    }
     if (!j.done) {
       const i = Math.max(0, Math.min(j.cur || 0, j.steps.length - 1));
       j.steps[i].state = "bad";
@@ -2629,19 +2650,126 @@ function runStream(cmd, args, opts) {
     });
   });
 }
+// needrestart (apt) jangan me-restart panel, VPN, GenieACS, dan add-on. Installer resmi ZTNET bahkan
+// mengubah needrestart menjadi restart otomatis, sehingga panel ikut mati di tengah pemasangan.
+const NEEDRESTART_CONF = ROOT + "/etc/needrestart/conf.d/vpn-acs.conf";
+function needrestartGuard() {
+  try {
+    if (!fs.existsSync(path.dirname(path.dirname(NEEDRESTART_CONF)))) return;
+    const re = ["vpn-acs", "xl2tpd", "(strongswan|ipsec)[^.]*", "genieacs-[^.]*", "addon-[^.]*", "vpnacs-job-[^.]*", "ztnet", "zerotier-one", "postgresql[^.]*"];
+    const text = "# Ditulis ACS NETMAP Panel: layanan ini tidak di-restart otomatis oleh needrestart (apt)\n" + re.map((x) => `$nrconf{override_rc}->{qr(^${x}\\.service$)} = 0;`).join("\n") + "\n";
+    writeIfChanged(NEEDRESTART_CONF, text);
+  } catch (e) {
+    console.error("needrestart:", e.message);
+  }
+}
+// Jalankan perintah panjang sebagai layanan systemd terpisah: tetap berjalan walau panel di-restart,
+// dan panel bisa menyambung lagi ke prosesnya. Keluaran ditulis ke berkas log lalu dibaca bertahap.
+const JOB_DIR = path.dirname(DATA_FILE) + "/jobs";
+function runDetached(job, key, command, opts) {
+  opts = opts || {};
+  if (!process.env.VPNACS_FORCE_DETACH && (DRY_RUN || !fs.existsSync("/run/systemd/system"))) return runStream("bash", ["-c", command], opts);
+  return new Promise((resolve) => {
+    (async () => {
+      const det = (job.detached = job.detached || {});
+      let cur = det[key];
+      const unitActive = async (u) => /^(active|activating|deactivating)$/.test((await run("systemctl", ["is-active", u])).out.trim());
+      if (!cur || (!(await unitActive(cur.unit)) && !fs.existsSync(cur.log))) {
+        fs.mkdirSync(JOB_DIR, { recursive: true });
+        const unit = `vpnacs-job-${job.id}-${key}`;
+        const log = `${JOB_DIR}/${unit}.log`;
+        fs.writeFileSync(log, "");
+        const wrapped = `(\n${command}\n)\nrc=$?\necho "@@EXIT $rc"`;
+        const env = { DEBIAN_FRONTEND: "noninteractive", LC_ALL: "C.UTF-8", NEEDRESTART_SUSPEND: "1", NEEDRESTART_MODE: "l", TERM: "xterm", HOME: "/root", PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" };
+        const args = ["--unit=" + unit, "--collect", "--quiet", "-p", "Nice=5", "-p", "OOMScoreAdjust=300", "-p", `StandardOutput=append:${log}`, "-p", `StandardError=append:${log}`];
+        for (const [k, v] of Object.entries(env)) args.push("--setenv=" + k + "=" + v);
+        if (opts.cwd) args.push("--working-directory=" + opts.cwd);
+        args.push("/bin/bash", "-c", wrapped);
+        const r = await run("systemd-run", args, 30000);
+        if (r.code !== 0) {
+          jobLog("systemd-run gagal: " + r.out.trim() + " — dijalankan langsung");
+          return resolve(await runStream("bash", ["-c", command], opts));
+        }
+        cur = det[key] = { unit, log, offset: 0 };
+        jobSave();
+      } else jobLog(`Menyambung lagi ke proses ${cur.unit} yang masih berjalan`);
+      const started = Date.now();
+      let buf = "";
+      let exit = null;
+      let idle = 0;
+      while (exit === null) {
+        await new Promise((z) => setTimeout(z, 1000));
+        let chunk = "";
+        try {
+          const fd = fs.openSync(cur.log, "r");
+          const size = fs.fstatSync(fd).size;
+          if (size > cur.offset) {
+            const b = Buffer.alloc(Math.min(size - cur.offset, 1024 * 1024));
+            fs.readSync(fd, b, 0, b.length, cur.offset);
+            cur.offset += b.length;
+            chunk = b.toString();
+          }
+          fs.closeSync(fd);
+        } catch (e) {
+          // berkas belum ada
+        }
+        if (chunk) {
+          buf += chunk;
+          const lines = buf.split(/\r?\n|\r/);
+          buf = lines.pop();
+          for (const l of lines) {
+            const m = l.match(/@@PROGRESS\s+(\d+)(?:\s+(.*))?/);
+            const e = l.match(/^@@EXIT (\d+)/);
+            if (e) exit = parseInt(e[1], 10);
+            else if (m && ADDON_JOB) {
+              ADDON_JOB.sub = Math.min(100, parseInt(m[1], 10)) / 100;
+              if (m[2]) ADDON_JOB.detail = m[2].trim();
+            } else jobLog(l);
+          }
+        }
+        if (exit !== null) break;
+        // proses sudah berhenti tanpa penanda keluar: anggap gagal
+        if (++idle % 5 === 0 && !(await unitActive(cur.unit))) {
+          await new Promise((z) => setTimeout(z, 1500));
+          try {
+            if (/@@EXIT (\d+)/.test(fs.readFileSync(cur.log, "utf8").slice(-200))) continue;
+          } catch (e) {
+            // abaikan
+          }
+          jobLog("Proses berhenti tanpa hasil (mungkin kehabisan memori). Cek: journalctl -u " + cur.unit);
+          exit = 1;
+        }
+        if (opts.timeoutMs && Date.now() - started > opts.timeoutMs) {
+          jobLog("Waktu habis, proses dihentikan.");
+          await run("systemctl", ["stop", cur.unit]);
+          exit = 1;
+        }
+      }
+      if (buf && !/^@@EXIT/.test(buf)) jobLog(buf);
+      resolve({ code: exit });
+    })().catch((e) => {
+      jobLog(e.message);
+      resolve({ code: 1 });
+    });
+  });
+}
 async function runJob(job, steps) {
   ADDON_JOB = job;
-  job.started = Date.now();
+  const resume = !!job.resume;
+  delete job.resume;
+  job.started = job.started || Date.now();
   job.lastOut = Date.now();
-  job.steps = steps.map((x) => ({ label: x.label, state: "wait", detail: "" }));
+  const from = resume ? Math.max(0, Math.min(job.cur || 0, steps.length - 1)) : 0;
+  const old = resume && Array.isArray(job.steps) ? job.steps : [];
+  job.steps = steps.map((x, i) => (i < from && old[i] ? old[i] : { label: x.label, state: "wait", detail: "" }));
   const total = steps.reduce((a, x) => a + (x.weight || 1), 0);
-  let doneW = 0;
+  let doneW = steps.slice(0, from).reduce((a, x) => a + (x.weight || 1), 0);
   const tick = setInterval(() => {
     const cur = steps[job.cur] || { weight: 0 };
     job.pct = Math.min(99, Math.round(((doneW + (cur.weight || 1) * (job.sub || 0)) / total) * 100));
   }, 300);
   const saver = setInterval(jobSave, 2000);
-  for (let i = 0; i < steps.length; i++) {
+  for (let i = from; i < steps.length; i++) {
     job.cur = i;
     job.sub = 0;
     job.detail = "";
@@ -2842,17 +2970,23 @@ function phpInstallSteps(id, req, opts) {
     run: async (job) => {
       const chk = await run("php", ["-r", 'echo PHP_VERSION, " ", (extension_loaded("pdo_sqlite") && extension_loaded("curl") && extension_loaded("mbstring")) ? "lengkap" : "kurang";']);
       if (chk.code === 0 && /lengkap/.test(chk.out)) return { skip: true, detail: `PHP ${chk.out.split(" ")[0]} sudah ada` };
-      // pulihkan paket yang setengah terpasang (mis. proses sebelumnya terputus)
-      job.detail = "memeriksa paket";
-      await runStream("dpkg", ["--configure", "-a"], { timeoutMs: 10 * 60 * 1000 });
-      job.detail = "apt-get update";
-      job.sub = 0.1;
-      const u = await runStream("apt-get", ["update", "-q"], { timeoutMs: 10 * 60 * 1000 });
-      if (u.code !== 0) return { error: "apt-get update gagal (lihat log). Mungkin apt sedang dipakai proses lain, coba lagi beberapa menit lagi." };
-      job.sub = 0.4;
-      job.detail = "apt-get install php";
-      const i = await runStream("apt-get", ["install", "-y", "-q", "php-cli", "php-sqlite3", "php-curl", "php-mbstring", "php-xml"], { timeoutMs: 15 * 60 * 1000 });
-      if (i.code !== 0) return { error: "Gagal memasang PHP (lihat log)" };
+      needrestartGuard();
+      job.detail = "memasang PHP lewat apt";
+      job.sub = 0.05;
+      // dpkg --configure -a memulihkan paket setengah terpasang (mis. proses sebelumnya terputus);
+      // apt menunggu bila sedang dipakai proses lain (update otomatis Ubuntu)
+      const sh = [
+        "echo '@@PROGRESS 5 memeriksa paket'",
+        "dpkg --configure -a",
+        "echo '@@PROGRESS 15 apt-get update'",
+        "apt-get -o DPkg::Lock::Timeout=300 update -q || exit 11",
+        "echo '@@PROGRESS 45 apt-get install php'",
+        "apt-get -o DPkg::Lock::Timeout=300 install -y -q php-cli php-sqlite3 php-curl php-mbstring php-xml || exit 12",
+        "echo '@@PROGRESS 100 PHP terpasang'",
+      ].join("\n");
+      const i = await runDetached(job, "php", sh, { timeoutMs: 30 * 60 * 1000 });
+      if (i.code === 11) return { error: "apt-get update gagal (lihat log). Cek koneksi internet VPS, lalu coba lagi." };
+      if (i.code !== 0) return { error: "Gagal memasang PHP (lihat log). Jika apt sedang dipakai proses lain, tunggu beberapa menit lalu coba lagi." };
       const v = await run("php", ["-r", "echo PHP_VERSION;"]);
       return { detail: `PHP ${v.out.trim()} terpasang` };
     },
@@ -3020,10 +3154,12 @@ function ztInstallSteps() {
         const d = loadData();
         const sub = d.settings.subdomains && d.settings.subdomains.zt && d.settings.subdomains.zt.host;
         const host = sub || settings(d).publicIp;
-        // Installer resmi ZTNET bertanya lewat terminal: dijalankan lewat "script" dan dijawab Enter (pilihan bawaan)
-        const cmd = `yes "" | ZTNET_AUTO=1 ZTNET_HOST='${String(host).replace(/[^\w.-]/g, "")}' script -qefc "bash ${SCRIPTS_DIR}/pasang-ztnet.sh" /dev/null`;
-        const r = await runStream("bash", ["-c", cmd], { timeoutMs: 40 * 60 * 1000 });
-        if (r.code !== 0 || !fs.existsSync(ZTNET_DIR + "/.env")) return { error: "Pemasangan ZTNET gagal (lihat log). Bisa juga dipasang lewat SSH: bash pasang-ztnet.sh" };
+        // Installer resmi ZTNET bertanya lewat terminal: dijalankan lewat "script" dan dijawab Enter (pilihan bawaan).
+        // Enter dikirim pelan (1 per detik): "yes" mengirim tanpa henti dan "script" menimbunnya di memori sampai RAM habis.
+        const cmd = `while sleep 1; do echo; done | ZTNET_AUTO=1 ZTNET_HOST='${String(host).replace(/[^\w.-]/g, "")}' script -qefc "bash ${SCRIPTS_DIR}/pasang-ztnet.sh" /dev/null`;
+        needrestartGuard();
+        const r = await runDetached(job, "ztnet", cmd, { timeoutMs: 60 * 60 * 1000 });
+        if (r.code !== 0 || !fs.existsSync(ZTNET_DIR + "/.env")) return { error: "Pemasangan ZTNET gagal (lihat log di bawah). Penyebab umum: memori kurang saat build, atau koneksi internet VPS terputus. Klik Install lagi, atau pasang lewat SSH: bash pasang-ztnet.sh" };
         return { detail: "ZTNET terpasang" };
       },
     },
@@ -4486,6 +4622,7 @@ if (process.argv[2] === "--set-password") {
     }
   }, 60 * 1000);
   setInterval(certReloadCheck, 3600 * 1000);
+  needrestartGuard();
   jobRestore();
   httpServer.on("upgrade", onUpgrade);
   const front = net.createServer(frontHandler);
@@ -6822,10 +6959,28 @@ ExecStartPre=-/bin/sh -c '[ "${ALLOW_PLAIN_L2TP}" = "yes" ] && command -v iptabl
 ExecStart=${NODE_BIN} ${APP_DIR}/server.js
 Restart=always
 RestartSec=3
+# Saat memori habis (mis. build ZTNET), panel bukan yang dimatikan kernel
+OOMScoreAdjust=-600
 
 [Install]
 WantedBy=multi-user.target
 EOF
+# needrestart (apt) tidak boleh me-restart panel/VPN/GenieACS/add-on di tengah pemasangan
+if [ -d /etc/needrestart ]; then
+  mkdir -p /etc/needrestart/conf.d
+  cat > /etc/needrestart/conf.d/vpn-acs.conf <<'NREOF'
+# Ditulis ACS NETMAP Panel: layanan ini tidak di-restart otomatis oleh needrestart (apt)
+$nrconf{override_rc}->{qr(^vpn-acs\.service$)} = 0;
+$nrconf{override_rc}->{qr(^xl2tpd\.service$)} = 0;
+$nrconf{override_rc}->{qr(^(strongswan|ipsec)[^.]*\.service$)} = 0;
+$nrconf{override_rc}->{qr(^genieacs-[^.]*\.service$)} = 0;
+$nrconf{override_rc}->{qr(^addon-[^.]*\.service$)} = 0;
+$nrconf{override_rc}->{qr(^vpnacs-job-[^.]*\.service$)} = 0;
+$nrconf{override_rc}->{qr(^ztnet\.service$)} = 0;
+$nrconf{override_rc}->{qr(^zerotier-one\.service$)} = 0;
+$nrconf{override_rc}->{qr(^postgresql[^.]*\.service$)} = 0;
+NREOF
+fi
 systemctl daemon-reload
 systemctl enable --now vpn-acs >/dev/null 2>&1
 systemctl restart vpn-acs

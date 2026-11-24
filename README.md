@@ -327,6 +327,7 @@ Jalankan dulu `bash cek.sh`. Sebagian besar masalah langsung terlihat di sana.
 
 | Gejala | Kemungkinan penyebab | Solusi |
 |---|---|---|
+| Install add-on gagal atau berhenti | Memori habis, internet VPS putus, atau apt sedang dipakai | Klik **Install** lagi (langkah yang sudah selesai dilewati), lalu **Periksa**. Log lengkap: `/opt/vpn-acs/jobs/` |
 | Panel/GenieACS tidak bisa dibuka dari HP/PC | Port belum dibuka di firewall provider | Buka port di [langkah 7](#7-firewall-provider). Jika `cek.sh` OK, masalahnya di firewall provider |
 | Lupa password panel | — | `bash install-vpn-acs.sh password` lalu Enter (kembali ke `Admin123`) |
 | Router tetap **Menunggu pemasangan** / **Terputus** | UDP 1701 tertutup, Alamat VPS salah, atau script belum ditempel | Klik **Tes koneksi**. Di MikroTik cek **Interfaces → l2tp-acs** dan **Log** |
