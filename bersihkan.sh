@@ -125,17 +125,25 @@ hapus_layanan_panel() {
 }
 
 cetak_script_mikrotik() {
+  # Nama panel (sekarang + sebelumnya) dari backup data panel, untuk komentar aturan di MikroTik
+  local src names
+  src="$(ls -1t /root/backup-vpnacs-*.json 2>/dev/null | head -1)"
+  [ -f "$DATA" ] && src="$DATA"
+  names="$(node -e 'try{const s=require(process.argv[1]).settings||{};const l=[s.panelName||"VPN ACS"].concat(s.brandHistory||[],["VPN ACS"]);console.log(l.filter((n,i)=>n&&l.indexOf(n)===i).join("\n"))}catch(e){console.log("VPN ACS")}' "$src" 2>/dev/null)"
+  [ -n "$names" ] || names="VPN ACS"
   echo
   echo -e "${GREEN}== Bersihkan juga setiap MikroTik ==${NC}"
   echo "Salin baris berikut ke Winbox > New Terminal di setiap MikroTik router:"
   echo
-  cat <<'EOF'
-/interface l2tp-client remove [find where name="l2tp-acs"]
-/ip route remove [find where comment="VPN ACS"]
-/ip firewall nat remove [find where comment~"^VPN ACS"]
-/ip firewall filter remove [find where comment~"^VPN ACS"]
-:put "Pengaturan VPN ACS sudah dihapus."
-EOF
+  echo '/interface l2tp-client remove [find where name="l2tp-acs"]'
+  echo ':do { /zerotier interface remove [find where name="zt-acs"] } on-error={}'
+  while read -r n; do
+    [ -n "$n" ] || continue
+    echo "/ip route remove [find where comment=\"$n\"]"
+    echo "/ip firewall nat remove [find where comment~\"^$n - \"]"
+    echo "/ip firewall filter remove [find where comment~\"^$n - \"]"
+  done <<< "$names"
+  echo ':put "Pengaturan panel sudah dihapus dari MikroTik."'
   echo
 }
 

@@ -126,6 +126,7 @@ Port 7547 dan 7557 **tidak perlu** dibuka ke publik. HTTPS panel memakai port ya
 
 ### 8. Atur panel (sekali di awal)
 Menu **Pengaturan**:
+1. **Nama panel** (opsional): misalnya `INET WIFI`. Dipakai di judul panel dan sebagai komentar aturan di script MikroTik (`INET WIFI - ONT ke IP virtual`). Bisa diganti kapan saja; script baru otomatis membersihkan aturan dengan nama lama.
 1. **Alamat VPS**: IP publik atau domain VPS → Simpan
 2. **Pakai IPsec**: biarkan mati (L2TP biasa)
 3. **Jaringan VPN (L2TP)**: tentukan **sekarang** (default `192.168.42.0/24`). Mengganti belakangan berarti URL ACS di semua ONT ikut berubah.

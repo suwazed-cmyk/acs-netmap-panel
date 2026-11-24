@@ -40,7 +40,8 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "1.6.0";
+const VERSION = "1.7.0";
+const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
 const VIRTUAL_POOL = "10.100.0.0/14";
@@ -213,6 +214,14 @@ function detectPublicIp() {
   }
   return "";
 }
+function brandOf(d) {
+  return (d && d.settings && d.settings.panelName) || DEFAULT_BRAND;
+}
+// Nama sekarang + nama lama (untuk membersihkan komentar lama di MikroTik)
+function brandsOf(d) {
+  const list = [brandOf(d)].concat((d && d.settings && d.settings.brandHistory) || [], [DEFAULT_BRAND]);
+  return list.filter((n, i) => n && list.indexOf(n) === i);
+}
 function settings(d) {
   const s = d.settings || {};
   return {
@@ -222,6 +231,8 @@ function settings(d) {
     useIpsec: !!s.useIpsec,
     tun: tun(d),
     zt: ztCfg(d),
+    brand: brandOf(d),
+    brands: brandsOf(d),
   };
 }
 
@@ -416,17 +427,23 @@ function allocVirtual(d, prefix, exceptId) {
 }
 
 // ---------- Script MikroTik ----------
+// Baris hapus aturan lama: nama panel sekarang + semua nama sebelumnya
+function cleanupLines(st, kind) {
+  const names = st.brands || [st.brand];
+  if (kind === "route") return names.map((n) => `/ip route remove [find where comment="${n}"]`);
+  return names.map((n) => `/ip firewall ${kind} remove [find where comment~"^${n} - "]`);
+}
 function mikrotikScriptZt(s, st) {
-  const c = "VPN ACS";
+  const c = st.brand;
   const z = st.zt || {};
   const nw = z.nwid || "NETWORK_ID";
   const vps = z.vpsIp || "IP_ZEROTIER_VPS";
   return [
     `# ================================================================`,
-    `#  VPN ACS (ZeroTier) - ${s.name}`,
+    `#  ${c} (ZeroTier) - ${s.name}`,
     `#  Syarat: RouterOS v7 dengan paket zerotier (router ARM/ARM64).`,
     `#  Paste semua baris ini di Winbox > New Terminal, lalu Enter.`,
-    `#  Aman dijalankan ulang (pengaturan lama "VPN ACS" dihapus dulu).`,
+    `#  Aman dijalankan ulang (pengaturan lama "${c}" dihapus dulu).`,
     `# ================================================================`,
     ``,
     `# 1) Gabung ke jaringan ZeroTier VPS (${nw})`,
@@ -435,18 +452,18 @@ function mikrotikScriptZt(s, st) {
     `/zerotier interface add name=${ZT_IFACE_MT} network=${nw} instance=zt1 allow-managed=yes disabled=no comment="${c}"`,
     ``,
     `# 2) Route ke VPS ACS (URL ACS ONT tetap http://${st.tun.local}:${ACS_PORT})`,
-    `/ip route remove [find where comment="${c}"]`,
+    ...cleanupLines(st, "route"),
     `/ip route add dst-address=${st.tun.local}/32 gateway=${vps} comment="${c}"`,
     ``,
     `# 3) IP virtual ONT (NETMAP) - ONT ${s.realSubnet} terlihat di VPS sebagai ${s.virtualSubnet}`,
-    `/ip firewall nat remove [find where comment~"^${c}"]`,
+    ...cleanupLines(st, "nat"),
     `/ip firewall nat add chain=srcnat src-address=${s.realSubnet} dst-address=${st.tun.local} action=netmap to-addresses=${s.virtualSubnet} comment="${c} - ONT ke IP virtual"`,
     `/ip firewall nat add chain=dstnat in-interface=${ZT_IFACE_MT} dst-address=${s.virtualSubnet} action=netmap to-addresses=${s.realSubnet} comment="${c} - IP virtual ke ONT"`,
     `/ip firewall nat move [find where comment="${c} - IP virtual ke ONT"] destination=0`,
     `/ip firewall nat move [find where comment="${c} - ONT ke IP virtual"] destination=0`,
     ``,
     `# 4) Izinkan lalu lintas ACS <-> ONT`,
-    `/ip firewall filter remove [find where comment~"^${c}"]`,
+    ...cleanupLines(st, "filter"),
     `/ip firewall filter add chain=forward in-interface=${ZT_IFACE_MT} dst-address=${s.realSubnet} action=accept comment="${c} - ACS ke ONT"`,
     `/ip firewall filter add chain=forward src-address=${s.realSubnet} out-interface=${ZT_IFACE_MT} action=accept comment="${c} - ONT ke ACS"`,
     `/ip firewall filter add chain=input in-interface=${ZT_IFACE_MT} src-address=${vps} action=accept comment="${c} - remote dari VPS"`,
@@ -454,17 +471,17 @@ function mikrotikScriptZt(s, st) {
     `/ip firewall filter move [find where comment="${c} - ACS ke ONT"] destination=0`,
     `/ip firewall filter move [find where comment="${c} - remote dari VPS"] destination=0`,
     ``,
-    `:put "VPN ACS (ZeroTier) selesai dipasang. Buka panel lalu pilih router ini di daftar yang bergabung."`,
+    `:put "${c} (ZeroTier) selesai dipasang. Buka panel lalu pilih router ini di daftar yang bergabung."`,
   ].join("\n");
 }
 function mikrotikScript(s, st) {
   if (isZt(s)) return mikrotikScriptZt(s, st);
-  const c = "VPN ACS";
+  const c = st.brand;
   return [
     `# ================================================================`,
-    `#  VPN ACS - ${s.name}`,
+    `#  ${c} - ${s.name}`,
     `#  Paste semua baris ini di Winbox > New Terminal, lalu Enter.`,
-    `#  Aman dijalankan ulang (pengaturan lama "VPN ACS" dihapus dulu).`,
+    `#  Aman dijalankan ulang (pengaturan lama "${c}" dihapus dulu).`,
     `# ================================================================`,
     ``,
     st.useIpsec ? `# 1) Sambungan VPN L2TP/IPsec ke VPS` : `# 1) Sambungan VPN L2TP ke VPS (tanpa IPsec)`,
@@ -474,18 +491,18 @@ function mikrotikScript(s, st) {
       : `/interface l2tp-client add name=l2tp-acs connect-to=${st.publicIp || "IP_PUBLIK_VPS"} user="${s.username}" password="${s.password}" add-default-route=no disabled=no comment="${c}"`,
     ``,
     `# 2) Route ke VPS ACS`,
-    `/ip route remove [find where comment="${c}"]`,
+    ...cleanupLines(st, "route"),
     `/ip route add dst-address=${st.tun.net} gateway=l2tp-acs comment="${c}"`,
     ``,
     `# 3) IP virtual ONT (NETMAP) - ONT ${s.realSubnet} terlihat di VPS sebagai ${s.virtualSubnet}`,
-    `/ip firewall nat remove [find where comment~"^${c}"]`,
+    ...cleanupLines(st, "nat"),
     `/ip firewall nat add chain=srcnat src-address=${s.realSubnet} dst-address=${st.tun.net} action=netmap to-addresses=${s.virtualSubnet} comment="${c} - ONT ke IP virtual"`,
     `/ip firewall nat add chain=dstnat in-interface=l2tp-acs dst-address=${s.virtualSubnet} action=netmap to-addresses=${s.realSubnet} comment="${c} - IP virtual ke ONT"`,
     `/ip firewall nat move [find where comment="${c} - IP virtual ke ONT"] destination=0`,
     `/ip firewall nat move [find where comment="${c} - ONT ke IP virtual"] destination=0`,
     ``,
     `# 4) Izinkan lalu lintas ACS <-> ONT`,
-    `/ip firewall filter remove [find where comment~"^${c}"]`,
+    ...cleanupLines(st, "filter"),
     `/ip firewall filter add chain=forward in-interface=l2tp-acs dst-address=${s.realSubnet} action=accept comment="${c} - ACS ke ONT"`,
     `/ip firewall filter add chain=forward src-address=${s.realSubnet} out-interface=l2tp-acs action=accept comment="${c} - ONT ke ACS"`,
     `/ip firewall filter add chain=input in-interface=l2tp-acs src-address=${st.tun.local} action=accept comment="${c} - remote dari VPS"`,
@@ -493,19 +510,19 @@ function mikrotikScript(s, st) {
     `/ip firewall filter move [find where comment="${c} - ACS ke ONT"] destination=0`,
     `/ip firewall filter move [find where comment="${c} - remote dari VPS"] destination=0`,
     ``,
-    `:put "VPN ACS selesai dipasang. Cek status: /interface l2tp-client print"`,
+    `:put "${c} selesai dipasang. Cek status: /interface l2tp-client print"`,
   ].join("\n");
 }
-function mikrotikRemoveScript() {
-  const c = "VPN ACS";
+function mikrotikRemoveScript(st) {
+  const c = st.brand;
   return [
-    `# Hapus semua pengaturan VPN ACS dari MikroTik`,
+    `# Hapus semua pengaturan ${c} dari MikroTik`,
     `/interface l2tp-client remove [find where name="l2tp-acs"]`,
     `:do { /zerotier interface remove [find where name="${ZT_IFACE_MT}"] } on-error={}`,
-    `/ip route remove [find where comment="${c}"]`,
-    `/ip firewall nat remove [find where comment~"^${c}"]`,
-    `/ip firewall filter remove [find where comment~"^${c}"]`,
-    `:put "Pengaturan VPN ACS sudah dihapus."`,
+    ...cleanupLines(st, "route"),
+    ...cleanupLines(st, "nat"),
+    ...cleanupLines(st, "filter"),
+    `:put "Pengaturan ${c} sudah dihapus."`,
   ].join("\n");
 }
 function siteView(s, st, links, h, now) {
@@ -550,7 +567,7 @@ function siteView(s, st, links, h, now) {
       remote: `${st.publicIp || "IP_VPS"}:${f.publicPort}`,
     })),
     script: mikrotikScript(s, st),
-    removeScript: mikrotikRemoveScript(),
+    removeScript: mikrotikRemoveScript(st),
   };
 }
 
@@ -2118,7 +2135,7 @@ async function handleApi(req, res, url) {
     sessions.delete(getCookie(req, "vpnacs"));
     return send(res, 200, { ok: true }, { "Set-Cookie": `vpnacs=; ${cookieFlags(req)}; Max-Age=0` });
   }
-  if (p === "/api/me" && method === "GET") return send(res, 200, { loggedIn: authed(req) });
+  if (p === "/api/me" && method === "GET") return send(res, 200, { loggedIn: authed(req), panelName: brandOf(loadData()) });
 
   if (!authed(req)) return send(res, 401, { error: "Silakan login dulu." });
 
@@ -2156,6 +2173,8 @@ async function handleApi(req, res, url) {
         reservedPorts: Array.from(RESERVED_PORTS),
         port: PORT,
         version: VERSION,
+        panelName: st.brand,
+        brandHistory: st.brands.filter((n) => n !== st.brand),
         timezone: tz,
         timezones: Object.entries(TIMEZONES).map(([id, v]) => ({ id, label: v.label })),
         telegram: {
@@ -2236,7 +2255,7 @@ async function handleApi(req, res, url) {
       if (!chatId) return send(res, 400, { error: "Pilih grup dulu (klik Deteksi grup & topik)." });
       const c = { token, chatId, threadId: parseInt(body.threadId, 10) || 0 };
       const tz = tzName(d);
-      const r = await tgSend(c, `✅ <b>Tes notifikasi</b>\nPanel VPN ACS terhubung. Notifikasi VPN terputus akan dikirim ke sini.\n<i>${fmtClock(Date.now(), tz, true)} ${TIMEZONES[tz].label}</i>`, false);
+      const r = await tgSend(c, `✅ <b>Tes notifikasi</b>\n${escHtml(brandOf(d))} terhubung. Notifikasi VPN terputus akan dikirim ke sini.\n<i>${fmtClock(Date.now(), tz, true)} ${TIMEZONES[tz].label}</i>`, false);
       if (!r.ok) return send(res, 400, { error: r.error });
       logActivity(req, "Tes notifikasi Telegram", body.chatTitle || chatId);
       return send(res, 200, { ok: true });
@@ -2623,6 +2642,17 @@ async function handleApi(req, res, url) {
       if (g && !/^https?:\/\/[^\s/]+(:\d+)?(\/\S*)?$/i.test(g)) return send(res, 400, { error: "Alamat GenieACS harus diawali http:// atau https://, contoh http://acs.domain.com:3000" });
       if (g !== (d.settings.genieUrl || "")) logs.push(["Alamat GenieACS diubah", g || "(otomatis)"]);
       d.settings.genieUrl = g;
+    }
+    if (body.panelName !== undefined) {
+      const n = String(body.panelName || "").trim().replace(/\s+/g, " ") || DEFAULT_BRAND;
+      if (!/^[A-Za-z0-9][A-Za-z0-9 _-]{1,29}$/.test(n)) return send(res, 400, { error: "Nama panel 2-30 karakter: huruf, angka, spasi, tanda minus (-) atau garis bawah (_)." });
+      const old = brandOf(d);
+      if (n !== old) {
+        const hist = [old].concat(d.settings.brandHistory || []).filter((x, i, a) => x && x !== n && a.indexOf(x) === i).slice(0, 10);
+        d.settings.brandHistory = hist;
+        d.settings.panelName = n;
+        logs.push(["Nama panel diubah", `${old} → ${n}`]);
+      }
     }
     if (body.ztnetUrl !== undefined) {
       const g = String(body.ztnetUrl || "").trim().replace(/\/+$/, "");
