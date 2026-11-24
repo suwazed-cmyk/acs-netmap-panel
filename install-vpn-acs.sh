@@ -194,7 +194,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.1.3";
+const VERSION = "2.2.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -2550,6 +2550,9 @@ const ADDONS = {
     kind: "sistem",
     name: "ZeroTier",
     icon: "hub",
+    color: "amber",
+    tagline: "Jalur VPN kedua untuk router RouterOS v7 ARM/ARM64, dikelola langsung dari panel.",
+    features: ["Controller ZeroTier di VPS, tanpa web tambahan", "Buat jaringan, atur rentang IP, pool, dan DNS", "Setujui perangkat, ubah IP, beri nama, QR untuk HP", "Rute IP virtual router dibuat otomatis"],
     desc: "Router RouterOS v7 (ARM/ARM64) tersambung lewat ZeroTier selain L2TP. Memasang ZeroTier (controller) di VPS; jaringan, subnet, dan perangkat diatur langsung dari menu ZeroTier di panel.",
     note: "Ringan: hanya paket zerotier-one (±10 MB), terpasang dalam hitungan detik.",
   },
@@ -2557,6 +2560,9 @@ const ADDONS = {
     kind: "aplikasi",
     name: "Panel ACS",
     icon: "box",
+    color: "blue",
+    tagline: "Monitoring ONT dari GenieACS lengkap dengan history redaman.",
+    features: ["Daftar & detail ONT per router panel", "History redaman RX (grafik 1–90 hari)", "Ubah WiFi, reboot, faults, peta lokasi", "Database SQLite, data tetap aman saat diperbarui"],
     desc: "Monitoring ONT dari GenieACS: daftar & detail ONT, redaman RX dengan history grafik, ubah WiFi, reboot, faults, peta. ONT dikelompokkan otomatis per router panel.",
     repo: process.env.VPNACS_REPO_PANEL_ACS || "https://github.com/suwazed-cmyk/panel-acs.git",
     port: 8091,
@@ -2569,6 +2575,9 @@ const ADDONS = {
     kind: "aplikasi",
     name: "Bilingku",
     icon: "wallet",
+    color: "teal",
+    tagline: "Billing PPPoE & Hotspot MikroTik: paket, tagihan, isolir, voucher.",
+    features: ["Pelanggan PPPoE, paket, dan jatuh tempo", "Isolir otomatis & halaman pemberitahuan", "Voucher hotspot dan laporan penjualan", "Router diambil dari panel, API lewat VPN"],
     desc: "Billing PPPoE & Hotspot MikroTik: paket, jatuh tempo, isolir otomatis, pembayaran, voucher. Router bisa diambil dari panel, API lewat VPN.",
     repo: process.env.VPNACS_REPO_BILINGKU || "https://github.com/suwazed-cmyk/bilingku.git",
     port: 8092,
@@ -3451,7 +3460,7 @@ async function addonList(d) {
   const out = [];
   for (const [id, a] of Object.entries(ADDONS)) {
     const st = addonState(d, id);
-    const x = { id, kind: a.kind, name: a.name, icon: a.icon, desc: a.desc, note: a.note || "", installed: !!st.installed, at: st.at || null, updatedAt: st.updatedAt || null };
+    const x = { id, kind: a.kind, name: a.name, icon: a.icon, color: a.color || "blue", tagline: a.tagline || "", features: a.features || [], desc: a.desc, note: a.note || "", installed: !!st.installed, at: st.at || null, updatedAt: st.updatedAt || null };
     if (a.kind === "aplikasi") {
       x.path = addonPath(d, id);
       x.repo = a.repo.replace(/\.git$/, "");
@@ -3979,7 +3988,7 @@ async function handleApi(req, res, url) {
         port: PORT,
         stdPorts: { enabled: stdWanted(d), active: STD_ON, error: STD_ERR },
         panelUrl: panelPublicUrl(st, d),
-        addons: Object.fromEntries(Object.entries(ADDONS).map(([id, a]) => [id, { installed: addonInstalled(d, id), kind: a.kind, name: a.name, icon: a.icon, path: a.kind === "aplikasi" ? addonPath(d, id) : "" }])),
+        addons: Object.fromEntries(Object.entries(ADDONS).map(([id, a]) => [id, { installed: addonInstalled(d, id), kind: a.kind, name: a.name, icon: a.icon, color: a.color || "blue", tagline: a.tagline || "", path: a.kind === "aplikasi" ? addonPath(d, id) : "" }])),
         version: VERSION,
         panelName: st.brand,
         brandHistory: st.brands.filter((n) => n !== st.brand),
@@ -5282,6 +5291,65 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
     .zt-rv{display:none}.zt-routes li{gap:6px}
     .filters{flex-wrap:wrap}
   }
+  /* Pola aksi: kelompok tombol di kanan (utama paling kanan), aksi berbahaya di kiri */
+  .card-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:flex-end;border-top:1px solid var(--line);padding-top:14px;padding-bottom:14px}
+  .card-actions .sp,.mf .sp,.ad-mf .sp{flex:1}
+  .mf{align-items:center}
+  /* Add-on */
+  .ad-search{width:280px;max-width:100%}
+  .ad-sec{margin-bottom:24px}
+  .ad-sh{display:flex;align-items:center;gap:8px;margin:0 2px 12px}
+  .ad-sh h2{font-size:13px;font-weight:650;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+  .ad-sh span{font-size:12px;font-weight:600;color:var(--text-2);background:var(--subtle);border:1px solid var(--line);border-radius:99px;padding:0 8px;line-height:18px}
+  .ad-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
+  .ad-grid .card{margin:0}
+  .ad-tile{display:flex;flex-direction:column;transition:border-color .15s,box-shadow .15s,transform .15s}
+  .ad-tile:hover{border-color:var(--line-2);box-shadow:0 10px 28px -14px rgba(16,24,40,.25);transform:translateY(-1px)}
+  .ad-tt{display:flex;align-items:center;gap:12px;padding:18px 16px 0 18px}
+  .ad-tn{flex:1;min-width:0}
+  .ad-tn b{display:block;font-size:15px;font-weight:650;letter-spacing:-.01em}
+  .ad-st{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12.5px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ad-st .dot{width:7px;height:7px}
+  .ad-tg{color:var(--text-2);font-size:13px;line-height:1.55;padding:12px 18px 16px;margin:0;flex:1}
+  .ad-tf{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--line);background:var(--subtle);border-radius:0 0 var(--r) var(--r)}
+  .ad-ic{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;flex:none;color:#fff;box-shadow:0 6px 14px -8px rgba(16,24,40,.45)}
+  .ad-ic svg{width:21px;height:21px}
+  .ad-ic.sm{width:34px;height:34px;border-radius:10px}
+  .ad-ic.sm svg{width:17px;height:17px}
+  .ad-ic.c-blue{background:linear-gradient(135deg,#2563eb,#60a5fa)}
+  .ad-ic.c-teal{background:linear-gradient(135deg,#0d9488,#2dd4bf)}
+  .ad-ic.c-amber{background:linear-gradient(135deg,#d97706,#fbbf24)}
+  .ad-ic.c-violet{background:linear-gradient(135deg,#7c3aed,#a78bfa)}
+  .ad-list{list-style:none;margin:0;padding:0}
+  .ad-list li+li{border-top:1px solid var(--line)}
+  .ad-row{display:flex;align-items:center;gap:14px;width:100%;padding:14px 20px;border:0;background:none;text-align:left;color:inherit;cursor:pointer;transition:background .12s}
+  .ad-row:hover{background:var(--hover)}
+  .ad-row .chev{color:var(--muted);display:flex}
+  .ad-row .chev svg{width:16px;height:16px}
+  .ad-rb{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+  .ad-rn{font-weight:600;display:flex;align-items:center;gap:8px}
+  .ad-rd{color:var(--muted);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ad-mh{display:inline-flex;align-items:center;gap:12px}
+  .ad-dh{display:flex;gap:8px;align-items:center;margin-bottom:12px}
+  .ad-lead{font-size:15px;font-weight:550;line-height:1.5;margin:0 0 6px}
+  .ad-desc{color:var(--text-2);font-size:13.5px;line-height:1.6;margin:0}
+  .ad-h3{font-size:12px;font-weight:650;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:20px 0 10px}
+  .ad-feat{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:8px 18px}
+  .ad-feat li{display:flex;gap:8px;align-items:flex-start;font-size:13.5px;line-height:1.45}
+  .ad-feat svg{width:15px;height:15px;color:var(--ok);flex:none;margin-top:2px}
+  .ad-info{display:grid;grid-template-columns:1fr;margin:0;border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden}
+  .ad-info div{display:flex;gap:12px;padding:9px 14px;font-size:13px}
+  .ad-info div+div{border-top:1px solid var(--line)}
+  .ad-info dt{width:130px;flex:none;color:var(--muted)}
+  .ad-info dd{margin:0;min-width:0;word-break:break-word}
+  .ad-mf{display:flex;align-items:center;gap:8px;width:100%;flex-wrap:wrap}
+  .dapps{list-style:none;margin:0;padding:4px 0}
+  .dapps li{display:flex;align-items:center;gap:12px;padding:10px 20px}
+  .dapps li+li{border-top:1px solid var(--line)}
+  .dapps .grow{flex:1;min-width:0}
+  .dapps b{display:block;font-weight:600;font-size:13.5px}
+  .dapps small{display:block;color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  @media (max-width:720px){.ad-acts{width:100%}.ad-search{width:100%}.ad-feat{grid-template-columns:1fr}.ad-info dt{width:100px}.ad-row .pill{display:none}}
   .nav .nav-ext{margin-left:auto;opacity:.55;display:inline-flex}
   .nav .nav-ext svg{width:13px;height:13px}
   /* Stepper tes */
@@ -5349,7 +5417,8 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .sw button.on.danger{color:var(--bad)}
   .seg label{margin:0;display:flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid var(--line-2);border-radius:var(--r-sm);cursor:pointer;font-weight:500}
   .seg label:has(input:checked){border-color:var(--primary);background:var(--primary-soft)}
-  .form-actions{display:flex;gap:8px;margin-top:18px;flex-wrap:wrap}
+  .form-actions{display:flex;gap:8px;margin-top:18px;flex-wrap:wrap;justify-content:flex-end;align-items:center}
+  .form-actions.start{justify-content:flex-start}
   .form-actions .sp{flex:1}
   .sec-t{font-size:13px;font-weight:600;color:var(--text);margin:20px 0 2px;padding-top:16px;border-top:1px solid var(--line)}
   .sec-t:first-child{margin-top:0;padding-top:0;border-top:0}
@@ -5539,7 +5608,6 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
     <button class="nav" data-go="#/router"><span data-ic="router"></span>Router</button>
     <button class="nav" data-go="#/genieacs"><span data-ic="box"></span>GenieACS</button>
     <button class="nav hidden" id="navZt" data-go="#/zerotier"><span data-ic="hub"></span>ZeroTier</button>
-    <div id="navApps"></div>
     <button class="nav" data-go="#/pengaturan"><span data-ic="gear"></span>Pengaturan</button>
     <button class="nav" data-go="#/addon"><span data-ic="puzzle"></span>Add-on</button>
     <button class="nav" data-go="#/panduan"><span data-ic="book"></span>Panduan</button>
@@ -5769,8 +5837,7 @@ async function load() {
   setBrand(STATE.settings.panelName);
   const A = STATE.settings.addons || {};
   $("#navZt").classList.toggle("hidden", !(A.zerotier && A.zerotier.installed));
-  $("#navApps").innerHTML = Object.entries(A).filter(([, a]) => a.kind === "aplikasi" && a.installed)
-    .map(([id, a]) => `<a class="nav" href="${esc(a.path)}/" target="_blank" rel="noopener" title="Buka ${esc(a.name)} di tab baru"><span>${ic(a.icon || "box")}</span>${esc(a.name)}<span class="nav-ext">${ic("ext", "")}</span></a>`).join("");
+
 }
 function ztOn() { const a = (STATE.settings.addons || {}).zerotier; return !!(a && a.installed); }
 
@@ -5878,6 +5945,7 @@ function viewDashboard(v) {
         ${S.length ? uptimeTable(S) : `<div class="empty"><h3>Belum ada router</h3><p>Tambahkan MikroTik pertama untuk mulai.</p><button class="btn pri" style="margin-top:12px" data-act="add">${ic("plus")}Tambah router</button></div>`}
       </div>
       <div class="stack">
+        ${dashApps()}
         <div class="card">
           <div class="ch"><h2>Perlu perhatian</h2>${iss.length ? `<span class="muted">${iss.length}</span>` : ""}</div>
           ${iss.length ? `<ul class="rows">${iss.slice(0, 6).map((x) => `<li><a class="row ${x.k || "warn"}" href="${x.go}"><span class="ic">${ic(x.k === "info" ? "clock" : "alert")}</span><span class="grow"><span class="nm">${esc(x.t)}</span><span class="sb" style="display:block">${esc(x.d)}</span></span><span class="chev">${ic("chev")}</span></a></li>`).join("")}</ul>`
@@ -5889,6 +5957,16 @@ function viewDashboard(v) {
         </div>
       </div>
     </div>`;
+}
+// Add-on yang terpasang, dibuka langsung dari Dashboard
+function dashApps() {
+  const A = Object.entries(STATE.settings.addons || {}).filter(([, a]) => a.installed).map(([id, a]) => Object.assign({ id }, a));
+  if (!A.length) return "";
+  A.sort((x, y) => (x.kind === y.kind ? x.name.localeCompare(y.name) : x.kind === "aplikasi" ? -1 : 1));
+  return `<div class="card"><div class="ch"><h2>Aplikasi</h2><a href="#/addon">Kelola</a></div>
+    <ul class="dapps">${A.map((a) => `<li>${adIcon(a, "sm")}<span class="grow"><b>${esc(a.name)}</b><small>${esc(a.tagline || "")}</small></span>${a.kind === "aplikasi"
+      ? `<a class="btn sm" href="${esc(a.path)}/" target="_blank" rel="noopener">${ic("ext")}Buka</a>`
+      : `<a class="btn sm" href="#/${esc(a.id)}">Buka</a>`}</li>`).join("")}</ul></div>`;
 }
 function uptimeTable(S) {
   const order = { down: 0, up: 1, pending: 2 };
@@ -6187,13 +6265,6 @@ function tabHistory(b, x) {
 }
 
 /* ---------- Add-on ---------- */
-function viewAddons(v) {
-  crumb([["Add-on"]]);
-  v.innerHTML = `
-    <div class="ph"><div><h1>Add-on</h1><p>Fitur tambahan yang bisa dipasang sesuai kebutuhan. Yang belum dipasang tidak muncul di menu.</p></div></div>
-    <div id="adBody"><div class="card"><div class="empty"><p>Memuat add-on…</p></div></div></div>`;
-  fillAddons();
-}
 // Periksa apakah add-on terpasang dan berjalan dengan benar
 async function openAddonCheck(a) {
   modal(`Periksa ${esc(a.name)}`, `<div class="jtop"><div class="jprog run"><i style="width:100%"></i></div><div class="jlive"><span class="dot"></span><span>Memeriksa ${esc(a.name)}…</span></div></div><div id="ckBody"></div>`,
@@ -6218,59 +6289,141 @@ async function openAddonCheck(a) {
   $("#ckAgain").onclick = runCheck;
   runCheck();
 }
+function viewAddons(v) {
+  crumb([["Add-on"]]);
+  v.innerHTML = `
+    <div class="ph"><div><h1>Add-on</h1><p>Tambahkan fitur ke panel sesuai kebutuhan. Aplikasi yang terpasang bisa dibuka dari sini dan dari Dashboard.</p></div>
+      <div class="acts ad-acts"><div class="search ad-search">${ic("search", "")}<input id="adQ" type="text" placeholder="Cari add-on" value="${esc(ADV.q)}" aria-label="Cari add-on"></div></div></div>
+    <div id="adBody"><div class="card"><div class="empty"><span class="spin"></span><p style="margin-top:10px">Memuat add-on…</p></div></div></div>`;
+  $("#adQ").addEventListener("input", (e) => { ADV.q = e.target.value; paintAddons(); });
+  fillAddons();
+}
+const ADV = { q: "", list: null, job: null };
+const adCat = (a) => (a.kind === "sistem" ? "Sistem" : "Aplikasi");
+const adIcon = (a, sz) => `<span class="ad-ic c-${esc(a.color || "blue")}${sz ? " " + sz : ""}">${ic(a.icon || "puzzle")}</span>`;
+function adState(a) {
+  if (!a.installed) return { c: "wait", t: "Belum dipasang" };
+  if (a.kind === "aplikasi" && a.running === false) return { c: "bad", t: "Berhenti" };
+  return { c: "ok", t: a.kind === "sistem" ? "Aktif" : "Berjalan" };
+}
+// Tombol "Buka": aplikasi di tab baru, add-on sistem ke menunya sendiri
+const adOpen = (a, cls) => a.kind === "aplikasi"
+  ? `<a class="btn pri ${cls || ""}" href="${esc(a.path)}/" target="_blank" rel="noopener">${ic("ext")}Buka</a>`
+  : `<a class="btn pri ${cls || ""}" href="#/${esc(a.id)}">Buka</a>`;
 async function fillAddons() {
-  const b = $("#adBody"); if (!b) return;
-  let r;
-  try { r = await api("/api/addons"); } catch (e) { b.innerHTML = `<div class="note bad">${ic("alert")}<div><b>Gagal memuat add-on</b>${esc(e.message)}</div></div>`; return; }
-  if (!$("#adBody")) return;
-  const base = (STATE.settings.panelUrl || "").replace(/\/$/, "");
-  const card = (a) => {
-    const kind = a.kind === "sistem" ? `<span class="tag gray">Sistem</span>` : `<span class="tag">Aplikasi</span>`;
-    const st = a.installed ? (a.kind === "aplikasi" && a.running === false ? `<span class="pill bad">Terpasang · berhenti</span>` : `<span class="pill ok">Terpasang</span>`) : `<span class="pill wait">Belum dipasang</span>`;
-    const meta = [];
-    if (a.kind === "aplikasi") {
-      meta.push(`<span>Alamat: <b class="mono">${a.installed ? `<a href="${esc(a.path)}/" target="_blank" rel="noopener">${esc((base || "") + a.path)}/</a>` : esc(a.path + "/")}</b></span>`);
-      if (a.version) meta.push(`<span>Versi: <b class="mono">${esc(a.version)}</b></span>`);
-      meta.push(`<span>Sumber: <a href="${esc(a.repo)}" target="_blank" rel="noopener">${esc(a.repo.replace(/^https:\/\/github.com\//, "github.com/"))}</a></span>`);
-    } else {
-      meta.push(`<span>Router memakai ZeroTier: <b>${a.routers || 0}</b></span>`);
-      if (a.ztnet) meta.push(`<span>ZTNET lama terdeteksi · <a href="#/zerotier">pindahkan dari menu ZeroTier</a></span>`);
-      if (a.note) meta.push(`<span>${esc(a.note)}</span>`);
-    }
-    const btns = [];
-    if (!a.installed) btns.push(`<button class="btn pri" data-ad="install" data-id="${a.id}">${ic("down")}${a.kind === "sistem" && a.ztnet ? "Aktifkan" : "Install"}</button>`);
-    else {
-      if (a.kind === "aplikasi") btns.push(`<a class="btn pri" href="${esc(a.path)}/" target="_blank" rel="noopener">${ic("ext")}Buka</a>`, `<button class="btn" data-ad="update" data-id="${a.id}">${ic("refresh")}Perbarui</button>`, `<button class="btn" data-ad="path" data-id="${a.id}">${ic("edit")}Alamat</button>`);
-      else btns.push(`<a class="btn pri" href="#/zerotier">${ic("hub")}Buka menu ZeroTier</a>`);
-      btns.push(`<button class="btn" data-ad="check" data-id="${a.id}">${ic("check")}Periksa</button>`);
-      btns.push(`<span style="flex:1"></span><button class="btn ghost danger" data-ad="remove" data-id="${a.id}">Lepas</button>`);
-    }
-    return `<div class="card addon"><div class="ah"><span class="ai">${ic(a.icon || "puzzle")}</span><div style="min-width:0"><h3>${esc(a.name)} ${kind}</h3><p>${esc(a.desc)}</p></div></div>
-      <div class="am"><span>${st}</span>${meta.join("")}</div><div class="af">${btns.join("")}</div></div>`;
+  try {
+    const r = await api("/api/addons");
+    ADV.list = r.list; ADV.job = r.job;
+  } catch (e) {
+    const b = $("#adBody"); if (b) b.innerHTML = `<div class="note bad">${ic("alert")}<div><b>Gagal memuat add-on</b>${esc(e.message)}</div></div>`;
+    return;
+  }
+  paintAddons();
+}
+function paintAddons() {
+  const b = $("#adBody"); if (!b || !ADV.list) return;
+  const q = ADV.q.trim().toLowerCase();
+  const hit = (a) => !q || [a.name, a.tagline, a.desc, adCat(a), (a.features || []).join(" ")].join(" ").toLowerCase().includes(q);
+  const inst = ADV.list.filter((a) => a.installed && hit(a));
+  const all = ADV.list.filter(hit);
+  const tile = (a) => {
+    const st = adState(a);
+    const meta = a.kind === "aplikasi" ? `<span class="mono">${esc(a.path)}/</span>${a.version ? ` · ${esc(a.version.split(" ")[0])}` : ""}` : `${a.routers || 0} router memakai`;
+    return `<div class="card ad-tile">
+      <div class="ad-tt">${adIcon(a)}
+        <div class="ad-tn"><b>${esc(a.name)}</b><span class="ad-st"><i class="dot ${st.c}"></i>${esc(st.t)} · ${meta}</span></div>
+        <div class="menu"><button class="btn ghost icon sm" data-admenu="${esc(a.id)}" title="Aksi lainnya" aria-label="Aksi lainnya">${ic("dots")}</button>
+          <div class="menu-list hidden" id="adm-${esc(a.id)}">
+            ${a.kind === "aplikasi" ? `<button data-ad="update" data-id="${esc(a.id)}">${ic("refresh")}Perbarui</button><button data-ad="path" data-id="${esc(a.id)}">${ic("edit")}Ubah alamat</button>` : ""}
+            <button data-ad="check" data-id="${esc(a.id)}">${ic("check")}Periksa</button>
+            <button data-ad="detail" data-id="${esc(a.id)}">${ic("info")}Detail</button>
+            <hr><button class="d" data-ad="remove" data-id="${esc(a.id)}">${ic("trash")}Lepas</button>
+          </div></div>
+      </div>
+      <p class="ad-tg">${esc(a.tagline || a.desc)}</p>
+      <div class="ad-tf"><button class="btn" data-ad="detail" data-id="${esc(a.id)}">Detail</button>${adOpen(a)}</div>
+    </div>`;
   };
-  b.innerHTML = `${r.job ? `<div class="note info">${ic("clock")}<div><b>${esc(r.job.title.replace(/ (dipasang|diperbarui|dilepas)$/, ""))} sedang diproses</b><a href="#" id="adJob">Lihat progres</a></div></div>` : ""}
-    <div class="addons">${r.list.map(card).join("")}</div>
-    <p class="help" style="margin-top:14px">Add-on aplikasi berjalan di dalam VPS dan dibuka lewat alamat panel (tanpa port tambahan). Data add-on tidak ikut terhapus saat dilepas, kecuali Anda memilihnya.</p>`;
+  const row = (a) => {
+    const st = adState(a);
+    return `<li><button class="ad-row" data-ad="detail" data-id="${esc(a.id)}">${adIcon(a, "sm")}
+      <span class="ad-rb"><span class="ad-rn">${esc(a.name)} <span class="tag gray">${adCat(a)}</span></span><span class="ad-rd">${esc(a.tagline || a.desc)}</span></span>
+      <span class="pill ${st.c}">${esc(st.t)}</span><span class="chev">${ic("chev")}</span></button></li>`;
+  };
+  b.innerHTML = `
+    ${ADV.job ? `<div class="note info">${ic("clock")}<div><b>${esc(ADV.job.title.replace(/ (dipasang|diperbarui|dilepas)$/, ""))} sedang diproses</b><a href="#" id="adJob">Lihat progres</a></div></div>` : ""}
+    ${inst.length ? `<section class="ad-sec"><div class="ad-sh"><h2>Terpasang</h2><span>${inst.length}</span></div><div class="ad-grid">${inst.map(tile).join("")}</div></section>` : ""}
+    <section class="ad-sec"><div class="ad-sh"><h2>Semua add-on</h2><span>${all.length}</span></div>
+      <div class="card">${all.length ? `<ul class="ad-list">${all.map(row).join("")}</ul>` : `<div class="empty"><h3>Tidak ditemukan</h3><p>Tidak ada add-on yang cocok dengan "${esc(ADV.q)}".</p></div>`}</div>
+    </section>
+    <p class="help">Aplikasi berjalan di dalam VPS dan dibuka lewat alamat panel, tanpa port tambahan. Data aplikasi tidak ikut terhapus saat dilepas, kecuali Anda memilihnya.</p>`;
   paintIcons(b);
   const j = $("#adJob"); if (j) j.onclick = (e) => { e.preventDefault(); openJob(); };
-  b.querySelectorAll("[data-ad]").forEach((btn) => (btn.onclick = () => {
-    const a = r.list.find((x) => x.id === btn.dataset.id), act = btn.dataset.ad;
-    if (act === "path") return openAddonPath(a);
-    if (act === "check") return openAddonCheck(a);
-    if (act === "remove") {
-      return confirmDialog({
-        title: `Lepas ${esc(a.name)}?`, danger: true, ok: "Lepas", wide: true,
-        text: a.kind === "sistem"
-          ? `<p>Menu ZeroTier disembunyikan dan VPS keluar dari jaringan ZeroTier panel. Router yang masih memakai ZeroTier harus dipindah ke L2TP atau dihapus dulu.</p><label class="check" style="margin-top:10px"><input type="checkbox" id="adPurge"> Hapus juga ZeroTier dari VPS (<b>semua jaringan</b> di controller ikut terhapus)</label>`
-          : `<p>Layanan ${esc(a.name)} dihentikan dan menunya hilang dari panel. Data tetap disimpan dan dipakai lagi jika dipasang ulang.</p><label class="check" style="margin-top:10px"><input type="checkbox" id="adPurge"> Hapus juga aplikasi dan <b>semua datanya</b></label>`,
-        onOk: async () => { const purge = !!($("#adPurge") && $("#adPurge").checked); await api(`/api/addons/${a.id}/remove`, { method: "POST", body: { purge } }); openJob(); },
-      });
-    }
-    const go = async () => { busyBtn(btn, true); try { await api(`/api/addons/${a.id}/${act}`, { method: "POST", body: {} }); openJob(); } catch (e) { busyBtn(btn, false); toast(e.message); } };
-    go();
+  b.querySelectorAll("[data-admenu]").forEach((btn) => (btn.onclick = (e) => {
+    e.stopPropagation();
+    const m = $("#adm-" + btn.dataset.admenu), was = !m.classList.contains("hidden");
+    document.querySelectorAll(".menu-list").forEach((x) => x.classList.add("hidden"));
+    if (!was) m.classList.remove("hidden");
+  }));
+  b.querySelectorAll("[data-ad]").forEach((btn) => (btn.onclick = (e) => {
+    e.stopPropagation();
+    document.querySelectorAll(".menu-list").forEach((x) => x.classList.add("hidden"));
+    adAction(btn.dataset.ad, ADV.list.find((x) => x.id === btn.dataset.id), btn);
+  }));
+}
+function adAction(act, a, btn) {
+  if (!a) return;
+  if (act === "detail") return adDetail(a);
+  if (act === "path") return openAddonPath(a);
+  if (act === "check") return openAddonCheck(a);
+  if (act === "remove") {
+    return confirmDialog({
+      title: `Lepas ${esc(a.name)}?`, danger: true, ok: "Lepas", wide: true,
+      text: a.kind === "sistem"
+        ? `<p>Menu ${esc(a.name)} disembunyikan dan VPS keluar dari jaringan ZeroTier panel. Router yang masih memakai ZeroTier harus dipindah ke L2TP atau dihapus dulu.</p><label class="check" style="margin-top:10px"><input type="checkbox" id="adPurge"> Hapus juga ZeroTier dari VPS (<b>semua jaringan</b> di controller ikut terhapus)</label>`
+        : `<p>Layanan ${esc(a.name)} dihentikan. Data tetap disimpan dan dipakai lagi bila dipasang ulang.</p><label class="check" style="margin-top:10px"><input type="checkbox" id="adPurge"> Hapus juga aplikasi dan <b>semua datanya</b></label>`,
+      onOk: async () => { const purge = !!($("#adPurge") && $("#adPurge").checked); await api(`/api/addons/${a.id}/remove`, { method: "POST", body: { purge } }); openJob(); },
+    });
+  }
+  // install / update
+  (async () => {
+    if (btn) busyBtn(btn, true);
+    try { await api(`/api/addons/${a.id}/${act}`, { method: "POST", body: {} }); openJob(); }
+    catch (e) { if (btn) busyBtn(btn, false); toast(e.message); }
+  })();
+}
+function adDetail(a) {
+  const st = adState(a);
+  const info = [];
+  info.push(["Kategori", adCat(a)]);
+  if (a.installed && a.kind === "aplikasi") {
+    info.push(["Alamat", `<a href="${esc(a.path)}/" target="_blank" rel="noopener" class="mono">${esc((STATE.settings.panelUrl || "").replace(/\/$/, "") + a.path)}/</a>`]);
+    if (a.version) info.push(["Versi", `<span class="mono">${esc(a.version)}</span>`]);
+  } else if (a.kind === "aplikasi") info.push(["Alamat", `<span class="mono">${esc(a.path)}/</span> <span class="muted">(bisa diganti setelah dipasang)</span>`]);
+  if (a.kind === "sistem" && a.installed) info.push(["Router memakai", String(a.routers || 0)]);
+  if (a.installed && a.at) info.push(["Dipasang", esc(fmtT(Date.parse(a.at), true))]);
+  if (a.repo) info.push(["Sumber", `<a href="${esc(a.repo)}" target="_blank" rel="noopener">${esc(a.repo.replace(/^https:\/\/github.com\//, "github.com/"))}</a>`]);
+  if (a.note) info.push(["Catatan", esc(a.note)]);
+  const left = a.installed ? `<button class="btn ghost danger" data-add="remove">${ic("trash")}Lepas</button><span class="sp"></span>` : "";
+  const right = a.installed
+    ? `${a.kind === "aplikasi" ? `<button class="btn" data-add="update">${ic("refresh")}Perbarui</button>` : ""}<button class="btn" data-add="check">${ic("check")}Periksa</button>${adOpen(a)}`
+    : `<button class="btn" data-act="closemodal">Tutup</button><button class="btn pri" data-add="install">${ic("down")}Install</button>`;
+  modal(`<span class="ad-mh">${adIcon(a, "sm")}${esc(a.name)}</span>`, `
+    <div class="ad-dh"><span class="pill ${st.c}">${esc(st.t)}</span><span class="tag gray">${adCat(a)}</span></div>
+    <p class="ad-lead">${esc(a.tagline || "")}</p>
+    <p class="ad-desc">${esc(a.desc)}</p>
+    ${(a.features || []).length ? `<h3 class="ad-h3">Fitur</h3><ul class="ad-feat">${a.features.map((f) => `<li>${ic("check")}<span>${esc(f)}</span></li>`).join("")}</ul>` : ""}
+    <h3 class="ad-h3">Informasi</h3>
+    <dl class="ad-info">${info.map(([k, val]) => `<div><dt>${k}</dt><dd>${val}</dd></div>`).join("")}</dl>`,
+    `<div class="ad-mf">${left}${right}</div>`, { size: "md" });
+  document.querySelectorAll("#modalRoot [data-add]").forEach((btn) => (btn.onclick = () => {
+    const act = btn.dataset.add;
+    if (act !== "remove") closeModal();
+    adAction(act, a, act === "remove" ? null : null);
   }));
 }
 function openAddonPath(a) {
+
   modal(`Alamat ${esc(a.name)}`, `
     <label for="adPath">Alamat di panel</label>
     <div style="display:flex;align-items:center;gap:6px"><span class="mono muted">${esc((STATE.settings.panelUrl || "").replace(/\/$/, ""))}</span><input id="adPath" type="text" class="mono" value="${esc(a.path)}" style="flex:1"></div>
@@ -6900,7 +7053,7 @@ async function setZerotier(b) {
       </div>
       <div class="card"><div class="ch"><h2>Jaringan di controller</h2><span class="muted" style="font-size:12.5px">${(z.networks || []).length}</span></div>
         <ul class="zt-nets">${(z.networks || []).map((n) => ztNetRow(n, { canUse: false })).join("")}</ul>
-        <div class="cb zt-danger"><button class="btn ghost danger sm" id="ztLeave">Lepas VPS dari jaringan ini</button></div>
+        <div class="cb card-actions"><button class="btn ghost danger" id="ztLeave">${ic("trash")}Lepas VPS dari jaringan ini</button></div>
       </div>
     </div>
     <p class="help" style="margin-top:12px">Rentang IP ZeroTier tidak boleh bentrok dengan ${esc(s.tunnelNet || "")} (L2TP), ${esc(s.virtualPool || "")} (IP virtual), subnet ONT, dan 172.17.0.0/16 (Docker). URL ACS untuk ONT tetap ${esc(s.acsUrl || "")}.</p>`;
@@ -7129,7 +7282,7 @@ async function ztMemberAct(btn, m, cur, b) {
     <div class="seg"><label><input type="radio" name="zeAuth" value="1" ${m.authorized ? "checked" : ""}>Disetujui</label><label><input type="radio" name="zeAuth" value="0" ${m.authorized ? "" : "checked"}>Tidak disetujui</label></div>
     <div class="help" id="zeAuthHelp"></div>
     <div class="err" id="zeErr"></div>`,
-    `${isRouter ? "" : `<button class="btn ghost danger" id="zeDel" style="margin-right:auto">${ic("trash")}Hapus perangkat</button>`}<button class="btn" data-act="closemodal">Batal</button><button class="btn pri" id="zeOk">Simpan</button>`, { size: "md" });
+    `${isRouter ? "" : `<button class="btn ghost danger" id="zeDel">${ic("trash")}Hapus perangkat</button><span class="sp"></span>`}<button class="btn" data-act="closemodal">Batal</button><button class="btn pri" id="zeOk">Simpan</button>`, { size: "md" });
   const ah = () => {
     const off = document.querySelector("input[name=zeAuth]:checked").value === "0";
     $("#zeAuthHelp").innerHTML = off && m.authorized ? `<span style="color:var(--bad)">${isRouter ? `Router <b>${esc(m.name)}</b> akan terputus dari VPS: GenieACS tidak bisa menjangkau ONT dan port forwarding berhenti.` : "Perangkat ini tidak bisa memakai jaringan sampai disetujui lagi."}</span>` : "";
@@ -7173,7 +7326,7 @@ function setTelegram(b) {
         </ol></details>
       <label for="tgTok">Token bot</label>
       <input id="tgTok" type="password" autocomplete="off" placeholder="${t.tokenSet ? `Tersimpan (${esc(t.tokenMask)}) — kosongkan jika tidak diganti` : "contoh: 123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}">
-      <div class="form-actions" style="margin-top:10px"><button class="btn" id="tgDetect">${ic("search")}Deteksi grup &amp; topik</button><button class="btn ghost" id="tgHook" title="Lepas bot dari aplikasi lain yang memakai webhook">${ic("x")}Hapus webhook</button><span class="help" id="tgBot" style="margin:auto 0">${t.botName ? "Bot: @" + esc(t.botName) : ""}</span></div>
+      <div class="form-actions start" style="margin-top:10px"><button class="btn" id="tgDetect">${ic("search")}Deteksi grup &amp; topik</button><button class="btn ghost" id="tgHook" title="Lepas bot dari aplikasi lain yang memakai webhook">${ic("x")}Hapus webhook</button><span class="help" id="tgBot" style="margin:auto 0">${t.botName ? "Bot: @" + esc(t.botName) : ""}</span></div>
       <div class="f2">
         <div><label for="tgChat">Grup</label><select id="tgChat"></select></div>
         <div><label for="tgThread">Topik</label><select id="tgThread"></select></div>
@@ -7198,10 +7351,9 @@ function setTelegram(b) {
       <div class="help">Zona waktu: ${esc(tzLabel())} (ubah di tab <a href="#/pengaturan/umum">Umum</a>).</div>
       <div class="err" id="tgErr"></div>
       <div class="form-actions">
-        <button class="btn pri" id="tgSave">Simpan</button>
+        ${t.tokenSet ? `<button class="btn ghost danger" id="tgClear">${ic("trash")}Hapus Telegram</button><span class="sp"></span>` : ""}
         <button class="btn" id="tgTest">${ic("send")}Kirim pesan tes</button>
-        <span class="sp"></span>
-        ${t.tokenSet ? `<button class="btn ghost danger" id="tgClear">${ic("trash")}Hapus Telegram</button>` : ""}
+        <button class="btn pri" id="tgSave">Simpan</button>
       </div>
     </div></div>`;
   const chatSel = $("#tgChat"), thrSel = $("#tgThread");
@@ -7325,11 +7477,11 @@ function setDomain(b) {
       <div class="kv"><span>Mengarah ke</span><b>${esc(c.ip || "—")} · DNS only</b></div>
       <div class="kv"><span>HTTPS panel</span><b>${c.https ? (c.httpsActive ? "Aktif" : "Belum aktif") + (c.certExpiry ? ` · berlaku s/d ${esc(fmtT(c.certExpiry, true))}` : "") : "Tidak dipakai"}</b></div>
       <div class="kv"><span>Diterapkan</span><b>${esc(fmtT(Date.parse(c.appliedAt), true))}</b></div>
-      ${c.https && c.httpsActive && !onHttps ? `<div class="cb" style="border-top:1px solid var(--line)"><a class="btn pri" href="https://${esc(c.domain)}:${port}/">${ic("lock")}Buka panel lewat HTTPS</a></div>` : ""}
-      <div class="cb" style="border-top:1px solid var(--line);display:flex;gap:8px;flex-wrap:wrap">
+      ${c.https && c.httpsActive && !onHttps ? `<div class="cb card-actions"><a class="btn pri" href="https://${esc(c.domain)}:${port}/">${ic("lock")}Buka panel lewat HTTPS</a></div>` : ""}
+      <div class="cb card-actions">
+        <button class="btn ghost danger" id="cfRemove">${ic("trash")}Lepas domain</button>
+        <span class="sp"></span>
         <button class="btn" id="cfAgain">${ic("refresh")}Verifikasi ulang</button>
-        <span style="flex:1"></span>
-        <button class="btn ghost danger" id="cfRemove">Lepas domain</button>
       </div></div>
     <div class="card"><div class="ch"><h2>Subdomain layanan</h2></div><form class="cb" id="subForm" style="padding-top:6px">
       <p class="help" style="margin-top:4px">Panel membuat record DNS (DNS only) untuk GenieACS di <b>${esc(c.zoneName)}</b>, lalu memasang link-nya di dashboard. Nama subdomain bisa diganti kapan saja; record lama buatan panel ikut dihapus.</p>
@@ -7357,7 +7509,7 @@ function setDomain(b) {
         <li><b>Buat dan salin</b>Continue to summary → Create Token → salin token (hanya ditampilkan sekali). Jangan pakai Global API Key.</li>
       </ol></details>
       <label class="check" style="margin-top:16px"><input id="cfHttps" type="checkbox" ${!c || c.https ? "checked" : ""}>Pasang HTTPS untuk panel (sertifikat Let's Encrypt gratis, diperpanjang otomatis)</label>
-      <div class="help">Panel akan dibuka lewat <span class="mono">https://domain:${port}</span>. VPN, GenieACS, dan Winbox tidak terpengaruh.</div>
+      <div class="help">Panel akan dibuka lewat <span class="mono">${STATE.settings.stdPorts && STATE.settings.stdPorts.active ? "https://domain" : "https://domain:" + port}</span>. VPN, GenieACS, dan Winbox tidak terpengaruh.</div>
       <div class="note info" style="margin:14px 0 0">${ic("info")}<div><b>Record dibuat dalam mode DNS only (awan abu-abu)</b>Proxy Cloudflare (awan oranye) tidak bisa meneruskan VPN L2TP dan Winbox, jadi panel otomatis mematikannya untuk domain ini.</div></div>
       <div class="err" id="cfErr"></div>
       <div class="form-actions"><button class="btn pri" id="cfGo">${ic("play")}Verifikasi &amp; terapkan</button></div>

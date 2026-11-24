@@ -250,7 +250,7 @@ Penting:
 - Bisa dimatikan di **Pengaturan → Umum → Alamat tanpa port → Matikan**.
 
 ### D. Menu Add-on
-Menu **Add-on** di panel → **Install**. Panel menampilkan progres langkah demi langkah (0–100%) beserta log. Add-on bisa **Update** dan **Lepas** dari menu yang sama.
+Menu **Add-on**: cari add-on, klik untuk melihat detail dan fiturnya, lalu **Install**. Panel menampilkan progres langkah demi langkah (0–100%) beserta log. Add-on yang terpasang tampil di bagian **Terpasang** (dan kartu **Aplikasi** di Dashboard) dengan tombol **Buka**; Perbarui, Periksa, Ubah alamat, dan Lepas ada di menu ⋯. Aplikasi (Panel ACS, Bilingku) tidak lagi ditaruh di menu samping.
 
 | Add-on | Isi | Dibuka di |
 |---|---|---|

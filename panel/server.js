@@ -51,7 +51,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.1.3";
+const VERSION = "2.2.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -2407,6 +2407,9 @@ const ADDONS = {
     kind: "sistem",
     name: "ZeroTier",
     icon: "hub",
+    color: "amber",
+    tagline: "Jalur VPN kedua untuk router RouterOS v7 ARM/ARM64, dikelola langsung dari panel.",
+    features: ["Controller ZeroTier di VPS, tanpa web tambahan", "Buat jaringan, atur rentang IP, pool, dan DNS", "Setujui perangkat, ubah IP, beri nama, QR untuk HP", "Rute IP virtual router dibuat otomatis"],
     desc: "Router RouterOS v7 (ARM/ARM64) tersambung lewat ZeroTier selain L2TP. Memasang ZeroTier (controller) di VPS; jaringan, subnet, dan perangkat diatur langsung dari menu ZeroTier di panel.",
     note: "Ringan: hanya paket zerotier-one (±10 MB), terpasang dalam hitungan detik.",
   },
@@ -2414,6 +2417,9 @@ const ADDONS = {
     kind: "aplikasi",
     name: "Panel ACS",
     icon: "box",
+    color: "blue",
+    tagline: "Monitoring ONT dari GenieACS lengkap dengan history redaman.",
+    features: ["Daftar & detail ONT per router panel", "History redaman RX (grafik 1–90 hari)", "Ubah WiFi, reboot, faults, peta lokasi", "Database SQLite, data tetap aman saat diperbarui"],
     desc: "Monitoring ONT dari GenieACS: daftar & detail ONT, redaman RX dengan history grafik, ubah WiFi, reboot, faults, peta. ONT dikelompokkan otomatis per router panel.",
     repo: process.env.VPNACS_REPO_PANEL_ACS || "https://github.com/suwazed-cmyk/panel-acs.git",
     port: 8091,
@@ -2426,6 +2432,9 @@ const ADDONS = {
     kind: "aplikasi",
     name: "Bilingku",
     icon: "wallet",
+    color: "teal",
+    tagline: "Billing PPPoE & Hotspot MikroTik: paket, tagihan, isolir, voucher.",
+    features: ["Pelanggan PPPoE, paket, dan jatuh tempo", "Isolir otomatis & halaman pemberitahuan", "Voucher hotspot dan laporan penjualan", "Router diambil dari panel, API lewat VPN"],
     desc: "Billing PPPoE & Hotspot MikroTik: paket, jatuh tempo, isolir otomatis, pembayaran, voucher. Router bisa diambil dari panel, API lewat VPN.",
     repo: process.env.VPNACS_REPO_BILINGKU || "https://github.com/suwazed-cmyk/bilingku.git",
     port: 8092,
@@ -3308,7 +3317,7 @@ async function addonList(d) {
   const out = [];
   for (const [id, a] of Object.entries(ADDONS)) {
     const st = addonState(d, id);
-    const x = { id, kind: a.kind, name: a.name, icon: a.icon, desc: a.desc, note: a.note || "", installed: !!st.installed, at: st.at || null, updatedAt: st.updatedAt || null };
+    const x = { id, kind: a.kind, name: a.name, icon: a.icon, color: a.color || "blue", tagline: a.tagline || "", features: a.features || [], desc: a.desc, note: a.note || "", installed: !!st.installed, at: st.at || null, updatedAt: st.updatedAt || null };
     if (a.kind === "aplikasi") {
       x.path = addonPath(d, id);
       x.repo = a.repo.replace(/\.git$/, "");
@@ -3836,7 +3845,7 @@ async function handleApi(req, res, url) {
         port: PORT,
         stdPorts: { enabled: stdWanted(d), active: STD_ON, error: STD_ERR },
         panelUrl: panelPublicUrl(st, d),
-        addons: Object.fromEntries(Object.entries(ADDONS).map(([id, a]) => [id, { installed: addonInstalled(d, id), kind: a.kind, name: a.name, icon: a.icon, path: a.kind === "aplikasi" ? addonPath(d, id) : "" }])),
+        addons: Object.fromEntries(Object.entries(ADDONS).map(([id, a]) => [id, { installed: addonInstalled(d, id), kind: a.kind, name: a.name, icon: a.icon, color: a.color || "blue", tagline: a.tagline || "", path: a.kind === "aplikasi" ? addonPath(d, id) : "" }])),
         version: VERSION,
         panelName: st.brand,
         brandHistory: st.brands.filter((n) => n !== st.brand),
