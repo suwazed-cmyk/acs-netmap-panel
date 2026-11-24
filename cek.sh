@@ -117,6 +117,12 @@ if [ -f "$PANEL_DIR/server.js" ]; then
     301|308) ok "Panel menjawab (dialihkan ke HTTPS)" ;;
     *) bad "Panel tidak menjawab di port ${PANEL_PORT} (HTTP ${c:-000})" "journalctl -u vpn-acs -n 50 --no-pager" ;;
   esac
+  if ss -Hltnp 2>/dev/null | grep -E '[:.]80[[:space:]]' | grep -q node; then ok "Panel juga di port 80/443 (alamat tanpa port)"
+  else
+    who="$(ss -Hltnp 2>/dev/null | grep -E '[:.]80[[:space:]]' | grep -oP 'users:\(\("\K[^"]+' | head -1)"
+    if [ -n "$who" ]; then warn "Port 80 dipakai ${who}, panel hanya di port ${PANEL_PORT}" "Hentikan ${who} (systemctl disable --now ${who}), lalu systemctl restart vpn-acs"
+    else warn "Panel tidak memakai port 80/443" "Aktifkan di Pengaturan → Umum → Alamat tanpa port"; fi
+  fi
   HTTPS_DOM="$(panel_get httpsDomain)"
   if [ -n "$HTTPS_DOM" ]; then
     cek_web "https://127.0.0.1:${PANEL_PORT}/api/me" "Panel HTTPS"

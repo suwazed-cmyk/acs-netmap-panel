@@ -44,7 +44,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.0.0";
+const VERSION = "2.0.1";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -571,7 +571,7 @@ function ensureJoinKey(site) {
 // Alamat panel yang bisa dijangkau MikroTik lewat internet
 function panelPublicUrl(st, d) {
   const cf = d && d.settings && d.settings.cloudflare;
-  const std = d && d.settings && d.settings.stdPorts && STD_ON;
+  const std = STD_ON;
   if (cf && cf.https && cf.domain) return std ? `https://${cf.domain}` : `https://${cf.domain}:${PORT}`;
   return st.publicIp ? (std ? `http://${st.publicIp}` : `http://${st.publicIp}:${PORT}`) : "";
 }
@@ -2991,6 +2991,10 @@ function listenPort(port, fn) {
     srv.listen(port, HOST, () => resolve({ srv }));
   });
 }
+// Port 80/443 aktif secara bawaan; hanya mati bila admin mematikannya di Pengaturan
+function stdWanted(d) {
+  return !(d && d.settings && d.settings.stdPorts === false);
+}
 async function stdPortsStart() {
   if (STD_ON) return { ok: true };
   const a = await listenPort(DRY_RUN ? STD_HTTP : 80, handler80);
@@ -3063,13 +3067,6 @@ async function refreshSubUrls(d) {
 }
 function stdOnSteps() {
   return [
-    {
-      label: "Periksa password admin",
-      run: async () => {
-        if (isDefaultPw(loadData())) return { error: "Password admin masih Admin123. Ganti dulu di Pengaturan → Umum → Password admin, karena port 80/443 lebih sering dicoba orang." };
-        return { detail: "Password sudah diganti" };
-      },
-    },
     {
       label: "Periksa port 80 dan 443",
       run: async () => {
@@ -3338,7 +3335,7 @@ async function handleApi(req, res, url) {
         autoPortStart: FWD_AUTO_START,
         reservedPorts: Array.from(RESERVED_PORTS),
         port: PORT,
-        stdPorts: { enabled: !!(d.settings && d.settings.stdPorts), active: STD_ON, error: STD_ERR },
+        stdPorts: { enabled: stdWanted(d), active: STD_ON, error: STD_ERR },
         panelUrl: panelPublicUrl(st, d),
         addons: Object.fromEntries(Object.entries(ADDONS).map(([id, a]) => [id, { installed: addonInstalled(d, id), kind: a.kind, name: a.name, icon: a.icon, path: a.kind === "aplikasi" ? addonPath(d, id) : "" }])),
         version: VERSION,
@@ -4170,10 +4167,11 @@ if (process.argv[2] === "--set-password") {
   httpServer.on("upgrade", onUpgrade);
   const front = net.createServer(frontHandler);
   front.listen(PORT, HOST, () => console.log(`Panel VPN ACS berjalan di port ${PORT}`));
-  if ((loadData().settings || {}).stdPorts) {
+  if (stdWanted(loadData())) {
     stdPortsStart().then((r) => {
       if (r.error) {
         STD_ERR = r.error;
+        logActivity(null, "Port 80/443 gagal", r.error + ". Panel tetap di port " + PORT);
         console.error("Port 80/443 tidak bisa dipakai:", r.error, "- panel tetap di port", PORT);
       } else console.log("Panel juga berjalan di port 80 dan 443");
     });

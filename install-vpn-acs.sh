@@ -187,7 +187,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.0.0";
+const VERSION = "2.0.1";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -714,7 +714,7 @@ function ensureJoinKey(site) {
 // Alamat panel yang bisa dijangkau MikroTik lewat internet
 function panelPublicUrl(st, d) {
   const cf = d && d.settings && d.settings.cloudflare;
-  const std = d && d.settings && d.settings.stdPorts && STD_ON;
+  const std = STD_ON;
   if (cf && cf.https && cf.domain) return std ? `https://${cf.domain}` : `https://${cf.domain}:${PORT}`;
   return st.publicIp ? (std ? `http://${st.publicIp}` : `http://${st.publicIp}:${PORT}`) : "";
 }
@@ -3134,6 +3134,10 @@ function listenPort(port, fn) {
     srv.listen(port, HOST, () => resolve({ srv }));
   });
 }
+// Port 80/443 aktif secara bawaan; hanya mati bila admin mematikannya di Pengaturan
+function stdWanted(d) {
+  return !(d && d.settings && d.settings.stdPorts === false);
+}
 async function stdPortsStart() {
   if (STD_ON) return { ok: true };
   const a = await listenPort(DRY_RUN ? STD_HTTP : 80, handler80);
@@ -3206,13 +3210,6 @@ async function refreshSubUrls(d) {
 }
 function stdOnSteps() {
   return [
-    {
-      label: "Periksa password admin",
-      run: async () => {
-        if (isDefaultPw(loadData())) return { error: "Password admin masih Admin123. Ganti dulu di Pengaturan → Umum → Password admin, karena port 80/443 lebih sering dicoba orang." };
-        return { detail: "Password sudah diganti" };
-      },
-    },
     {
       label: "Periksa port 80 dan 443",
       run: async () => {
@@ -3481,7 +3478,7 @@ async function handleApi(req, res, url) {
         autoPortStart: FWD_AUTO_START,
         reservedPorts: Array.from(RESERVED_PORTS),
         port: PORT,
-        stdPorts: { enabled: !!(d.settings && d.settings.stdPorts), active: STD_ON, error: STD_ERR },
+        stdPorts: { enabled: stdWanted(d), active: STD_ON, error: STD_ERR },
         panelUrl: panelPublicUrl(st, d),
         addons: Object.fromEntries(Object.entries(ADDONS).map(([id, a]) => [id, { installed: addonInstalled(d, id), kind: a.kind, name: a.name, icon: a.icon, path: a.kind === "aplikasi" ? addonPath(d, id) : "" }])),
         version: VERSION,
@@ -4313,10 +4310,11 @@ if (process.argv[2] === "--set-password") {
   httpServer.on("upgrade", onUpgrade);
   const front = net.createServer(frontHandler);
   front.listen(PORT, HOST, () => console.log(`Panel VPN ACS berjalan di port ${PORT}`));
-  if ((loadData().settings || {}).stdPorts) {
+  if (stdWanted(loadData())) {
     stdPortsStart().then((r) => {
       if (r.error) {
         STD_ERR = r.error;
+        logActivity(null, "Port 80/443 gagal", r.error + ". Panel tetap di port " + PORT);
         console.error("Port 80/443 tidak bisa dipakai:", r.error, "- panel tetap di port", PORT);
       } else console.log("Panel juga berjalan di port 80 dan 443");
     });
@@ -4394,6 +4392,11 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .avatar{width:32px;height:32px;border-radius:50%;background:var(--primary);color:#fff;display:grid;place-items:center;font-weight:600;font-size:13px}
   #navBtn{display:none}
   .main{padding:28px;max-width:1180px;width:100%;margin:0 auto}
+  #topWarn:empty{display:none}
+  #topWarn{max-width:1180px;width:100%;margin:0 auto;padding:20px 28px 0}
+  #topWarn .note{margin:0;align-items:center}
+  #topWarn .note>div{flex:1}
+  #topWarn .btn{flex:none}
 
   /* Header halaman */
   .ph{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px}
@@ -4742,6 +4745,7 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
     #navBtn{display:inline-flex}
     .top{padding:0 14px}
     .main{padding:20px 16px}
+    #topWarn{padding:16px 16px 0}
     .grid2,.grid-dash{grid-template-columns:1fr}
   }
   @media (max-width:1280px){ .hide-md{display:none} }
@@ -4817,6 +4821,7 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
         </div>
       </div>
     </header>
+    <div id="topWarn"></div>
     <main class="main" id="view"></main>
   </div>
 </div>
@@ -5020,6 +5025,16 @@ function ztOn() { const a = (STATE.settings.addons || {}).zerotier; return !!(a 
 
 /* ================= Router ================= */
 let TEST = null; // tes koneksi yang sedang tampil
+// Peringatan di semua halaman selama password masih bawaan
+function topWarn(parts) {
+  const el = $("#topWarn");
+  if (!el) return;
+  const st = STATE.settings || {};
+  if (!st.defaultPassword) { el.innerHTML = ""; return; }
+  const P = st.stdPorts || {};
+  const onSet = parts[0] === "pengaturan" && (!parts[1] || parts[1] === "umum");
+  el.innerHTML = `<div class="note bad">${ic("alert")}<div><b>Password admin masih bawaan (Admin123)</b>${P.active ? "Panel terbuka di port 80/443 sehingga mudah ditemukan orang. " : ""}Siapa pun yang mencoba Admin123 bisa masuk dan mengubah router Anda. Segera ganti password.</div>${onSet ? "" : `<a class="btn pri" href="#/pengaturan/umum">Ganti password</a>`}</div>`;
+}
 function route() {
   if (!LOADED) return;
   let h = location.hash || "#/";
@@ -5034,6 +5049,7 @@ function route() {
   document.querySelectorAll(".menu-list").forEach((m) => m.classList.add("hidden"));
   closeModal();
   const v = $("#view");
+  topWarn(parts);
   let title = "Dashboard";
   if (parts[0] === "router" && (parts[1] === "terputus" || parts[1] === "menunggu")) { LIST.f = parts[1] === "terputus" ? "off" : "wait"; LIST.q = ""; history.replaceState(null, "", "#/router"); viewList(v); title = "Router"; }
   else if (parts[0] === "router" && parts[1]) {
@@ -5831,7 +5847,7 @@ function setGeneral(b) {
         <p style="color:var(--text-2)">Panel juga dibuka lewat port standar, jadi alamatnya tanpa <code>:${esc(String(STATE.settings.port || 8088))}</code>: ${https ? "<b>443</b> (https) dengan domain, dan port <b>80</b> dialihkan ke https" : "port <b>80</b> (http)"}. Port ${esc(String(STATE.settings.port || 8088))} tetap bisa dipakai.${https ? " Subdomain GenieACS dan ZTNET juga ikut tanpa port dan ber-HTTPS." : ""}</p>
         ${P.error ? `<div class="note bad" style="margin:10px 0 0">${ic("alert")}<div><b>Port 80/443 tidak bisa dipakai</b>${esc(P.error)}. Panel tetap di port ${esc(String(STATE.settings.port || 8088))}.</div></div>` : ""}
         ${P.enabled && P.active ? `<div class="kv" style="padding:10px 0 0;border:0"><span>Alamat panel</span><b><a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a></b></div>` : ""}
-        <div class="help">Syarat: password admin sudah bukan bawaan, port 80/443 tidak dipakai aplikasi lain, dan TCP 80 + 443 dibuka di firewall provider VPS.</div>
+        <div class="help">Aktif secara bawaan. Syarat: port 80/443 tidak dipakai aplikasi lain (mis. nginx/apache), dan TCP 80 + 443 dibuka di firewall provider VPS.</div>
         <div class="form-actions">${P.enabled ? `<button class="btn" id="stdOff" type="button">Matikan</button>` : `<button class="btn pri" id="stdOn" type="button">${ic("globe")}Aktifkan port 80/443</button>`}</div>
       </div></div>`;
     })()}
@@ -5873,7 +5889,6 @@ function setGeneral(b) {
   const stdBtn = $("#stdOn") || $("#stdOff");
   if (stdBtn) stdBtn.onclick = async () => {
     const on = stdBtn.id === "stdOn";
-    if (on && STATE.settings.defaultPassword) return doneDialog("Ganti password dulu", "<p>Port 80/443 lebih sering dicoba orang. Ganti password admin <b>Admin123</b> di kartu Password admin di bawah, lalu aktifkan lagi.</p>", "bad", false);
     busyBtn(stdBtn, true);
     try { await api("/api/stdports", { method: "POST", body: { enable: on } }); openJob(); }
     catch (err) { busyBtn(stdBtn, false); toast(err.message); }
@@ -6575,6 +6590,16 @@ systemctl is-active --quiet vpn-acs || fail "Panel gagal berjalan. Cek: journalc
 
 echo
 ok "Panel VPN ACS berjalan"
+# Panel memakai port 80/443 secara bawaan; beri tahu bila port itu dipakai program lain
+for i in 1 2 3; do ss -Hltnp 2>/dev/null | grep -E '[:.]80[[:space:]]' | grep -q node && break; sleep 1; done
+if ss -Hltnp 2>/dev/null | grep -E '[:.]80[[:space:]]' | grep -q node; then
+  ok "Panel juga dibuka di port 80/443 (alamat tanpa port)"
+else
+  WHO80="$(ss -Hltnp 2>/dev/null | grep -E '[:.](80|443)[[:space:]]' | grep -oP 'users:\(\("\K[^"]+' | sort -u | tr '\n' ' ')"
+  if [ -n "$WHO80" ]; then
+    warn "Port 80/443 dipakai: ${WHO80}— panel hanya di port ${PANEL_PORT}. Hentikan program itu lalu: systemctl restart vpn-acs"
+  fi
+fi
 SUMMARY="$SCRIPT_DIR/ringkasan.sh"
 if [ -f "$SUMMARY" ]; then
   bash "$SUMMARY"

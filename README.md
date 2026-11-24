@@ -146,14 +146,15 @@ Jangan menyalakan `ufw` karena bentrok dengan aturan VPN. Buka port berikut di f
 |---|---|---|
 | 22 | TCP | SSH |
 | 1701 | UDP | VPN L2TP |
-| 8088 | TCP | Panel VPN ACS |
+| 80, 443 | TCP | Panel VPN ACS (alamat tanpa port) |
+| 8088 | TCP | Panel VPN ACS (cadangan) |
 | 3000 | TCP | Web GenieACS |
 | 20001-20999 | TCP | Port forwarding (remote Winbox / web ONT) |
 | 500, 4500 | UDP | Hanya jika IPsec dinyalakan |
 | 3300 | TCP | Web ZTNET, hanya jika memakai ZeroTier |
 | 9993 | UDP | ZeroTier, hanya jika memakai ZeroTier |
 
-Port 7547 dan 7557 **tidak perlu** dibuka: ONT menghubungi GenieACS lewat VPN. HTTPS panel memakai port 8088 yang sama dan tidak butuh port 80/443.
+Port 7547 dan 7557 **tidak perlu** dibuka: ONT menghubungi GenieACS lewat VPN. Panel dibuka di port 80/443; port 8088 tetap jalan sebagai cadangan.
 
 Sekarang tes semua layanan:
 ```bash
@@ -162,7 +163,7 @@ bash cek.sh
 Setiap pemeriksaan diberi tanda **[OK]**, **[PERINGATAN]**, atau **[GAGAL]**. Baris yang gagal disertai perintah untuk memperbaikinya. Komponen yang belum dipasang ditandai **[LEWATI]**.
 
 ### 8. Atur panel dan GenieACS (sekali di awal)
-Buka `http://IP_VPS:8088` lalu login.
+Buka `http://IP_VPS` lalu login dengan password `Admin123` (jika saat instal Anda cukup menekan Enter), lalu **segera ganti password** di Pengaturan. Jika port 80 dipakai program lain, buka `http://IP_VPS:8088`.
 
 Menu **Pengaturan → Umum**:
 1. **Nama panel** (opsional), misalnya `INET WIFI`. Dipakai di judul panel dan sebagai komentar aturan di MikroTik (`INET WIFI - ONT ke IP virtual`). Bisa diganti kapan saja; script baru otomatis membersihkan aturan dengan nama lama.
@@ -232,22 +233,23 @@ Panel memeriksa token → domain → izin DNS → IP VPS → membuat record A (*
 
 Setelah berhasil:
 - Alamat VPS di script MikroTik otomatis memakai domain. MikroTik lama tidak wajib diubah karena domain dan IP sama-sama mengarah ke VPS.
-- Jika HTTPS dipilih, panel dibuka lewat `https://domain:8088`, dan alamat http/IP dialihkan otomatis. Sertifikat diperpanjang otomatis oleh certbot.
+- Jika HTTPS dipilih, panel dibuka lewat `https://domain` (atau `https://domain:8088`), dan alamat http/IP dialihkan otomatis. Sertifikat diperpanjang otomatis oleh certbot.
 - Record harus **DNS only** (awan abu-abu). Proxy Cloudflare (awan oranye) tidak bisa meneruskan L2TP dan Winbox; panel mengaturnya otomatis.
 
 **Subdomain layanan:** di halaman yang sama, bagian **Subdomain layanan** membuat record DNS otomatis untuk **GenieACS** (bawaan `acs`, misalnya `http://acs.domainanda.com:3000`) dan **ZTNET** (bawaan `zt`, misalnya `http://zt.domainanda.com:3300`). Link di panel ikut diperbarui, dan namanya bisa diganti kapan saja. Pakai subdomain ini untuk GenieACS dan ZTNET, **jangan domain panel**: domain panel yang ber-HTTPS membuat browser memaksa https di port lain.
 
 ### C. Alamat tanpa port (80/443)
-Menu **Pengaturan → Umum → Alamat tanpa port**. Setelah aktif:
-- **Tanpa domain:** panel dibuka di `http://IP-VPS` (port 80).
-- **Dengan domain + HTTPS:** panel dibuka di `https://domain` (port 443). Port 80 tetap melayani perpanjangan sertifikat dan mengalihkan ke https.
-- Subdomain `acs.` dan `zt.` ikut dibuka tanpa port (`https://acs.domain`, `https://zt.domain`). Sertifikat diperluas otomatis.
+Panel **langsung memakai port 80/443** setelah instal:
+- **Tanpa domain:** `http://IP-VPS` (port 80).
+- **Dengan domain + HTTPS:** `https://domain` (port 443). Port 80 tetap melayani perpanjangan sertifikat dan mengalihkan ke https.
+- Subdomain `acs.` dan `zt.` ikut dibuka tanpa port bila diaktifkan dari **Pengaturan → Umum → Alamat tanpa port** (sertifikat diperluas otomatis).
 - Port **8088 tetap jalan** sebagai cadangan, dan script MikroTik lama tetap berfungsi.
 
-Syarat:
-- **Password admin bukan `Admin123`**. Ganti dulu di Pengaturan, karena panel jadi lebih mudah ditemukan.
-- Port 80/443 tidak dipakai program lain (misalnya nginx/apache). Panel memeriksa dan menolak bila bentrok.
+Penting:
+- **Segera ganti password `Admin123`.** Selama masih bawaan, panel menampilkan peringatan merah di setiap halaman.
 - Buka TCP **80** dan **443** di firewall provider.
+- Jika port 80/443 sudah dipakai program lain (misalnya nginx/apache), panel tetap berjalan di port 8088. `bash cek.sh` memberi tahu program mana yang memakainya.
+- Bisa dimatikan di **Pengaturan → Umum → Alamat tanpa port → Matikan**.
 
 ### D. Menu Add-on
 Menu **Add-on** di panel → **Install**. Panel menampilkan progres langkah demi langkah (0–100%) beserta log. Add-on bisa **Update** dan **Lepas** dari menu yang sama.
@@ -287,7 +289,7 @@ Router **ARM/ARM64 dengan RouterOS v7** bisa tersambung ke VPS lewat ZeroTier, b
 
 **Tambah router:** panel → **Tambah router** → jalur **ZeroTier**.
 - Jika MikroTik **sudah bergabung** ke jaringan (terlihat di ZTNET), pilih dari daftar **Perangkat ZeroTier**. Daftar memakai nama perangkat dari ZTNET, dan nama router terisi otomatis.
-- Jika **belum bergabung** (biasanya), biarkan "Pilih nanti" → **Simpan** → tab **Script MikroTik** → tempel di New Terminal. Di akhir, script **melaporkan Node ID MikroTik ke panel** sehingga router terpilih otomatis dalam beberapa detik. MikroTik harus bisa membuka alamat panel (`http(s)://alamat-VPS:8088`) lewat internet. Jika gagal, pilih manual di tab **Ringkasan** → **Pilih router yang bergabung**.
+- Jika **belum bergabung** (biasanya), biarkan "Pilih nanti" → **Simpan** → tab **Script MikroTik** → tempel di New Terminal. Di akhir, script **melaporkan Node ID MikroTik ke panel** sehingga router terpilih otomatis dalam beberapa detik. MikroTik harus bisa membuka alamat panel (`http(s)://alamat-VPS`) lewat internet. Jika gagal, pilih manual di tab **Ringkasan** → **Pilih router yang bergabung**.
 
 Panel otomatis menyetujui router, memberi IP ZeroTier, dan memasang route ke IP virtual. Nama perangkat dari ZTNET juga tampil di tabel **Anggota jaringan** di menu ZeroTier.
 

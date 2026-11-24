@@ -91,17 +91,30 @@ line "Sistem" "$(. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-Linux}")"
 head1 "Panel VPN ACS"
 if [ -f "$PANEL_DIR/server.js" ]; then
   HTTPS_DOM="$(panel_get httpsDomain)"
-  if [ -n "$HTTPS_DOM" ]; then PANEL_URL="https://${HTTPS_DOM}:${PANEL_PORT}"; else PANEL_URL="http://${VPS_ADDR}:${PANEL_PORT}"; fi
+  # Panel memakai port 80/443 bila tidak dipakai aplikasi lain (bawaan), selain port 8088
+  if ss -Hltnp 2>/dev/null | grep -E '[:.]80[[:space:]]' | grep -q node; then STD=1; else STD=""; fi
+  if [ -n "$HTTPS_DOM" ]; then
+    if [ -n "$STD" ]; then PANEL_URL="https://${HTTPS_DOM}"; else PANEL_URL="https://${HTTPS_DOM}:${PANEL_PORT}"; fi
+  else
+    if [ -n "$STD" ]; then PANEL_URL="http://${VPS_ADDR}"; else PANEL_URL="http://${VPS_ADDR}:${PANEL_PORT}"; fi
+  fi
   line "Status" "$(badge "$(svc_state vpn-acs)")"
   line "Alamat web" "${GREEN}${PANEL_URL}${NC}"
+  if [ -n "$STD" ]; then
+    line "Cadangan" "port ${PANEL_PORT} tetap bisa dipakai"
+  else
+    line "Port 80/443" "${YELLOW}tidak aktif${NC} (dipakai aplikasi lain atau dimatikan di Pengaturan)"
+  fi
   line "Nama panel" "$(panel_get panelName)"
   line "Router" "$(panel_get sites) terdaftar"
   if [ "$(panel_get defaultPw)" = "1" ]; then
-    line "Password" "${YELLOW}${DEFAULT_ADMIN_PW}${NC} (bawaan, segera ganti di Pengaturan)"
+    line "Password" "${RED}${DEFAULT_ADMIN_PW}${NC} (bawaan! SEGERA ganti di Pengaturan → Umum)"
   else
     line "Password" "sesuai yang Anda buat"
   fi
-  TCP_OPEN+=("${PANEL_PORT}|Panel VPN ACS")
+  TCP_OPEN+=("80|Panel (http)")
+  TCP_OPEN+=("443|Panel (https)")
+  TCP_OPEN+=("${PANEL_PORT}|Panel VPN ACS (cadangan)")
 else
   line "Status" "${DIM}belum dipasang${NC}"
   MISSING+=("Panel VPN ACS      : bash install-vpn-acs.sh")
