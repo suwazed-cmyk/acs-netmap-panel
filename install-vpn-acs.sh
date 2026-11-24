@@ -1084,6 +1084,11 @@ async function runTestStep(site, key, st) {
 // =====================================================================
 //  GenieACS: status layanan, patch, dan ONT per router (hanya baca)
 // =====================================================================
+// Alamat NBI GenieACS di VPS ini
+function nbiBase() {
+  if (NBI_URL) return NBI_URL.replace(/\/$/, "");
+  return `http://127.0.0.1:${readGenieEnv("GENIEACS_NBI_PORT") || "7557"}`;
+}
 function readGenieEnv(key) {
   try {
     const m = fs.readFileSync(GENIE_ENV, "utf8").match(new RegExp("^" + key + "=(.*)$", "m"));
@@ -2502,7 +2507,6 @@ const ADDONS = {
     repo: process.env.VPNACS_REPO_BILINGKU || "https://github.com/suwazed-cmyk/bilingku.git",
     port: 8092,
     path: "/billing",
-    timer: { unit: "cron", script: "bin/cron.php", every: "*:0/5", desc: "Tugas berkala Bilingku" },
   },
 };
 const RESERVED_PATHS = ["/api", "/index.html", "/.well-known"];
@@ -2748,7 +2752,7 @@ function phpInstallSteps(id, req, opts) {
       const d = loadData();
       fs.mkdirSync(dir + "/data", { recursive: true });
       // Penghubung ke panel utama: alamat lokal + kunci rahasia (hanya dari 127.0.0.1)
-      writeIfChanged(dir + "/data/panel-link.json", JSON.stringify({ url: `http://127.0.0.1:${PORT}`, key: d.settings.addonKey, prefix: addonPath(d, id) }, null, 2), 0o640);
+      writeIfChanged(dir + "/data/panel-link.json", JSON.stringify({ url: `http://127.0.0.1:${PORT}`, key: d.settings.addonKey, prefix: addonPath(d, id), nbi: NBI_URL.replace(/\/$/, "") }, null, 2), 0o640);
       await run("chown", ["-R", "www-data:www-data", dir + "/data"]);
       await run("chmod", ["750", dir + "/data"]);
       if (fs.existsSync(dir + "/bin/setup.php")) {
