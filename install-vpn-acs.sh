@@ -184,7 +184,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "1.8.1";
+const VERSION = "1.8.2";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -3527,6 +3527,11 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .f2{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
   .check{display:flex;align-items:center;gap:9px;font-weight:500;cursor:pointer}
   .seg{display:flex;gap:6px;flex-wrap:wrap}
+  .sw{display:inline-flex;padding:3px;gap:2px;background:var(--subtle);border:1px solid var(--line);border-radius:10px}
+  .sw button{border:0;background:transparent;padding:6px 14px;border-radius:7px;font:inherit;font-size:13px;font-weight:550;color:var(--muted);cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+  .sw button:hover{color:var(--text)}
+  .sw button.on{background:var(--surface);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+  .sw button.on.danger{color:var(--bad)}
   .seg label{margin:0;display:flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid var(--line-2);border-radius:var(--r-sm);cursor:pointer;font-weight:500}
   .seg label:has(input:checked){border-color:var(--primary);background:var(--primary-soft)}
   .form-actions{display:flex;gap:8px;margin-top:18px;flex-wrap:wrap}
@@ -4282,9 +4287,22 @@ function tabScript(b, x) {
       <li><b><i>1</i>Salin script</b>Klik tombol Salin di kotak script.</li>
       <li><b><i>2</i>Tempel di MikroTik</b>Winbox → New Terminal → klik kanan → Paste → Enter.</li>
       <li><b><i>3</i>Tes koneksi</b>Klik <a href="#" data-act="test" data-id="${x.id}">Tes koneksi</a> untuk memastikan semuanya jalan.</li></ol>`}
-    <div class="card"><div class="ch"><h2>Script pemasangan</h2><span class="muted" style="font-size:12.5px">Aman dijalankan ulang</span></div>
-      <div class="cb"><div class="codebox"><pre class="code">${esc(x.script)}</pre><button class="btn sm" data-copy="${esc(x.script)}" data-msg="Script tersalin. Tempel di Winbox → New Terminal">${ic("copy")}Salin</button></div>
-      <details class="more"><summary>Script untuk menghapus dari MikroTik</summary><div class="codebox"><pre class="code">${esc(x.removeScript)}</pre><button class="btn sm" data-copy="${esc(x.removeScript)}" data-msg="Script hapus tersalin">${ic("copy")}Salin</button></div></details></div></div>`;
+    <div class="card"><div class="ch"><h2>Script MikroTik</h2>
+        <div class="sw" role="tablist"><button type="button" class="on" data-sw="pasang" role="tab">${ic("play")}Pasang</button><button type="button" data-sw="hapus" role="tab">${ic("trash")}Hapus</button></div></div>
+      <div class="cb">
+        <div data-pane="pasang">
+          <p class="help" style="margin:0 0 10px">Memasang koneksi ke VPS, IP virtual (NETMAP), dan izin firewall. Aman dijalankan ulang: pengaturan lama dengan nama panel yang sama dihapus dulu.</p>
+          <div class="codebox"><pre class="code">${esc(x.script)}</pre><button class="btn sm" data-copy="${esc(x.script)}" data-msg="Script tersalin. Tempel di Winbox → New Terminal">${ic("copy")}Salin</button></div>
+        </div>
+        <div data-pane="hapus" class="hidden">
+          <div class="note warn" style="margin:0 0 10px">${ic("alert")}<div><b>Menghapus semua pengaturan panel dari MikroTik</b>Koneksi ke VPS, IP virtual, dan aturan firewall bertanda nama panel akan dihapus. Router lain dan pengaturan MikroTik Anda sendiri tidak tersentuh.</div></div>
+          <div class="codebox"><pre class="code">${esc(x.removeScript)}</pre><button class="btn sm" data-copy="${esc(x.removeScript)}" data-msg="Script hapus tersalin">${ic("copy")}Salin</button></div>
+        </div>
+      </div></div>`;
+  b.querySelectorAll(".sw [data-sw]").forEach((btn) => (btn.onclick = () => {
+    b.querySelectorAll(".sw [data-sw]").forEach((y) => { const on = y === btn; y.classList.toggle("on", on); y.classList.toggle("danger", on && y.dataset.sw === "hapus"); });
+    b.querySelectorAll("[data-pane]").forEach((pn) => pn.classList.toggle("hidden", pn.dataset.pane !== btn.dataset.sw));
+  }));
 }
 
 /* ---------- Riwayat koneksi ---------- */

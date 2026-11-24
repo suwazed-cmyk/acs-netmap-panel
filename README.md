@@ -368,7 +368,7 @@ Pilihan menu:
 Atau langsung: `bash bersihkan.sh portforward|panel|genieacs|parameter|semua`. Setiap pilihan meminta konfirmasi (ketik `YA`) dan membackup data penting ke `/root` dulu. Server VPN (xl2tpd/IPsec), GenieACS, MongoDB, dan data ONT tidak dihapus.
 
 ### Di setiap MikroTik
-Script hapus yang tepat ada di panel: buka router → tab **Script MikroTik** → **Script untuk menghapus dari MikroTik**. Script itu sudah memakai nama panel Anda dan nama-nama lama.
+Script hapus yang tepat ada di panel: buka router → tab **Script MikroTik** → pilih **Hapus**. Script itu sudah memakai nama panel Anda dan nama-nama lama.
 
 Contoh jika nama panel `VPN ACS` (ganti dengan nama panel Anda):
 ```
