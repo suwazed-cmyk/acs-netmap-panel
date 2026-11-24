@@ -200,8 +200,9 @@ if [ -f "$GENIE_ENV" ] || svc_exists genieacs-cwmp; then
   if [ "${#JWT}" -ge 32 ]; then ok "JWT secret GenieACS sudah diganti"
   else warn "JWT secret GenieACS masih bawaan" "README langkah 4: Perbaikan keamanan"; fi
   CIDR="$(grep -oP '^GENIEACS_CR_USE_REMOTE_ADDRESS=\K.*' "$GENIE_ENV" 2>/dev/null)"
-  EXE="$(grep -oP '^ExecStart=\K\S+' /etc/systemd/system/genieacs-cwmp.service 2>/dev/null)"
-  if [ -n "$CIDR" ] && echo "$EXE" | grep -q "^$GENIE_PATCH_DIR"; then ok "Patch IP virtual aktif ($CIDR)"
+  # ExecStart bisa berupa "/usr/bin/node /opt/genieacs-app/bin/genieacs-cwmp": cek seluruh baris
+  EXE="$(grep '^ExecStart=' /etc/systemd/system/genieacs-cwmp.service 2>/dev/null)"
+  if [ -n "$CIDR" ] && echo "$EXE" | grep -q "$GENIE_PATCH_DIR/"; then ok "Patch IP virtual aktif ($CIDR)"
   elif [ -n "$CIDR" ]; then bad "Setting IP virtual ada, tapi GenieACS belum memakai versi patch" "bash genieacs-virtualip.sh"
   else bad "Patch IP virtual belum aktif (Summon ke ONT akan gagal)" "bash genieacs-virtualip.sh"; fi
 else
