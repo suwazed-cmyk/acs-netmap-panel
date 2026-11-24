@@ -20,6 +20,7 @@ ONT ─ OLT ─ MikroTik router ═══ VPN L2TP ═══ VPS (GenieACS + Pan
 | `install-vpn-acs.sh` | Installer Panel VPN ACS (sudah berisi seluruh panel) |
 | `genieacs-virtualip.sh` | Patch IP virtual untuk GenieACS v1.2.13 |
 | `ringkasan.sh` | Menampilkan ringkasan semua layanan: alamat web, port, status, dan port firewall |
+| `cek.sh` | Tes semua layanan yang terpasang: service, port, web menjawab, patch, sertifikat, DNS |
 | `bersihkan.sh` | Menghapus aturan/pengaturan yang dipasang repo ini dari VPS |
 | `pasang-ztnet.sh` | Memasang ZTNET + ZeroTier controller tanpa Docker, web di port 3300 (opsional) |
 | `panel/server.js`, `panel/public/index.html` | Kode sumber panel (untuk dibaca/diubah) |
@@ -110,6 +111,12 @@ bash install-vpn-acs.sh
 Saat ditanya password admin, cukup tekan **Enter** untuk memakai password bawaan **`Admin123`**, atau ketik password sendiri (minimal 8 karakter).
 
 Di akhir instalasi muncul **ringkasan**: alamat web panel, GenieACS, ZTNET (jika ada), URL ACS untuk ONT, status layanan, dan port yang harus dibuka di firewall. Ringkasan yang sama muncul setelah `genieacs-virtualip.sh` dan `pasang-ztnet.sh`, dan bisa ditampilkan kapan saja dengan `bash ringkasan.sh`.
+
+Untuk memastikan semuanya benar-benar berjalan, jalankan tes:
+```bash
+bash cek.sh
+```
+Setiap pemeriksaan diberi tanda **[OK]**, **[PERINGATAN]**, atau **[GAGAL]**, dan baris yang gagal disertai perintah untuk memperbaikinya. Komponen yang belum dipasang (misalnya ZeroTier) dilewati, jadi tes ini bisa dijalankan setelah langkah mana pun.
 
 Buka `http://IP_VPS:8088` lalu login. Jika masih memakai `Admin123`, dashboard menampilkan peringatan sampai password diganti di **Pengaturan → Umum → Password admin**.
 
@@ -212,6 +219,7 @@ Jika GenieACS di-update, jalankan ulang `bash genieacs-virtualip.sh`.
 ## Perintah berguna
 ```bash
 bash ringkasan.sh                    # ringkasan alamat web, port, dan status semua layanan
+bash cek.sh                          # tes apakah semua layanan benar-benar berjalan
 bash install-vpn-acs.sh password     # ganti/reset password admin panel (Enter = Admin123)
 bash install-vpn-acs.sh uninstall    # hapus panel (akun VPN tetap)
 bash genieacs-virtualip.sh rollback  # kembali ke GenieACS asli

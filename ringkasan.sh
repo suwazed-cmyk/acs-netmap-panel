@@ -195,5 +195,6 @@ fi
 
 echo
 echo -e "${DIM}Tampilkan ringkasan ini kapan saja: bash ${REPO_DIR}/ringkasan.sh${NC}"
+echo -e "${DIM}Tes apakah semua layanan benar-benar berjalan: bash ${REPO_DIR}/cek.sh${NC}"
 echo -e "${BOLD}=====================================================================${NC}"
 echo
