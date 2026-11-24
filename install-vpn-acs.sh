@@ -184,7 +184,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "1.8.3";
+const VERSION = "1.8.4";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -3612,7 +3612,7 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .menu-list button.d svg{color:var(--bad)}
 
   /* Dialog */
-  .modal.sm{max-width:440px}.modal.lg{max-width:680px}
+  .modal.sm{max-width:440px}.modal.md{max-width:640px}.modal.lg{max-width:680px}
   .dlg-b{display:flex;gap:16px;padding:24px 24px 6px}
   .dlg-b h2{font-size:16.5px;font-weight:650;margin-bottom:4px}
   .dlg-t{color:var(--text-2);font-size:14px}
@@ -3890,14 +3890,17 @@ function busyBtn(btn, on) {
   else { btn.disabled = false; if (btn.dataset.html) btn.innerHTML = btn.dataset.html; }
 }
 // Dialog konfirmasi: tombol OK menjalankan onOk; galat ditampilkan di dalam dialog
-function confirmDialog({ title, text, ok = "Lanjutkan", danger = false, icon, onOk }) {
+function confirmDialog({ title, text, ok = "Lanjutkan", danger = false, icon, onOk, check, wide }) {
   const kind = danger ? "bad" : "info";
-  $("#modalRoot").innerHTML = `<div class="mbg" id="mbg"><div class="modal dlg sm" role="alertdialog" aria-modal="true">
+  $("#modalRoot").innerHTML = `<div class="mbg" id="mbg"><div class="modal dlg ${wide ? "md" : "sm"}" role="alertdialog" aria-modal="true">
     <div class="dlg-b"><span class="dlg-ic ${kind}">${ic(icon || (danger ? "trash" : "info"))}</span>
-      <div style="flex:1;min-width:0"><h2>${title}</h2><div class="dlg-t">${text}</div><div class="err" id="dlgErr"></div></div></div>
-    <div class="mf"><button class="btn" data-act="closemodal">Batal</button><button class="btn ${danger ? "dangerf" : "pri"}" id="dlgOk">${ok}</button></div></div></div>`;
+      <div style="flex:1;min-width:0"><h2>${title}</h2><div class="dlg-t">${text}</div>
+        ${check ? `<label class="chk" style="display:flex;gap:10px;align-items:flex-start;margin:14px 0 0;font-weight:500;cursor:pointer"><input type="checkbox" id="dlgChk" style="margin-top:3px;width:16px;height:16px;flex:none"><span>${check}</span></label>` : ""}
+        <div class="err" id="dlgErr"></div></div></div>
+    <div class="mf"><button class="btn" data-act="closemodal">Batal</button><button class="btn ${danger ? "dangerf" : "pri"}" id="dlgOk" ${check ? "disabled" : ""}>${ok}</button></div></div></div>`;
   $("#mbg").addEventListener("mousedown", (e) => { if (e.target.id === "mbg") closeModal(); });
-  const btn = $("#dlgOk"); btn.focus();
+  const btn = $("#dlgOk");
+  if (check) { $("#dlgChk").onchange = () => { btn.disabled = !$("#dlgChk").checked; }; $("#dlgChk").focus(); } else btn.focus();
   btn.onclick = async () => {
     $("#dlgErr").textContent = ""; busyBtn(btn, true);
     try { await onOk(); } catch (e) { if ($("#dlgErr")) { $("#dlgErr").textContent = e.message; busyBtn(btn, false); } }
@@ -4502,9 +4505,11 @@ function openResetPw(id) {
 function openDelete(id) {
   const x = site(id);
   confirmDialog({
-    title: `Hapus ${esc(x.name)}?`, danger: true, ok: "Hapus router",
-    text: `<p>Akun VPN dan port forwarding router ini dihapus. GenieACS tidak bisa lagi Summon ONT di router ini.</p>
-      <details class="more"><summary>Script untuk membersihkan MikroTik</summary><div class="codebox"><pre class="code" style="max-height:160px">${esc(x.removeScript)}</pre><button class="btn sm" data-copy="${esc(x.removeScript)}" data-msg="Script hapus tersalin">${ic("copy")}Salin</button></div></details>`,
+    title: `Hapus ${esc(x.name)}?`, danger: true, ok: "Hapus router", wide: true,
+    text: `<p>${x.transport === "zt" ? "Router ini dikeluarkan dari jaringan ZeroTier panel" : "Akun VPN router ini dihapus"}, beserta port forwarding-nya. GenieACS tidak bisa lagi Summon ONT di router ini.</p>
+      ${x.state === "pending" ? "" : `<div class="note warn" style="margin:12px 0 10px">${ic("alert")}<div><b>Bersihkan MikroTik ${esc(x.name)} dulu</b>Aturan dari panel (${x.transport === "zt" ? "interface zt-acs" : "interface l2tp-acs"}, route, NETMAP, dan firewall) tetap tertinggal di MikroTik kalau tidak dihapus. Salin script di bawah, tempel di Winbox → New Terminal, lalu hapus router di panel.</div></div>`}
+      <div class="codebox"><pre class="code" style="max-height:200px;padding-top:46px">${esc(x.removeScript)}</pre><button class="btn sm" data-copy="${esc(x.removeScript)}" data-msg="Script hapus tersalin. Tempel di Winbox → New Terminal">${ic("copy")}Salin</button></div>`,
+    check: x.state === "pending" ? "" : "Script hapus sudah saya jalankan di MikroTik, atau MikroTik ini sudah tidak dipakai.",
     onOk: async () => {
       await api("/api/sites/" + id, { method: "DELETE" }); await load();
       location.hash = "#/router";
