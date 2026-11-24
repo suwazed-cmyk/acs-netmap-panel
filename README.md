@@ -1,17 +1,28 @@
-# Suwazed Panel: GenieACS + VPN L2TP MikroTik
+# Suwazed Panel: GenieACS + VPN MikroTik
 
-Paket untuk menjalankan **GenieACS di VPS** yang bisa memberi perintah (Summon) ke ONT di banyak router MikroTik, walaupun semua router memakai **subnet lokal yang sama**.
+Paket untuk menjalankan **GenieACS di VPS** yang bisa mengelola dan memberi perintah (Summon) ke ONT di **banyak router MikroTik**, walaupun semua router memakai **subnet lokal yang sama** (misalnya semua `10.0.0.0/24`).
 
-- **VPN L2TP** dari setiap MikroTik ke VPS (tanpa IPsec, atau dengan IPsec jika diinginkan)
-- **IP virtual (NETMAP)** per router: ONT `10.0.0.25` di router A terlihat di GenieACS sebagai `10.100.1.25`
+```
+ONT ─ OLT ─ MikroTik router A ═══ VPN L2TP / ZeroTier ═══╗
+ONT ─ OLT ─ MikroTik router B ═══ VPN L2TP / ZeroTier ═══╬══ VPS (GenieACS + Panel)
+ONT ─ OLT ─ MikroTik router C ═══ VPN L2TP / ZeroTier ═══╝        ▲
+                                                Remote Winbox: IP_VPS:20001
+```
+
+## Fitur
+
+- **VPN L2TP** dari setiap MikroTik ke VPS, atau **ZeroTier** untuk router RouterOS v7 ARM/ARM64
+- **IP virtual (NETMAP)** per router: ONT `10.0.0.25` di router A terlihat di GenieACS sebagai `10.100.1.25`, di router B sebagai `10.100.2.25`
 - **Patch GenieACS** agar Summon memakai IP virtual
-- **Panel web** untuk membuat akun VPN, script MikroTik siap salin, tes koneksi, dan **port forwarding** (remote Winbox/web ONT lewat IP publik VPS)
-
-```
-ONT ─ OLT ─ MikroTik router ═══ VPN L2TP ═══ VPS (GenieACS + Panel)
-                                               ▲
-                     Remote Winbox: IP_VPS:20001
-```
+- **Panel web**:
+  - Akun VPN dan **script MikroTik siap salin**, mengikuti nama panel Anda
+  - **Tes koneksi** bertahap, status **tersambung/terputus**, dan **riwayat uptime** 24 jam / 7 hari / 30 hari
+  - **Port forwarding** untuk remote Winbox / WebFig / web ONT lewat IP publik VPS
+  - Halaman **GenieACS** (status layanan, patch, jumlah ONT per router) dan **ZeroTier** (anggota jaringan)
+  - **Notifikasi Telegram** saat VPN putus, dikirim ke grup bertopik
+  - **Domain Cloudflare + HTTPS** otomatis, termasuk subdomain untuk GenieACS dan ZTNET
+  - **Log aktivitas** dan **nama panel** yang bisa diganti
+- Script bantu: **`ringkasan.sh`** (alamat web dan port) dan **`cek.sh`** (tes semua layanan)
 
 ## Isi repo
 
@@ -19,13 +30,13 @@ ONT ─ OLT ─ MikroTik router ═══ VPN L2TP ═══ VPS (GenieACS + Pan
 |---|---|
 | `install-vpn-acs.sh` | Installer Panel VPN ACS (sudah berisi seluruh panel) |
 | `genieacs-virtualip.sh` | Patch IP virtual untuk GenieACS v1.2.13 |
-| `ringkasan.sh` | Menampilkan ringkasan semua layanan: alamat web, port, status, dan port firewall |
-| `cek.sh` | Tes semua layanan yang terpasang: service, port, web menjawab, patch, sertifikat, DNS |
-| `bersihkan.sh` | Menghapus aturan/pengaturan yang dipasang repo ini dari VPS |
-| `pasang-ztnet.sh` | Memasang ZTNET + ZeroTier controller tanpa Docker, web di port 3300 (opsional) |
+| `pasang-ztnet.sh` | Memasang ZeroTier + ZTNET tanpa Docker, web di port 3300 (opsional) |
+| `ringkasan.sh` | Ringkasan semua layanan: alamat web, port, status, port firewall |
+| `cek.sh` | Tes semua layanan: service, port, web menjawab, patch, sertifikat, DNS |
+| `bersihkan.sh` | Menghapus pengaturan yang dipasang repo ini dari VPS |
 | `panel/server.js`, `panel/public/index.html` | Kode sumber panel (untuk dibaca/diubah) |
 
-## Rekomendasi VPS
+## Yang dibutuhkan
 
 | | Minimal | Disarankan |
 |---|---|---|
@@ -37,9 +48,22 @@ ONT ─ OLT ─ MikroTik router ═══ VPN L2TP ═══ VPS (GenieACS + Pan
 
 Jangan pakai Ubuntu 24.04: MongoDB 4.4 dari `genie.sh` kemungkinan gagal terpasang.
 
+Selain VPS: MikroTik (RouterOS v6 atau v7) dengan akses Winbox, dan ONT yang mendukung TR-069.
+
+## Gambaran pemasangan
+
+| Tahap | Langkah | Hasil |
+|---|---|---|
+| **A. Siapkan VPS** | 1–2 | VPS siap, repo terunduh |
+| **B. Pasang layanan** | 3–7 | L2TP, GenieACS, patch IP virtual, panel berjalan, port terbuka |
+| **C. Hubungkan router** | 8–11 | Router tersambung, ONT muncul di GenieACS, Summon berhasil |
+| **D. Fitur opsional** | — | Telegram, domain + HTTPS, ZeroTier (bisa kapan saja, tidak wajib) |
+
+Setelah setiap langkah, Anda bisa menjalankan `bash ringkasan.sh` (alamat web dan port) atau `bash cek.sh` (tes apakah semuanya berjalan).
+
 ---
 
-## Instalasi
+## Instalasi inti
 
 ### 1. Persiapan VPS
 ```bash
@@ -56,6 +80,7 @@ systemd-detect-virt
 lsb_release -a
 uname -r
 ```
+Ganti `Asia/Makassar` dengan zona waktu Anda (`Asia/Jakarta` untuk WIB, `Asia/Jayapura` untuk WIT).
 
 ### 2. Ambil repo ini
 ```bash
@@ -70,6 +95,7 @@ wget -O /root/vpnsetup.sh https://raw.githubusercontent.com/beryindo/genieacs/re
 bash /root/vpnsetup.sh
 systemctl status xl2tpd --no-pager | head -5
 ```
+Status harus `active (running)`.
 
 ### 4. GenieACS
 `genie.sh` mengunduh `libssl1.1` dari `ftp.debian.org`, yang sering macet. Baris `sed` di bawah mengganti sumbernya ke server Ubuntu:
@@ -80,7 +106,8 @@ grep -n "libssl" /root/genie.sh
 bash /root/genie.sh
 ```
 Ketik `y` saat ditanya. Cek: `systemctl status mongod genieacs-cwmp genieacs-ui --no-pager | grep -E "●|Active"`
-Perbaikan keamanan (wajib):
+
+**Perbaikan keamanan (wajib):** ganti kunci login GenieACS UI dan tutup NBI dari internet.
 ```bash
 sed -i "s/^GENIEACS_UI_JWT_SECRET=.*/GENIEACS_UI_JWT_SECRET=$(openssl rand -hex 32)/" /opt/genieacs/genieacs.env
 grep -q '^GENIEACS_NBI_INTERFACE=' /opt/genieacs/genieacs.env \
@@ -90,121 +117,196 @@ systemctl restart genieacs-cwmp genieacs-nbi genieacs-fs genieacs-ui
 ```
 
 ### 5. Patch IP virtual GenieACS
-Jika IP virtual memakai pilihan otomatis panel (10.100.x.x):
+Jika IP virtual memakai pilihan otomatis panel (`10.100.x.x`):
 ```bash
 cd /root/suwazed-panel
 bash genieacs-virtualip.sh
 ```
-Jika juga memakai IP virtual sendiri (misalnya skema ZeroTier `10.20.x.x`):
+Jika juga memakai IP virtual sendiri (misalnya `10.20.x.x`), tambahkan rentangnya dulu:
 ```bash
 cd /root/suwazed-panel
 sed -i 's#^VIRTUAL_CIDR=.*#VIRTUAL_CIDR="10.100.0.0/14,10.20.0.0/16"#' genieacs-virtualip.sh
 bash genieacs-virtualip.sh
 ```
-Cek: `bash genieacs-virtualip.sh status`
+Di akhir muncul ringkasan. Cek patch: `bash genieacs-virtualip.sh status`
 
 ### 6. Panel VPN ACS
 ```bash
 cd /root/suwazed-panel
 bash install-vpn-acs.sh
 ```
-Saat ditanya password admin, cukup tekan **Enter** untuk memakai password bawaan **`Admin123`**, atau ketik password sendiri (minimal 8 karakter).
+Saat ditanya password admin, tekan **Enter** untuk memakai password bawaan **`Admin123`**, atau ketik password sendiri (minimal 8 karakter).
 
-Di akhir instalasi muncul **ringkasan**: alamat web panel, GenieACS, ZTNET (jika ada), URL ACS untuk ONT, status layanan, dan port yang harus dibuka di firewall. Ringkasan yang sama muncul setelah `genieacs-virtualip.sh` dan `pasang-ztnet.sh`, dan bisa ditampilkan kapan saja dengan `bash ringkasan.sh`.
-
-Untuk memastikan semuanya benar-benar berjalan, jalankan tes:
-```bash
-bash cek.sh
-```
-Setiap pemeriksaan diberi tanda **[OK]**, **[PERINGATAN]**, atau **[GAGAL]**, dan baris yang gagal disertai perintah untuk memperbaikinya. Komponen yang belum dipasang (misalnya ZeroTier) dilewati, jadi tes ini bisa dijalankan setelah langkah mana pun.
-
-Buka `http://IP_VPS:8088` lalu login. Jika masih memakai `Admin123`, dashboard menampilkan peringatan sampai password diganti di **Pengaturan → Umum → Password admin**.
+Di akhir instalasi muncul **ringkasan**: alamat web panel dan GenieACS, URL ACS untuk ONT, status layanan, dan port yang harus dibuka.
 
 ### 7. Firewall provider
-Jangan menyalakan `ufw` (bentrok dengan aturan VPN). Buka di firewall provider jika ada:
+Jangan menyalakan `ufw` karena bentrok dengan aturan VPN. Buka port berikut di firewall provider VPS (jika ada):
 
 | Port | Protokol | Untuk |
 |---|---|---|
 | 22 | TCP | SSH |
-| 1701 | UDP | L2TP |
-| 3000 | TCP | Web GenieACS |
+| 1701 | UDP | VPN L2TP |
 | 8088 | TCP | Panel VPN ACS |
-| 20001-20999 | TCP | Port forwarding / remote MikroTik |
-| 3300 | TCP | Web ZTNET (jika memakai ZeroTier) |
-| 9993 | UDP | ZeroTier (jika memakai ZeroTier) |
+| 3000 | TCP | Web GenieACS |
+| 20001-20999 | TCP | Port forwarding (remote Winbox / web ONT) |
 | 500, 4500 | UDP | Hanya jika IPsec dinyalakan |
+| 3300 | TCP | Web ZTNET, hanya jika memakai ZeroTier |
+| 9993 | UDP | ZeroTier, hanya jika memakai ZeroTier |
 
-Port 7547 dan 7557 **tidak perlu** dibuka ke publik. HTTPS panel memakai port yang sama (8088) dan tidak butuh port 80/443. VPS hanya perlu bisa keluar ke internet (Telegram, Cloudflare, Let's Encrypt).
+Port 7547 dan 7557 **tidak perlu** dibuka: ONT menghubungi GenieACS lewat VPN. HTTPS panel memakai port 8088 yang sama dan tidak butuh port 80/443.
 
-### 8. Atur panel (sekali di awal)
-Menu **Pengaturan**:
-1. **Nama panel** (opsional): misalnya `INET WIFI`. Dipakai di judul panel dan sebagai komentar aturan di script MikroTik (`INET WIFI - ONT ke IP virtual`). Bisa diganti kapan saja; script baru otomatis membersihkan aturan dengan nama lama.
-1. **Alamat VPS**: IP publik atau domain VPS → Simpan
-2. **Pakai IPsec**: biarkan mati (L2TP biasa)
-3. **Jaringan VPN (L2TP)**: tentukan **sekarang** (default `192.168.42.0/24`). Mengganti belakangan berarti URL ACS di semua ONT ikut berubah.
-4. Menu **GenieACS**: **Patch IP virtual** harus berstatus **Aktif** dan keempat layanan **Berjalan**. Di halaman ini juga terlihat **jumlah ONT per router** (berapa yang melapor dalam 1 jam terakhir) dan isian **Alamat GenieACS UI** (opsional, kosong = otomatis `http://alamat-VPS:3000`).
+Sekarang tes semua layanan:
+```bash
+bash cek.sh
+```
+Setiap pemeriksaan diberi tanda **[OK]**, **[PERINGATAN]**, atau **[GAGAL]**. Baris yang gagal disertai perintah untuk memperbaikinya. Komponen yang belum dipasang ditandai **[LEWATI]**.
 
-### 8b. Notifikasi Telegram (opsional)
+### 8. Atur panel dan GenieACS (sekali di awal)
+Buka `http://IP_VPS:8088` lalu login.
+
+Menu **Pengaturan → Umum**:
+1. **Nama panel** (opsional), misalnya `INET WIFI`. Dipakai di judul panel dan sebagai komentar aturan di MikroTik (`INET WIFI - ONT ke IP virtual`). Bisa diganti kapan saja; script baru otomatis membersihkan aturan dengan nama lama.
+2. **Alamat VPS**: IP publik VPS (atau domain). Alamat ini dipakai di script MikroTik.
+3. **Pakai IPsec**: biarkan mati (L2TP biasa), kecuali Anda memang butuh.
+4. **Jaringan VPN (L2TP)**: tentukan **sekarang** (bawaan `192.168.42.0/24`). Mengganti belakangan berarti URL ACS di semua ONT ikut berubah.
+5. **Password admin**: ganti jika masih `Admin123`. Selama belum diganti, dashboard menampilkan peringatan.
+
+Menu **GenieACS**: pastikan **Patch IP virtual** berstatus **Aktif** dan keempat layanan **Berjalan**.
+
+Buka **GenieACS UI** di `http://IP_VPS:3000`. Jika muncul *initialization wizard*, buat akun admin dan centang **Users saja** agar konfigurasi dari repo beryindo tidak tertimpa.
+
+### 9. Tambah router
+Panel → **Tambah router**:
+1. **Jalur ke VPS**: pilih **L2TP** (semua MikroTik). Jalur **ZeroTier** dibahas di [Fitur opsional C](#c-router-lewat-zerotier).
+2. **Nama router**, misalnya `Nangahale`.
+3. **Subnet ONT di MikroTik**: lihat di Winbox → IP → DHCP Server → Networks, misalnya `10.0.0.0/24`.
+4. **IP virtual**: kosongkan agar dipilih otomatis (`10.100.x.0/24`), atau isi sendiri. Tidak boleh sama dengan router lain.
+5. **Simpan**.
+
+Lalu buka tab **Script MikroTik** → **Salin** → di Winbox buka **New Terminal** → klik kanan **Paste** → Enter. Script aman dijalankan ulang.
+
+Status router berubah dari **Menunggu pemasangan** menjadi **Tersambung** dalam 1 menit. Klik **Tes koneksi**: hasilnya tampil bertahap di popup, dan langkah yang gagal disertai saran perbaikan.
+
+### 10. Atur ONT
+Di setiap ONT (lewat web ONT atau OLT):
+- **URL ACS**: `http://192.168.42.1:7547`. Alamat `.1` mengikuti Jaringan VPN yang dipilih di langkah 8; lihat juga di dashboard → kartu VPS.
+- **Periodic Inform**: aktif, 300 detik
+- **ACS username/password**: kosong
+
+URL ini sama untuk semua router, baik lewat L2TP maupun ZeroTier.
+
+### 11. Uji akhir
+1. ONT muncul di **GenieACS UI → Devices** (tunggu sampai 5 menit).
+2. Parameter `ConnectionRequestURL` ONT berisi **IP virtual** (`10.100.x.x`), bukan IP asli.
+3. Klik **Summon** di GenieACS: harus berhasil.
+4. Menu **GenieACS** di panel menampilkan jumlah ONT per router.
+5. `bash cek.sh` tidak ada yang **GAGAL**.
+
+Selesai. Fitur di bawah ini opsional.
+
+---
+
+## Fitur opsional
+
+### A. Notifikasi Telegram
 Menu **Pengaturan → Notifikasi Telegram**:
 1. Buat bot lewat **@BotFather** (`/newbot`) dan salin token-nya.
 2. Buat grup Telegram → aktifkan **Topik (Topics)** → buat topik, misalnya `🔴 VPN`.
-3. Masukkan bot ke grup dan jadikan **admin**, lalu kirim pesan apa saja di topik tujuan.
-4. Di panel: tempel token → **Deteksi grup & topik**. Jika bot pernah dipakai aplikasi lain (webhook), panel menawarkan **Hapus webhook** (atau klik tombolnya) → → pilih grup dan topik → atur jeda → **Kirim pesan tes** → **Simpan**.
+3. Masukkan bot ke grup, jadikan **admin**, lalu kirim pesan apa saja di topik tujuan.
+4. Di panel: tempel token → **Deteksi grup & topik**. Jika bot pernah dipakai aplikasi lain, panel menawarkan **Hapus webhook**.
+5. Pilih grup dan topik → atur jeda → **Kirim pesan tes** → **Simpan**.
 
 Aturan pengiriman:
 - Hanya dikirim saat status **berubah**. Putus yang lebih singkat dari **jeda** (bawaan 3 menit) tidak dilaporkan.
 - Banyak router putus bersamaan digabung jadi **satu pesan**.
 - Opsional: pesan **tersambung lagi** (beserta lama putus), **pengingat** jika masih putus, dan **jam tenang** (pesan tanpa bunyi).
-- Router berstatus **Menunggu pemasangan** (belum pernah tersambung) tidak dikirim notifikasi.
+- Router berstatus **Menunggu pemasangan** tidak dikirim notifikasi.
 
-### 8c. Domain Cloudflare + HTTPS (opsional)
-Menu **Pengaturan → Domain & HTTPS**. Isi domain (misalnya `vpn.domainanda.com`) dan **API Token** Cloudflare: template **Edit zone DNS**, lalu **tambahkan izin Zone → Zone → Read**, dan batasi ke domain Anda. Jangan pakai Global API Key.
+### B. Domain Cloudflare + HTTPS
+Menu **Pengaturan → Domain & HTTPS**. Isi domain (misalnya `vpn.domainanda.com`) dan **API Token** Cloudflare:
+1. Cloudflare → My Profile → API Tokens → **Create Token** → template **Edit zone DNS**.
+2. **Tambahkan izin Zone → Zone → Read** (tanpa ini pencarian domain gagal).
+3. Batasi ke domain Anda. Jangan pakai Global API Key.
 
-Panel memeriksa token → domain → izin DNS → IP VPS → membuat record A (**DNS only**) → memastikan domain sudah mengarah ke VPS → (opsional) menerbitkan sertifikat **Let's Encrypt** → menerapkan. **Jika satu langkah gagal, semua dibatalkan** dan pengaturan tetap seperti semula.
+Panel memeriksa token → domain → izin DNS → IP VPS → membuat record A (**DNS only**) → memastikan domain mengarah ke VPS → (opsional) menerbitkan sertifikat **Let's Encrypt** → menerapkan. **Jika satu langkah gagal, semua dibatalkan** dan pengaturan tetap seperti semula.
 
 Setelah berhasil:
-- Alamat VPS di script MikroTik otomatis memakai domain. MikroTik lama tidak wajib diubah karena domain dan IP mengarah ke router yang sama.
+- Alamat VPS di script MikroTik otomatis memakai domain. MikroTik lama tidak wajib diubah karena domain dan IP sama-sama mengarah ke VPS.
 - Jika HTTPS dipilih, panel dibuka lewat `https://domain:8088`, dan alamat http/IP dialihkan otomatis. Sertifikat diperpanjang otomatis oleh certbot.
 - Record harus **DNS only** (awan abu-abu). Proxy Cloudflare (awan oranye) tidak bisa meneruskan L2TP dan Winbox; panel mengaturnya otomatis.
 
-**Subdomain layanan:** setelah domain terhubung, bagian **Subdomain layanan** di halaman yang sama membuat record DNS otomatis untuk **GenieACS** (bawaan `acs`, misalnya `http://acs.inetwifi.xyz:3000`) dan **ZTNET** (bawaan `zt`, misalnya `http://zt.inetwifi.xyz:3300`). Link di dashboard dan alamat login ZTNET ikut diperbarui. Namanya bisa diganti kapan saja; record lama buatan panel dihapus otomatis. Pakai subdomain ini untuk GenieACS dan ZTNET, jangan domain panel, karena domain panel ber-HTTPS membuat browser memaksa https di port lain.
+**Subdomain layanan:** di halaman yang sama, bagian **Subdomain layanan** membuat record DNS otomatis untuk **GenieACS** (bawaan `acs`, misalnya `http://acs.domainanda.com:3000`) dan **ZTNET** (bawaan `zt`, misalnya `http://zt.domainanda.com:3300`). Link di panel ikut diperbarui, dan namanya bisa diganti kapan saja. Pakai subdomain ini untuk GenieACS dan ZTNET, **jangan domain panel**: domain panel yang ber-HTTPS membuat browser memaksa https di port lain.
 
-### 8d. Router lewat ZeroTier (opsional)
-Router **ARM/ARM64 dengan RouterOS v7** (paket `zerotier`) bisa tersambung ke VPS lewat ZeroTier, bukan L2TP. Router MIPS (hAP lite, hEX, RB951) tetap memakai L2TP. Keduanya bisa dipakai bersamaan.
+### C. Router lewat ZeroTier
+Router **ARM/ARM64 dengan RouterOS v7** bisa tersambung ke VPS lewat ZeroTier, bukan L2TP. Router MIPS (hAP lite, hEX, RB951) tetap memakai L2TP. Kedua jalur bisa dipakai bersamaan.
 
-1. Pasang ZTNET (web pengelola ZeroTier, port **3300**, tanpa Docker):
+**Di VPS:**
+1. Jika memakai domain, buat dulu subdomain `zt` di [Fitur opsional B](#b-domain-cloudflare--https) agar alamat ZTNET langsung benar.
+2. Pasang ZeroTier + ZTNET (web pengelola ZeroTier, port **3300**, tanpa Docker):
    ```bash
    cd /root/suwazed-panel
    bash pasang-ztnet.sh
    ```
-   Script ini memeriksa Node.js dan RAM (menawarkan swap 2 GB bila perlu), memindahkan port ZTNET ke 3300 agar tidak bentrok dengan GenieACS (3000), lalu menjalankan installer resmi ZTNET. Saat ditanya alamat, isi subdomain sendiri, misalnya `zt.inetwifi.xyz`. Saat ditanya kirim laporan error, jawab `No`.
-2. Buka `http://zt.domain-anda:3300` dan **segera daftar** (akun pertama menjadi admin). Buat jaringan di **Networks → Create Network**, lalu atur rentang IPv4, misalnya `172.27.0.0/24`. Rentang ini tidak boleh bentrok dengan `192.168.42.0/24`, `10.100.0.0/14`, subnet ONT, atau `172.17.0.0/16`.
-3. Panel → menu **ZeroTier** → pilih jaringan → **Hubungkan VPS**. Halaman ini juga menampilkan semua anggota jaringan (VPS, router, perangkat lain) beserta statusnya.
-4. **Tambah router** → jalur **ZeroTier** → pasang script di MikroTik → tab **Ringkasan** → **Pilih router yang bergabung**. Panel otomatis menyetujui router, memberi IP ZeroTier, dan memasang route ke IP virtual.
+   Script ini memeriksa Node.js dan RAM (menawarkan swap 2 GB bila perlu), memindahkan port ZTNET ke 3300 agar tidak bentrok dengan GenieACS (3000), lalu menjalankan installer resmi ZTNET. Saat ditanya alamat, isi subdomain Anda, misalnya `zt.domainanda.com`. Saat ditanya kirim laporan error, jawab `No`.
+3. Buka web ZTNET (alamatnya ada di ringkasan) dan **segera daftar**: akun pertama menjadi admin.
+4. Di ZTNET: **Networks → Create Network**, lalu atur rentang IPv4, misalnya `172.27.0.0/24`. Rentang ini tidak boleh bentrok dengan `192.168.42.0/24`, `10.100.0.0/14`, subnet ONT, atau `172.17.0.0/16`.
+5. Panel → menu **ZeroTier** → pilih jaringan → **Hubungkan VPS**. Halaman ini juga menampilkan semua anggota jaringan beserta statusnya.
+6. Buka UDP **9993** dan TCP **3300** di firewall provider.
 
-URL ACS di ONT tetap `http://192.168.42.1:7547`, baik lewat L2TP maupun ZeroTier. Status, riwayat uptime, notifikasi Telegram, tes koneksi, dan port forwarding berlaku untuk kedua jalur.
+**Di setiap MikroTik (sekali):** pasang paket ZeroTier.
+1. Cek versi dan arsitektur di Winbox → **System → Resources** (harus RouterOS **7.x** dan arsitektur **arm** atau **arm64**).
+2. Unduh **Extra packages** dengan versi dan arsitektur yang sama dari [mikrotik.com/download](https://mikrotik.com/download), lalu ekstrak.
+3. Seret file `zerotier-7.x-arm.npk` (atau `-arm64.npk`) ke Winbox → **Files**.
+4. **System → Reboot**. Setelah menyala, `zerotier` muncul di **System → Packages**.
 
-### 9. GenieACS UI
-Buka `http://IP_VPS:3000`. Jika muncul *initialization wizard*, buat akun admin dan centang **Users saja** agar config dari repo beryindo tidak tertimpa.
+**Tambah router:** panel → **Tambah router** → jalur **ZeroTier** → **Simpan** → tab **Script MikroTik** → tempel di New Terminal → tab **Ringkasan** → **Pilih router yang bergabung**. Panel otomatis menyetujui router, memberi IP ZeroTier, dan memasang route ke IP virtual.
 
-### 10. Tambah router
-Panel → **Tambah router** → isi nama, subnet ONT (lihat Winbox: IP → DHCP Server → Networks), IP virtual (opsional, tidak boleh sama dengan router lain) → **Simpan** → tab **Script MikroTik** → **Salin** → tempel di Winbox **New Terminal** → tunggu status **Tersambung** → klik **Tes koneksi** (hasilnya tampil bertahap di popup).
+URL ACS di ONT tetap `http://192.168.42.1:7547`. Status, riwayat, notifikasi Telegram, tes koneksi, dan port forwarding berlaku untuk kedua jalur.
 
-Remote: buka router → tab **Remote** → **Tambah** → pilih layanan. Untuk Winbox, pakai alamat `IP_VPS:20001` di *Connect To*. Untuk layanan web (WebFig, Web ONT), alamatnya bisa langsung diklik dan terbuka di tab baru.
+---
 
-Dashboard menampilkan ringkasan uptime setiap router (24 jam, 7 hari, 30 hari, dan grafik 30 hari). Klik barisnya untuk membuka riwayat lengkap.
+## Pemakaian sehari-hari
 
-Router baru berstatus **Menunggu pemasangan** sampai MikroTik tersambung pertama kali. Setelah itu tab **Riwayat** mencatat setiap putus (kapan dan berapa lama), uptime 24 jam / 7 hari / 30 hari, dan grafik 30 hari. Riwayat disimpan 90 hari.
+| Menu | Kegunaan |
+|---|---|
+| **Dashboard** | Jumlah router tersambung/terputus, uptime tiap router (24 jam, 7 hari, 30 hari), daftar **Perlu perhatian**, alamat GenieACS dan ZTNET |
+| **Router** | Daftar router. Detail router punya tab **Ringkasan**, **Port Forwarding**, **Script MikroTik**, dan **Riwayat** |
+| **GenieACS** | Status layanan, patch IP virtual, jumlah ONT per router, alamat GenieACS UI |
+| **ZeroTier** | Jaringan yang dipakai, anggota jaringan, alamat ZTNET |
+| **Pengaturan** | Umum (nama panel, VPS, jaringan VPN, password), Notifikasi Telegram, Domain & HTTPS |
+| **Panduan** | Ringkasan cara pakai, langsung di panel |
+| **Log aktivitas** | Semua perubahan di panel selama 90 hari (password dan token tidak dicatat) |
 
-Semua perubahan di panel (login, tambah/ubah/hapus router, remote, pengaturan, Cloudflare) tercatat di menu **Log aktivitas** selama 90 hari. Password dan token tidak ikut dicatat.
+**Remote router / ONT (port forwarding):** buka router → tab **Port Forwarding** → **Tambah** → pilih layanan (Winbox, WebFig, SSH, Web ONT, atau lainnya). Untuk Winbox, isi **Connect To** dengan `IP_VPS:20001` (port sesuai yang tampil). Layanan web bisa langsung diklik dan terbuka di tab baru. Port ini terbuka ke internet, jadi pastikan password perangkat kuat.
 
-### 11. ONT
-- URL ACS: `http://192.168.42.1:7547` (atau `.1` dari jaringan VPN yang dipilih, lihat menu Pengaturan)
-- Periodic Inform: aktif, 300 detik
-- ACS username/password: kosong
+**Riwayat:** tab **Riwayat** mencatat setiap putus (kapan dan berapa lama) serta grafik 30 hari, disimpan 90 hari. Router baru berstatus **Menunggu pemasangan** sampai MikroTik tersambung pertama kali.
 
-### 12. Uji
-ONT muncul di GenieACS → parameter `ConnectionRequestURL` berisi **IP virtual** → **Summon** berhasil.
+---
+
+## Kalau ada masalah
+
+Jalankan dulu `bash cek.sh`. Sebagian besar masalah langsung terlihat di sana.
+
+| Gejala | Kemungkinan penyebab | Solusi |
+|---|---|---|
+| Panel/GenieACS tidak bisa dibuka dari HP/PC | Port belum dibuka di firewall provider | Buka port di [langkah 7](#7-firewall-provider). Jika `cek.sh` OK, masalahnya di firewall provider |
+| Lupa password panel | — | `bash install-vpn-acs.sh password` lalu Enter (kembali ke `Admin123`) |
+| Router tetap **Menunggu pemasangan** / **Terputus** | UDP 1701 tertutup, Alamat VPS salah, atau script belum ditempel | Klik **Tes koneksi**. Di MikroTik cek **Interfaces → l2tp-acs** dan **Log** |
+| ONT tidak muncul di GenieACS | URL ACS salah, Periodic Inform mati, atau router belum tersambung | Cek [langkah 10](#10-atur-ont). Tes koneksi harus lolos langkah **Jaringan ONT** |
+| Summon gagal, `ConnectionRequestURL` berisi IP asli | Patch belum aktif, atau ONT belum Inform ulang setelah patch | `bash genieacs-virtualip.sh status`, tunggu Inform berikutnya (maks. 5 menit) |
+| Router diberi tanda "IP virtual di luar patch GenieACS" | IP virtual tidak masuk `VIRTUAL_CIDR` | Tambahkan rentangnya dan jalankan ulang [langkah 5](#5-patch-ip-virtual-genieacs) |
+| Router ZeroTier tidak muncul di "Pilih router yang bergabung" | Paket zerotier belum terpasang, VPS belum dihubungkan, atau UDP 9993 tertutup | Cek [Fitur opsional C](#c-router-lewat-zerotier). Di MikroTik: **ZeroTier → Interfaces → zt-acs** |
+| Notifikasi Telegram tidak masuk | Bot bukan admin, topik salah, atau token dipakai webhook lain | **Kirim pesan tes** di panel, lalu **Hapus webhook** jika ditawarkan |
+| Domain gagal: "Domain tidak ditemukan di akun Cloudflare ini" / "Token tidak boleh membaca domain ini" | Token belum punya izin **Zone → Zone → Read** | Edit token di Cloudflare, tambahkan izin itu |
+| Browser memaksa `https://` saat membuka GenieACS/ZTNET | Domain panel ber-HTTPS dipakai untuk port lain | Pakai subdomain `acs`/`zt` ([Fitur opsional B](#b-domain-cloudflare--https)) |
+
+Log lengkap:
+```bash
+journalctl -u vpn-acs -n 50 --no-pager
+journalctl -u xl2tpd -n 50 --no-pager
+journalctl -u genieacs-cwmp -n 50 --no-pager
+journalctl -u ztnet -n 50 --no-pager
+```
 
 ---
 
@@ -213,21 +315,31 @@ ONT muncul di GenieACS → parameter `ConnectionRequestURL` berisi **IP virtual*
 cd /root/suwazed-panel
 git pull
 bash install-vpn-acs.sh          # data router & password admin tetap tersimpan
+bash cek.sh
 ```
-Jika GenieACS di-update, jalankan ulang `bash genieacs-virtualip.sh`.
+Jika GenieACS di-update, jalankan ulang `bash genieacs-virtualip.sh`. ZTNET di-update dengan menjalankan ulang `bash pasang-ztnet.sh` (port 3300 tetap).
 
 ## Perintah berguna
 ```bash
-bash ringkasan.sh                    # ringkasan alamat web, port, dan status semua layanan
+bash ringkasan.sh                    # alamat web, port, dan status semua layanan
 bash cek.sh                          # tes apakah semua layanan benar-benar berjalan
 bash install-vpn-acs.sh password     # ganti/reset password admin panel (Enter = Admin123)
 bash install-vpn-acs.sh uninstall    # hapus panel (akun VPN tetap)
+bash genieacs-virtualip.sh status    # cek patch IP virtual
 bash genieacs-virtualip.sh rollback  # kembali ke GenieACS asli
-
-journalctl -u vpn-acs -n 50 --no-pager
-journalctl -u genieacs-cwmp -n 50 --no-pager
-journalctl -u xl2tpd -n 50 --no-pager
+bash pasang-ztnet.sh status          # cek ZeroTier + ZTNET
 ```
+
+## Backup
+```bash
+mongodump --db genieacs --out /root/backup-genieacs-$(date +%F)
+mkdir -p /root/backup-vpnacs-$(date +%F) && cp /opt/vpn-acs/*.json /opt/vpn-acs/*.ini /root/backup-vpnacs-$(date +%F)/ 2>/dev/null
+```
+Isinya: `data.json` (router, akun VPN, pengaturan), `history.json` (riwayat uptime), `activity.json` (log aktivitas), dan `cloudflare.ini` (token, jika memakai domain).
+
+File-file ini berisi password VPN dan token: **jangan** di-commit ke GitHub.
+
+---
 
 ## Membersihkan / menghapus
 
@@ -237,7 +349,7 @@ cd /root/suwazed-panel
 bash bersihkan.sh
 ```
 Pilihan menu:
-1. **Hapus semua port forwarding saja** (VPN & router tetap jalan)
+1. **Hapus semua port forwarding saja** (VPN dan router tetap jalan)
 2. **Hapus Panel VPN ACS** + akun VPN router + route IP virtual + aturan firewall panel, dan kembalikan xl2tpd ke bawaan `vpnsetup.sh`
 3. **Kembalikan GenieACS asli** (hapus patch IP virtual)
 4. **Kembalikan parameter GenieACS** dari backup lama (`/root/backup-parameter-*`), jika pernah dibuat
@@ -246,18 +358,14 @@ Pilihan menu:
 Atau langsung: `bash bersihkan.sh portforward|panel|genieacs|parameter|semua`. Setiap pilihan meminta konfirmasi (ketik `YA`) dan membackup data penting ke `/root` dulu. Server VPN (xl2tpd/IPsec), GenieACS, MongoDB, dan data ONT tidak dihapus.
 
 ### Di setiap MikroTik
-Tempel di Winbox → New Terminal (hanya menghapus pengaturan bertanda "VPN ACS"):
+Script hapus yang tepat ada di panel: buka router → tab **Script MikroTik** → **Script untuk menghapus dari MikroTik**. Script itu sudah memakai nama panel Anda dan nama-nama lama.
+
+Contoh jika nama panel `VPN ACS` (ganti dengan nama panel Anda):
 ```
 /interface l2tp-client remove [find where name="l2tp-acs"]
+:do { /zerotier interface remove [find where name="zt-acs"] } on-error={}
 /ip route remove [find where comment="VPN ACS"]
-/ip firewall nat remove [find where comment~"^VPN ACS"]
-/ip firewall filter remove [find where comment~"^VPN ACS"]
+/ip firewall nat remove [find where comment~"^VPN ACS - "]
+/ip firewall filter remove [find where comment~"^VPN ACS - "]
 :put "Pengaturan VPN ACS sudah dihapus."
 ```
-
-## Backup
-```bash
-mongodump --db genieacs --out /root/backup-genieacs-$(date +%F)
-cp /opt/vpn-acs/data.json /root/backup-vpnacs-$(date +%F).json
-```
-`data.json` berisi password VPN semua router: **jangan** di-commit ke GitHub.
