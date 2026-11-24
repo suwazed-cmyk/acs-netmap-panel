@@ -95,8 +95,26 @@ echo -e "${BOLD}================================================================
 head1 "Sistem"
 if [ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null)" = "1" ]; then ok "IP forwarding aktif"
 else bad "IP forwarding mati (VPN dan NETMAP tidak jalan)" "sysctl -w net.ipv4.ip_forward=1"; fi
-if curl -s -o /dev/null -m 6 https://api.telegram.org; then ok "VPS bisa keluar ke internet (Telegram, Cloudflare, Let's Encrypt)"
-else warn "VPS tidak bisa menjangkau api.telegram.org" "Notifikasi Telegram dan pengaturan domain tidak akan jalan"; fi
+# Koneksi keluar: dites terpisah, lewat IPv4 dan IPv6, supaya penyebabnya jelas
+GAI_FIX="echo 'precedence ::ffff:0:0/96  100' >> /etc/gai.conf && systemctl restart vpn-acs"
+cek_keluar() { # cek_keluar host "untuk apa"
+  local h="$1" what="$2" any c4 c6
+  any="$(curl -s -o /dev/null -m 8 -w '%{http_code}' "https://$h" 2>/dev/null)"
+  c4="$(curl -4 -s -o /dev/null -m 8 -w '%{http_code}' "https://$h" 2>/dev/null)"
+  if [ "${any:-000}" != "000" ]; then ok "VPS bisa menjangkau $h ($what)"; return; fi
+  if [ "${c4:-000}" != "000" ]; then
+    c6="$(curl -6 -s -o /dev/null -m 8 -w '%{http_code}' "https://$h" 2>/dev/null)"
+    if [ "${c6:-000}" = "000" ]; then warn "$h hanya bisa lewat IPv4: IPv6 VPS tidak berfungsi ($what tetap jalan di panel)" "Dahulukan IPv4: $GAI_FIX"
+    else warn "$h lambat dijangkau ($what)" "Cek koneksi internet VPS"; fi
+    return
+  fi
+  local ip; ip="$(getent hosts "$h" | awk '{print $1}' | head -1)"
+  if [ -z "$ip" ]; then bad "$h tidak bisa ditemukan di DNS ($what tidak jalan)" "Cek /etc/resolv.conf, mis. pakai nameserver 1.1.1.1"
+  else bad "VPS tidak bisa menjangkau $h ($ip) — $what tidak jalan" "Mungkin diblokir provider/firewall VPS. Coba dari VPS: curl -v https://$h"; fi
+}
+cek_keluar api.telegram.org "notifikasi Telegram"
+cek_keluar api.cloudflare.com "domain & HTTPS Cloudflare"
+cek_keluar acme-v02.api.letsencrypt.org "sertifikat HTTPS"
 if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
   warn "ufw menyala (bisa bentrok dengan aturan VPN)" "ufw disable, lalu buka port di firewall provider"
 fi

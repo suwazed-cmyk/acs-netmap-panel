@@ -150,6 +150,13 @@ cat > "$APP_DIR/server.js" <<'SERVEREOF'
 
 const http = require("http");
 const https = require("https");
+// Banyak VPS punya alamat IPv6 yang tidak bisa dipakai keluar: koneksi ke Telegram/Cloudflare
+// gagal bila IPv6 dicoba lebih dulu. Dahulukan IPv4.
+try {
+  require("dns").setDefaultResultOrder("ipv4first");
+} catch (e) {
+  // Node lama: abaikan
+}
 const net = require("net");
 const tls = require("tls");
 const fs = require("fs");
@@ -187,7 +194,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.1.0";
+const VERSION = "2.1.1";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -7469,6 +7476,18 @@ if [ ! -f "$APP_DIR/data.json" ] || ! grep -q '"admin"' "$APP_DIR/data.json"; th
   ask_password
 else
   ok "Password admin lama dipakai (ganti dengan: bash $0 password)"
+fi
+
+# ---------- IPv6 rusak? dahulukan IPv4 ----------
+# Banyak VPS diberi alamat IPv6 yang tidak bisa dipakai keluar, sehingga Telegram/Cloudflare gagal
+# karena IPv6 dicoba lebih dulu. Bila IPv4 jalan tetapi IPv6 tidak, sistem diatur memakai IPv4 dulu.
+if command -v curl >/dev/null 2>&1 && ! grep -qE '^\s*precedence\s+::ffff:0:0/96' /etc/gai.conf 2>/dev/null; then
+  if [ "$(curl -4 -s -o /dev/null -m 8 -w '%{http_code}' https://api.cloudflare.com 2>/dev/null)" != "000" ] \
+     && [ "$(curl -6 -s -o /dev/null -m 8 -w '%{http_code}' https://api.cloudflare.com 2>/dev/null)" = "000" ] \
+     && getent ahostsv6 api.telegram.org >/dev/null 2>&1; then
+    printf '\n# ACS NETMAP Panel: IPv6 VPS tidak bisa keluar, dahulukan IPv4\nprecedence ::ffff:0:0/96  100\n' >> /etc/gai.conf
+    ok "IPv6 VPS tidak berfungsi: sistem diatur memakai IPv4 lebih dulu (/etc/gai.conf)"
+  fi
 fi
 
 # ---------- Service systemd ----------
