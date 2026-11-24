@@ -17,7 +17,7 @@
     --ok:#16a34a;--ok-soft:#ecfdf3;--warn:#d97706;--warn-soft:#fffbeb;--bad:#dc2626;--bad-soft:#fef2f2;
     --side:#0f2a6b;--side-text:rgba(255,255,255,.72);--side-hover:rgba(255,255,255,.07);--side-on:rgba(255,255,255,.12);
     --code-bg:#0f172a;--code-fg:#e2e8f0;--tab-accent:#38bdf8;
-    --r:10px;--r-sm:8px;--shadow:0 1px 2px rgba(16,24,40,.04);--shadow-lg:0 18px 48px -12px rgba(16,24,40,.28);
+    --r:12px;--r-sm:8px;--shadow:0 1px 3px rgba(16,24,40,.06),0 1px 2px rgba(16,24,40,.03);--shadow-lg:0 18px 48px -12px rgba(16,24,40,.28);
     --font:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
     --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   }
@@ -75,7 +75,7 @@
 
   /* Header halaman */
   .ph{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px}
-  .ph h1{font-size:22px;font-weight:650;letter-spacing:-.02em}
+  .ph h1{font-size:26px;font-weight:700;letter-spacing:-.025em;line-height:1.2}
   .ph p{color:var(--muted);margin-top:3px}
   .ph .acts{display:flex;gap:8px;align-items:center}
 
@@ -96,7 +96,7 @@
   .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
   .card+.card{margin-top:16px}
   .ch{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:16px 20px;border-bottom:1px solid var(--line)}
-  .ch h2{font-size:14.5px;font-weight:600}
+  .ch h2{font-size:15px;font-weight:650;letter-spacing:-.01em}
   .ch a{font-size:13px;font-weight:500}
   .cb{padding:18px 20px}
 
@@ -165,7 +165,7 @@
 
   /* Detail */
   .dh{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:18px}
-  .dh h1{font-size:22px;font-weight:650;letter-spacing:-.02em;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .dh h1{font-size:26px;font-weight:700;letter-spacing:-.025em;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
   .dh p{color:var(--muted);margin-top:3px}
   .tabs{display:flex;gap:6px;box-shadow:inset 0 -1px 0 var(--line);margin-bottom:22px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
   .tabs::-webkit-scrollbar{display:none}
@@ -239,13 +239,42 @@
   .zt-empty .big svg{width:24px;height:24px}
   .zt-empty p{max-width:460px;margin:6px auto 0;line-height:1.55}
   .zt-hero{overflow:hidden}
-  .zt-sw{display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid var(--line);background:var(--subtle)}
-  .zt-sw label{margin:0;font-size:13px;font-weight:500;color:var(--muted)}
-  .zt-selw{flex:0 1 380px;min-width:0}
-  .zt-selw select{width:100%;height:34px;font-size:13.5px;font-weight:550}
-  .zt-sw .zt-small{margin-left:auto}
-  .zt-hb{display:flex;gap:20px;align-items:center;padding:16px 20px}
-  .zt-hinfo{flex:1;min-width:0}
+  .det-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px;align-items:start}
+  .det-main{min-width:0}.det-side{display:grid;gap:16px;min-width:0}.det-side>.card{margin:0}
+  .det-main>.card:first-child,.det-main>.note:first-child{margin-top:0}
+  .ds-body{padding:14px 20px 18px;display:grid;gap:12px}
+  .ds-kv{display:flex;justify-content:space-between;gap:10px;font-size:13.5px}.ds-kv span{color:var(--muted)}.ds-kv b{font-weight:600;text-align:right}
+  .ds-up{display:grid;grid-template-columns:1fr auto;align-items:center;gap:2px 10px;font-size:13px}.ds-up span{color:var(--muted)}.ds-up b{font-weight:650;font-variant-numeric:tabular-nums}.ds-up .zt-bar{grid-column:1/-1;margin-top:4px}
+  @media (max-width:1024px){.det-grid{grid-template-columns:1fr}.det-side{grid-template-columns:1fr 1fr;order:-1}}
+  @media (max-width:720px){.det-side{grid-template-columns:1fr}}
+  .zt-top{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px;margin-bottom:16px;align-items:start}
+  .zt-main,.zt-side{display:grid;gap:16px;min-width:0}
+  .zt-main>.card,.zt-side>.card{margin:0}
+  .zt-ch .zt-selw{flex:0 1 260px;min-width:0}
+  .zt-ch select{width:100%;height:32px;font-size:13px;font-weight:550}
+  .zt-cur{padding:14px 20px 18px}
+  .zt-idbox{display:inline-flex;align-items:center;gap:4px;padding:4px 6px 4px 12px;border-radius:8px;background:var(--subtle);border:1px solid var(--line)}
+  .zt-health{display:grid;grid-template-columns:1fr 1fr}
+  .zt-hc{padding:16px 20px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);min-width:0}
+  .zt-hc:nth-child(2n){border-right:0}.zt-hc:nth-last-child(-n+2){border-bottom:0}
+  .zt-hc>span{font-size:12.5px;color:var(--muted);font-weight:500}
+  .zt-hc b{display:block;font-size:19px;font-weight:650;margin-top:4px;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+  .zt-hc b.warn{color:var(--warn)}
+  .zt-hc b em{font-style:normal;font-size:13px;font-weight:500;color:var(--muted)}
+  .zt-hc small{display:block;font-size:12.5px;color:var(--muted);margin-top:3px}
+  .zt-bar{height:6px;border-radius:99px;background:var(--subtle);border:1px solid var(--line);margin-top:9px;overflow:hidden}
+  .zt-bar i{display:block;height:100%;background:var(--ok);border-radius:99px;transition:width .4s}
+  .zt-tip{color:var(--muted);display:inline-grid;cursor:help}.zt-tip svg{width:16px;height:16px}
+  .zt-qrc{text-align:center}
+  .zt-qrbig{width:164px;height:164px;margin:18px auto 0;display:block;padding:10px;border-radius:12px;background:#fff;border:1px solid var(--line);cursor:zoom-in;transition:box-shadow .15s}
+  .zt-qrbig:hover{box-shadow:0 10px 24px -12px rgba(16,24,40,.35)}
+  .zt-qrbig svg{width:100%;height:100%;display:block}
+  .zt-qrt{margin:10px 16px 16px}
+  .zt-actc{padding:16px;display:grid;gap:8px}
+  .zt-actc .btn{justify-content:center;width:100%}
+  .zt-actc p{margin:2px 2px 0;line-height:1.5}
+  @media (max-width:1024px){.zt-top{grid-template-columns:1fr}.zt-side{grid-template-columns:1fr 1fr}}
+  @media (max-width:720px){.zt-side{grid-template-columns:1fr}.zt-health{grid-template-columns:1fr}.zt-hc{border-right:0}.zt-hc:nth-last-child(2){border-bottom:1px solid var(--line)}.zt-ch{flex-wrap:wrap}.zt-ch .zt-selw{flex:1 1 100%}.zt-cur{padding:12px 16px 16px}.zt-hc{padding:14px 16px}}
   .zt-hrow{display:grid;grid-template-columns:120px minmax(0,1fr);align-items:center;gap:10px;min-height:32px}
   .zt-hl{font-weight:500;color:var(--muted);font-size:13px}
   .zt-hv{display:flex;align-items:center;gap:8px;min-width:0}
@@ -258,13 +287,6 @@
   .zt-ib.ok{color:var(--ok)}
   .zt-hmeta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;font-size:12.5px}
   .zt-hmeta .pill svg{width:11px;height:11px;margin-right:3px;vertical-align:-1px}
-  .zt-hside{display:flex;flex-direction:column;align-items:center;gap:4px;flex:none}
-  .zt-qrmini{width:92px;height:92px;padding:7px;border-radius:10px;background:#fff;border:1px solid var(--line);cursor:zoom-in;transition:box-shadow .15s,transform .15s}
-  .zt-qrmini:hover{box-shadow:0 10px 24px -12px rgba(16,24,40,.35);transform:translateY(-1px)}
-  .zt-qrmini svg{width:100%;height:100%;display:block}
-  .zt-qrcap{font-size:10.5px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
-  .zt-hbar{display:flex;align-items:center;gap:10px;padding:10px 20px;border-top:1px solid var(--line);background:var(--subtle)}
-  .zt-hbar .sp{flex:1}
   .zt-hh{display:flex;align-items:center;gap:14px;padding:18px 20px;border-bottom:1px solid var(--line)}
   .zt-hic{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;background:linear-gradient(135deg,var(--primary),#3b82f6);color:#fff;flex:none;box-shadow:0 6px 16px -6px rgba(29,78,216,.55)}
   .zt-hic svg{width:22px;height:22px}
@@ -340,9 +362,7 @@
   @media (max-width:1024px){.zt-g2{grid-template-columns:1fr}}
   @media (max-width:720px){
     .stats.zt-stats{grid-template-columns:1fr 1fr}.zt-stats .stat:nth-child(2){border-right:0}.zt-stats .stat:nth-child(-n+2){border-bottom:1px solid var(--line)}
-    .zt-sw{flex-wrap:wrap;gap:6px 10px;padding:12px 16px}.zt-selw{flex:1 1 100%;order:3}.zt-hb{align-items:flex-start;gap:12px;padding:14px 16px}.zt-qrmini{width:76px;height:76px;padding:5px}.zt-qrcap{font-size:9.5px}
     .zt-hrow{grid-template-columns:1fr;gap:2px;min-height:0;margin-bottom:10px}.zt-nwid{font-size:16px}
-    .zt-hbar{flex-wrap:wrap;padding:12px 16px}.zt-hbar .muted{flex-basis:100%}.zt-hbar .btn{flex:1;justify-content:center}
     .zt-2col{grid-template-columns:1fr}
     .zt-qr{flex-direction:column;align-items:center}.zt-qrinfo{width:100%}
     .zt-t .zt-colnode,.zt-t .zt-act,.zt-t th.r{display:none}.zt-nodesm{display:block}.zt-t tr.zt-tap{cursor:pointer}.zt-t .zt-apm{display:inline-flex}
@@ -494,7 +514,7 @@
 
   /* Tabel kecil */
   table.t{width:100%;border-collapse:collapse;font-size:13.5px}
-  table.t th{text-align:left;font-size:12px;font-weight:550;color:var(--muted);padding:10px 20px;border-bottom:1px solid var(--line);background:var(--subtle)}
+  table.t th{text-align:left;font-size:12.5px;font-weight:600;color:var(--text-2);padding:11px 20px;border-bottom:1px solid var(--line);background:var(--subtle)}
   table.t td{padding:12px 20px;border-bottom:1px solid var(--line);vertical-align:middle}
   table.t tr:last-child td{border-bottom:0}
   table.t .r{text-align:right}
@@ -967,6 +987,7 @@ function route() {
   window.scrollTo(0, 0);
 }
 function crumb(items) {
+  if (items[0][0] !== "Dashboard") items = [["Dashboard", "#/"]].concat(items);
   $("#crumb").innerHTML = items.map((x, i) => i < items.length - 1 ? `<a href="${x[1]}">${esc(x[0])}</a><span>/</span>` : `<b>${esc(x[0])}</b>`).join("");
 }
 window.addEventListener("hashchange", route);
@@ -1094,6 +1115,7 @@ function viewList(v) {
     <div class="ph"><div><h1>Router</h1><p>Setiap router adalah satu MikroTik yang tersambung ke VPS lewat VPN.</p></div>
       <div class="acts"><button class="btn pri" data-act="add">${ic("plus")}Tambah router</button></div></div>
     <div class="card">
+      <div class="ch"><h2>Daftar router</h2><span class="muted" style="font-size:12.5px">${STATE.sites.length} router</span></div>
       <div class="toolbar">
         <div class="search">${ic("search", "")}<input id="q" type="text" placeholder="Cari nama, subnet, atau IP" value="${esc(LIST.q)}"></div>
         <div class="filters">
@@ -1134,7 +1156,7 @@ function viewDetail(v, id, tab) {
       <div><h1>${esc(x.name)} <span class="pill ${stOf(x)[0]}">${stOf(x)[1]}</span> <span class="tag ${x.transport === "zt" ? "" : "gray"}">${x.transport === "zt" ? "ZeroTier" : "L2TP"}</span></h1>
         ${x.note ? `<p>${esc(x.note)}</p>` : ""}</div>
       <div class="acts" style="display:flex;gap:8px">
-        <button class="btn" data-act="test" data-id="${x.id}">${ic("play")}Tes koneksi</button>
+        ${tab === "ringkasan" ? "" : `<button class="btn" data-act="test" data-id="${x.id}">${ic("play")}Tes koneksi</button>`}
         <div class="menu"><button class="btn icon" data-act="menu" aria-label="Lainnya">${ic("dots")}</button>
           <div class="menu-list hidden" id="menuList">
             <button data-act="edit" data-id="${x.id}">${ic("edit")}Ubah router</button>
@@ -1151,8 +1173,27 @@ function viewDetail(v, id, tab) {
   else if (tab === "riwayat") tabHistory(b, x);
   else tabSummary(b, x);
 }
+function detSide(x) {
+  const [c, t] = stOf(x);
+  const U = x.uptime;
+  const bar = (k, label) => U && U[k] != null ? `<div class="ds-up"><span>${label}</span><b class="${pctCls(U[k])}">${pct(U[k])}</b><div class="zt-bar"><i style="width:${Math.max(0, Math.min(100, U[k]))}%;background:${U[k] >= 99 ? "var(--ok)" : U[k] >= 95 ? "var(--warn)" : "var(--bad)"}"></i></div></div>` : "";
+  const since = x.state === "down" && x.downSince ? `Terputus ${fmtDur(Date.now() - x.downSince)}` : x.state === "pending" ? "Belum pernah tersambung" : x.incidents30 ? `${x.incidents30}× putus dalam 30 hari` : "Stabil 30 hari terakhir";
+  return `<div class="det-side">
+    <div class="card"><div class="ch"><h2>Status koneksi</h2><span class="pill ${c}">${t}</span></div>
+      <div class="ds-body">
+        <div class="ds-kv"><span>Jalur</span><b>${x.transport === "zt" ? "ZeroTier" : "VPN L2TP"}</b></div>
+        <div class="ds-kv"><span>Keterangan</span><b>${esc(since)}</b></div>
+        ${U ? `${bar("d1", "24 jam")}${bar("d7", "7 hari")}${bar("d30", "30 hari")}` : `<p class="muted zt-small" style="margin-top:6px">Uptime tampil setelah router tersambung.</p>`}
+      </div></div>
+    <div class="card zt-actc">
+      <button class="btn pri" data-act="test" data-id="${x.id}">${ic("play")}Tes koneksi</button>
+      <a class="btn" href="#/router/${x.id}/script">${ic("code")}Script MikroTik</a>
+      <a class="btn" href="#/router/${x.id}/riwayat">${ic("pulse")}Riwayat koneksi</a>
+    </div>
+  </div>`;
+}
 function tabSummary(b, x) {
-  b.innerHTML = `
+  b.innerHTML = `<div class="det-grid"><div class="det-main">
     ${x.inGenie === false ? `<div class="note warn">${ic("alert")}<div><b>IP virtual di luar rentang patch GenieACS</b>Panel belum berhasil memperbarui setting GenieACS untuk ${esc(x.virtualSubnet)}, jadi Summon ke ONT di router ini akan gagal. Buka menu <a href="#/genieacs">GenieACS</a> untuk melihat statusnya.</div></div>` : ""}
     ${x.state === "pending" && !(x.transport === "zt" && !x.ztNode) ? `<div class="note info">${ic("clock")}<div><b>Menunggu pemasangan</b>Router ini belum pernah tersambung. Pasang script lewat tab <a href="#/router/${x.id}/script">Script MikroTik</a>. Riwayat dan notifikasi Telegram mulai berjalan setelah MikroTik tersambung pertama kali.</div></div>` : ""}
     ${x.state === "down" ? `<div class="note warn">${ic("alert")}<div><b>Terputus${x.downSince ? ` sejak ${esc(fmtT(x.downSince, true))} (${fmtDur(Date.now() - x.downSince)})` : ""}</b>Jalankan <a href="#" data-act="test" data-id="${x.id}">tes koneksi</a> untuk melihat penyebabnya.</div></div>` : ""}
@@ -1173,7 +1214,7 @@ function tabSummary(b, x) {
         <div><dt>Password</dt><dd><span id="pwv">••••••••••••</span><button class="copy" data-act="showpw" title="Lihat">${ic("eye", "")}</button>${copyBtn(x.password, "Password tersalin")}</dd></div>
         <div><dt>IPsec</dt><dd>${STATE.settings.useIpsec ? "Aktif" : "Tidak dipakai"}</dd></div>
       </dl>
-    </div>`}`;
+    </div>`}</div>${detSide(x)}</div>`;
 }
 function ztStaleNote(x, style) {
   return x.ztStale ? `<div class="note warn"${style ? ` style="${style}"` : ""}>${ic("alert")}<div><b>Pasang ulang script ZeroTier</b>Rentang atau IP ZeroTier VPS berubah (sekarang ${esc((STATE.settings.zt || {}).vpsIp || "-")}). Salin script terbaru dari tab <a href="#/router/${x.id}/script">Script MikroTik</a> ke MikroTik, lalu klik <a href="#" data-act="ztdone" data-id="${x.id}">Sudah dipasang</a>.</div></div>` : "";
@@ -2168,34 +2209,44 @@ async function setZerotier(b) {
     ${act && !okNet ? `<div class="note warn">${ic("alert")}<div><b>VPS belum tersambung ke jaringan</b>Status: ${esc(cur.status || "-")}. Biasanya selesai dalam beberapa detik; muat ulang halaman ini.</div></div>` : ""}
     ${pending.length ? `<div class="note warn zt-pend">${ic("clock")}<div><b>${pending.length} perangkat menunggu persetujuan</b>${pending.slice(0, 3).map((m) => `<span class="mono">${esc(m.node)}</span>${m.name ? ` (${esc(m.name)})` : ""}`).join(", ")}${pending.length > 3 ? " dan lainnya" : ""}. Router yang dipasang dari panel disetujui otomatis.
       <div style="margin-top:10px"><button class="btn sm" id="ztShowPend">Lihat &amp; setujui</button></div></div></div>` : ""}
-    <div class="card zt-hero">
-      <div class="zt-sw">
-        <label for="ztNetSel">Jaringan</label>
-        <div class="zt-selw"><select id="ztNetSel">${nets.map((n) => `<option value="${esc(n.current ? "" : n.nwid)}" ${n.nwid === cur.nwid ? "selected" : ""}>${esc(n.name || "(tanpa nama)")} · ${esc(n.nwid)}${n.current ? " · dipakai panel" : ""}</option>`).join("")}</select></div>
-        <span class="muted zt-small">${nets.length} jaringan di controller</span>
-      </div>
-      <div class="zt-hb">
-        <div class="zt-hinfo">
-          <div class="zt-hrow"><span class="zt-hl">Network ID</span><span class="zt-hv"><span class="zt-nwid mono">${esc(cur.nwid)}</span><button class="zt-ib" data-copy="${esc(cur.nwid)}" data-msg="Network ID tersalin" title="Salin Network ID" aria-label="Salin Network ID">${ic("copy")}</button></span></div>
-          <div class="zt-hrow"><span class="zt-hl">Nama jaringan</span><span class="zt-hv" id="ztNameBox"><span class="zt-nname">${esc(cur.name || "(tanpa nama)")}</span><button class="zt-ib" id="ztNameEdit" title="Ganti nama" aria-label="Ganti nama">${ic("edit")}</button></span></div>
-          <div class="zt-hmeta">${cur.private ? `<span class="pill ok">${ic("lock", "")}Private</span>` : `<span class="pill bad">Public</span>`}${act ? `${okNet ? `<span class="pill info">Dipakai panel</span>` : ""}<span class="muted">interface <span class="mono">${esc(cur.iface || "—")}</span></span>` : `<span class="pill wait">Tidak dipakai panel</span>`}</div>
+    <div class="zt-top">
+      <div class="zt-main">
+        <div class="card">
+          <div class="ch zt-ch"><h2>Jaringan saat ini</h2>
+            <div class="zt-selw" title="Pilih jaringan di controller"><select id="ztNetSel" aria-label="Pilih jaringan">${nets.map((n) => `<option value="${esc(n.current ? "" : n.nwid)}" ${n.nwid === cur.nwid ? "selected" : ""}>${esc(n.name || "(tanpa nama)")}${n.current ? " · dipakai panel" : ""}</option>`).join("")}</select></div></div>
+          <div class="zt-cur">
+            <div class="zt-hrow"><span class="zt-hl">Network ID</span><span class="zt-hv"><span class="zt-idbox"><span class="zt-nwid mono">${esc(cur.nwid)}</span><button class="zt-ib" data-copy="${esc(cur.nwid)}" data-msg="Network ID tersalin" title="Salin Network ID" aria-label="Salin Network ID">${ic("copy")}</button></span></span></div>
+            <div class="zt-hrow"><span class="zt-hl">Nama jaringan</span><span class="zt-hv" id="ztNameBox"><span class="zt-nname">${esc(cur.name || "(tanpa nama)")}</span><button class="zt-ib" id="ztNameEdit" title="Ganti nama" aria-label="Ganti nama">${ic("edit")}</button></span></div>
+            <div class="zt-hmeta">${act ? (okNet ? `<span class="pill ok">VPS tersambung</span>` : `<span class="pill bad">VPS belum tersambung</span>`) : `<span class="pill wait">Tidak dipakai panel</span>`}${cur.private ? `<span class="pill ok">${ic("lock", "")}Private</span>` : `<span class="pill bad">Public</span>`}${act ? `<span class="muted">interface <span class="mono">${esc(cur.iface || "—")}</span></span>` : ""}</div>
+          </div>
         </div>
-        <div class="zt-hside">
-          <button class="zt-qrmini" id="ztQr" title="Perbesar QR Network ID" aria-label="QR Network ID">${(() => { try { const q = qrcode(0, "M"); q.addData(cur.nwid); q.make(); return q.createSvgTag({ cellSize: 4, margin: 0, scalable: true }); } catch (e) { return ic("qr"); } })()}</button>
-          <span class="zt-qrcap">QR Network ID</span>
+        <div class="card">
+          <div class="ch"><h2>Konfigurasi &amp; kesehatan</h2><span class="muted zt-small">${act ? "jaringan panel" : "VPS tidak bergabung"}</span></div>
+          <div class="zt-health">
+            <div class="zt-hc"><span>Rentang IP</span><b class="mono">${esc(cur.subnet || "—")}</b><small>${cur.poolStart && cur.poolEnd ? `Pool ${esc(cur.poolStart)} – .${esc(cur.poolEnd.split(".").pop())}` : "Pool otomatis (seluruh rentang)"}</small></div>
+            <div class="zt-hc"><span>IP VPS (gateway)</span><b class="mono">${esc(act ? cur.vpsIp : "—")}</b><small>${act ? `${cur.sites || 0} router panel memakai jalur ini` : "VPS tidak bergabung ke jaringan ini"}</small></div>
+            <div class="zt-hc"><span>Perangkat online</span><b>${onlineN} <em>dari ${members.filter((m) => m.authorized).length}</em></b><div class="zt-bar"><i style="width:${members.filter((m) => m.authorized).length ? Math.round((onlineN / members.filter((m) => m.authorized).length) * 100) : 0}%"></i></div></div>
+            <div class="zt-hc"><span>Menunggu persetujuan</span><b class="${pending.length ? "warn" : ""}">${pending.length} <em>perangkat</em></b><small>${cur.private ? "perangkat baru perlu disetujui" : "jaringan public: tanpa persetujuan"}</small></div>
+          </div>
         </div>
       </div>
-      <div class="zt-hbar"><span class="muted zt-small">${act ? "Pindai QR dengan HP untuk menyalin Network ID ke aplikasi ZeroTier One." : cur.conflict ? esc(cur.conflict) : `VPS tidak bergabung ke jaringan ini; perangkatnya tetap bisa dikelola dari sini.${actNet ? ` Jaringan panel: <b>${esc(actNet.name || actNet.nwid)}</b>.` : ""}`}</span><span class="sp"></span>${!act ? `<button class="btn" data-zuse="${esc(cur.nwid)}" ${cur.conflict || !cur.subnet ? "disabled" : ""}>${ic("hub")}Jadikan jaringan panel</button>` : ""}<button class="btn" id="ztSet">${ic("sliders")}Pengaturan</button></div>
-      <div class="stats zt-stats">
-        <div class="stat"><span>Rentang IP</span><b class="mono">${esc(cur.subnet || "—")}</b><small>${cur.poolStart && cur.poolEnd ? `Pool ${esc(cur.poolStart)} – .${esc(cur.poolEnd.split(".").pop())}` : "Pool otomatis (seluruh rentang)"}</small></div>
-        <div class="stat"><span>IP VPS</span><b class="mono">${esc(act ? cur.vpsIp : "—")}</b><small>${act ? "gateway router ZeroTier" : "VPS tidak bergabung"}</small></div>
-        <div class="stat"><span>Perangkat online</span><b>${onlineN}<em>/${members.filter((m) => m.authorized).length}</em></b><small>${act ? `${cur.sites || 0} router panel` : "perangkat disetujui"}</small></div>
-        <div class="stat"><span>Menunggu persetujuan</span><b class="${pending.length ? "warn" : ""}">${pending.length}</b><small>${cur.private ? "perangkat baru perlu disetujui" : "jaringan public: tanpa persetujuan"}</small></div>
+      <div class="zt-side">
+        <div class="card zt-qrc">
+          <div class="ch"><h2>QR Network ID</h2><span class="zt-tip" title="Pindai dengan kamera HP untuk menyalin Network ID, lalu tempel di aplikasi ZeroTier One.">${ic("info")}</span></div>
+          <button class="zt-qrbig" id="ztQr" title="Perbesar QR Network ID" aria-label="Perbesar QR Network ID">${(() => { try { const q = qrcode(0, "M"); q.addData(cur.nwid); q.make(); return q.createSvgTag({ cellSize: 4, margin: 0, scalable: true }); } catch (e) { return ic("qr"); } })()}</button>
+          <p class="muted zt-small zt-qrt">Pindai untuk menyalin Network ID</p>
+        </div>
+        <div class="card zt-actc">
+          <button class="btn pri" id="ztSet">${ic("sliders")}Pengaturan jaringan</button>
+          ${!act ? `<button class="btn" data-zuse="${esc(cur.nwid)}" ${cur.conflict || !cur.subnet ? "disabled" : ""}>${ic("hub")}Jadikan jaringan panel</button>
+          <p class="muted zt-small">${cur.conflict ? esc(cur.conflict) : `${actNet ? `Jaringan panel sekarang: <b>${esc(actNet.name || actNet.nwid)}</b>. ` : ""}VPS bergabung ke jaringan ini dan router ZeroTier memakainya.`}</p>`
+            : `<button class="btn ghost danger" id="ztLeave">${ic("trash")}Lepas VPS dari jaringan</button>`}
+        </div>
       </div>
     </div>
 
     <div class="card" id="ztMembers">
-      <div class="ch"><h2>Perangkat</h2><span class="muted" style="font-size:12.5px">${members.length} perangkat di jaringan</span></div>
+      <div class="ch"><h2>Perangkat di jaringan</h2><span class="muted" style="font-size:12.5px">${members.length} perangkat</span></div>
       <div class="toolbar">
         <div class="search">${ic("search", "")}<input id="ztQ" type="text" placeholder="Cari nama, Node ID, atau IP" value="${esc(ZTV.q)}"></div>
         <div class="filters">
@@ -2215,9 +2266,9 @@ async function setZerotier(b) {
           <span class="tag ${r.via ? (r.panel ? "" : "gray") : "gray"}">${r.via ? (r.panel ? "otomatis" : "manual") : "jaringan"}</span></li>`).join("") || `<li class="muted">Belum ada rute</li>`}</ul>
         <p class="help" style="margin:0 20px 16px">Rute IP virtual tiap router dan URL ACS dibuat otomatis oleh panel. Rentang jaringan diatur di Pengaturan.</p>
       </div>
-      <div class="card"><div class="ch"><h2>Jaringan di controller</h2><span class="muted" style="font-size:12.5px">${(z.networks || []).length}</span></div>
+      <div class="card"><div class="ch"><h2>Jaringan di controller</h2><span class="muted" style="font-size:12.5px">${nets.length} jaringan</span></div>
         <ul class="zt-nets">${nets.map((n) => ztNetRow(n, { canUse: false, open: true })).join("")}</ul>
-        ${act ? `<div class="cb card-actions"><button class="btn ghost danger" id="ztLeave">${ic("trash")}Lepas VPS dari jaringan ini</button></div>` : ""}
+
       </div>
     </div>
     <p class="help" style="margin-top:12px">${act ? "" : "Rute IP virtual router dan URL ACS hanya dibuat otomatis di jaringan panel. "}Rentang IP ZeroTier tidak boleh bentrok dengan ${esc(s.tunnelNet || "")} (L2TP), ${esc(s.virtualPool || "")} (IP virtual), subnet ONT, dan 172.17.0.0/16 (Docker). URL ACS untuk ONT tetap ${esc(s.acsUrl || "")}.</p>`;
@@ -2793,7 +2844,8 @@ function viewLog(v) {
   v.innerHTML = `
     <div class="ph"><div><h1>Log aktivitas</h1><p>Catatan perubahan di panel dan kejadian penting. Disimpan 90 hari.</p></div></div>
     <div class="card">
-      <div class="toolbar"><div class="search">${ic("search", "")}<input id="lq" type="text" placeholder="Cari aktivitas, router, atau IP" value="${esc(LOGQ)}"></div><span class="muted" id="logCount" style="margin-left:auto;font-size:12.5px"></span></div>
+      <div class="ch"><h2>Riwayat aktivitas</h2><span class="muted" id="logCount" style="font-size:12.5px"></span></div>
+      <div class="toolbar"><div class="search">${ic("search", "")}<input id="lq" type="text" placeholder="Cari aktivitas, router, atau IP" value="${esc(LOGQ)}"></div></div>
       <div id="logBody"><div class="empty"><p>Memuat…</p></div></div>
     </div>
     <p class="help" style="margin-top:12px">Password dan token tidak pernah dicatat. Waktu dalam ${esc(tzLabel())}.</p>`;
