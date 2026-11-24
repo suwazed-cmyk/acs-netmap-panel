@@ -40,7 +40,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "1.7.1";
+const VERSION = "1.7.2";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -596,7 +596,7 @@ function validateSite(d, input, existing) {
   if (overlap(sub, T.cidr)) return `Subnet ONT tidak boleh bentrok dengan jaringan VPN ${T.net}.`;
   const zc = ztCfg(d);
   const zsub = zc && parseCidr(zc.subnet);
-  if (input.transport === "zt" && !zc) return "ZeroTier belum diatur. Buka Pengaturan → ZeroTier dulu.";
+  if (input.transport === "zt" && !zc) return "ZeroTier belum diatur. Buka menu ZeroTier di panel, lalu hubungkan VPS ke jaringan.";
   if (zsub && overlap(sub, zsub)) return `Subnet ONT tidak boleh bentrok dengan jaringan ZeroTier ${zc.subnet}.`;
   if (input.ztNode && !/^[0-9a-f]{10}$/i.test(String(input.ztNode).trim())) return "Node ID ZeroTier harus 10 karakter (0-9, a-f). Lihat di Winbox → ZeroTier.";
   const others = d.sites.filter((s) => s !== existing);
@@ -740,7 +740,7 @@ async function runTestStep(site, key, st) {
     iface = (await onlinePeers())[site.tunnelIp] || "";
   }
   if (key === "zt-join") {
-    if (!st.zt) return { ok: false, detail: "ZeroTier belum diatur di panel", hint: "Buka Pengaturan → ZeroTier, lalu pilih jaringan." };
+    if (!st.zt) return { ok: false, detail: "ZeroTier belum diatur di panel", hint: "Buka menu ZeroTier, pilih jaringan, lalu klik Hubungkan VPS." };
     if (!site.ztNode) return { ok: false, detail: "Router belum dipilih dari daftar yang bergabung", hint: "Pasang script MikroTik, lalu di tab Ringkasan klik Pilih router yang bergabung." };
     const m = await ztApi("GET", `/controller/network/${st.zt.nwid}/member/${site.ztNode}`);
     if (!m.ok) return { ok: false, detail: "Tidak bisa membaca data anggota ZeroTier: " + m.error };
@@ -1063,8 +1063,10 @@ async function ztCheck(d) {
     if (!ip) return "";
     used.add(ip);
     const cur = (M[node] || {}).ipAssignments || [];
-    if (!(cur.length === 1 && cur[0] === ip) || !(M[node] || {}).authorized) {
-      const r = await ztApi("POST", `/controller/network/${z.nwid}/member/${node}`, { authorized: true, ipAssignments: [ip] });
+    // Hanya IP yang disesuaikan. Status izin (authorized) dibiarkan: router yang
+    // sengaja diblokir di ZTNET tidak disetujui ulang oleh panel.
+    if (!(cur.length === 1 && cur[0] === ip)) {
+      const r = await ztApi("POST", `/controller/network/${z.nwid}/member/${node}`, { ipAssignments: [ip] });
       if (!r.ok) return "";
     }
     return ip;
@@ -1207,6 +1209,7 @@ async function ztUnbind(d, site) {
   if (z && site.ztNode) await ztApi("POST", `/controller/network/${z.nwid}/member/${site.ztNode}`, { authorized: false });
   site.ztNode = "";
   site.ztIp = "";
+  delete site.ztStale;
 }
 // Status online router ZeroTier (ping), diperbarui oleh pemantau
 const ZT_ONLINE = new Map();

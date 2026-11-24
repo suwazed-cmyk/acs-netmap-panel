@@ -707,7 +707,7 @@ function issues() {
     list.push({ t: `${off.length} router terputus`, d: names.slice(0, 4).join(", ") + (names.length > 4 ? ` dan ${names.length - 4} lainnya` : ""), go: "#/router/terputus" });
   }
   if (s.zt && s.zt.checkError) list.push({ t: "Jaringan ZeroTier bermasalah", d: s.zt.checkError, go: "#/zerotier" });
-  for (const x of STATE.sites.filter((y) => y.ztStale)) list.push({ t: `${x.name}: pasang ulang script ZeroTier`, d: "IP ZeroTier VPS berubah. Salin script terbaru ke MikroTik.", go: `#/router/${x.id}/script` });
+  for (const x of STATE.sites.filter((y) => y.ztStale && y.transport === "zt")) list.push({ t: `${x.name}: pasang ulang script ZeroTier`, d: "IP ZeroTier VPS berubah. Salin script terbaru ke MikroTik.", go: `#/router/${x.id}/script` });
   const tg = s.telegram || {};
   if (tg.active && tg.lastError) list.push({ t: "Notifikasi Telegram gagal terkirim", d: tg.lastError, go: "#/pengaturan/telegram" });
   const cf = s.cloudflare;
@@ -1101,7 +1101,7 @@ function siteForm(x) {
   const z = STATE.settings.zt, cur = x ? x.transport : "l2tp";
   return `
     <label>Jalur ke VPS</label>
-    <div class="seg"><label><input type="radio" name="fTr" value="l2tp" ${cur !== "zt" ? "checked" : ""}>L2TP</label><label ${z ? "" : 'class="netopt dis" style="margin:0;padding:8px 12px" title="Atur ZeroTier di Pengaturan dulu"'}><input type="radio" name="fTr" value="zt" ${cur === "zt" ? "checked" : ""} ${z ? "" : "disabled"}>ZeroTier</label></div>
+    <div class="seg"><label><input type="radio" name="fTr" value="l2tp" ${cur !== "zt" ? "checked" : ""}>L2TP</label><label ${z ? "" : 'class="netopt dis" style="margin:0;padding:8px 12px" title="Hubungkan VPS ke jaringan di menu ZeroTier dulu"'}><input type="radio" name="fTr" value="zt" ${cur === "zt" ? "checked" : ""} ${z ? "" : "disabled"}>ZeroTier</label></div>
     <div class="help">${z ? "ZeroTier butuh RouterOS v7 dengan paket zerotier (router ARM/ARM64). Router lain pakai L2TP." : 'ZeroTier belum diatur. Buka <a href="#/zerotier">menu ZeroTier</a> untuk mengaktifkan.'}</div>
     <div id="fZtBox" class="${cur === "zt" ? "" : "hidden"}"><label for="fZtNode">Node ID ZeroTier router <span class="muted" style="font-weight:400">(opsional)</span></label>
       <input id="fZtNode" type="text" maxlength="10" placeholder="Bisa dipilih nanti setelah script dipasang" value="${esc(x?.ztNode || "")}"></div>
