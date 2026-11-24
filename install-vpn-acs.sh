@@ -177,7 +177,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "1.5.1";
+const VERSION = "1.6.0";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
 const VIRTUAL_POOL = "10.100.0.0/14";
@@ -193,6 +193,9 @@ const ZT_TOKEN_FILE = ROOT + "/var/lib/zerotier-one/authtoken.secret";
 const ZTNET_DIR = ROOT + "/opt/ztnet";
 const ZTNET_PORT = 3300;
 const ZT_IFACE_MT = "zt-acs"; // nama interface ZeroTier di MikroTik
+// GenieACS NBI (hanya dibaca, untuk menghitung ONT per router)
+const NBI_URL = process.env.VPNACS_NBI || "";
+const GENIE_UNITS = [["genieacs-cwmp", "CWMP (ONT melapor)"], ["genieacs-nbi", "NBI (API)"], ["genieacs-fs", "File server"], ["genieacs-ui", "Web UI"]];
 const SERVICE_PRESETS = {
   winbox: { label: "Winbox", port: 8291, proto: "tcp" },
   webfig: { label: "WebFig", port: 80, proto: "tcp" },
@@ -904,6 +907,90 @@ async function runTestStep(site, key, st) {
 }
 
 // =====================================================================
+//  GenieACS: status layanan, patch, dan ONT per router (hanya baca)
+// =====================================================================
+function readGenieEnv(key) {
+  try {
+    const m = fs.readFileSync(GENIE_ENV, "utf8").match(new RegExp("^" + key + "=(.*)$", "m"));
+    return m ? m[1].trim() : "";
+  } catch (e) {
+    return null;
+  }
+}
+function genieVersion() {
+  for (const p of ["/opt/genieacs-app/package.json", "/usr/lib/node_modules/genieacs/package.json", "/usr/local/lib/node_modules/genieacs/package.json"]) {
+    const j = readJson(ROOT + p, null);
+    if (j && j.version) return j.version + (p.startsWith("/opt/genieacs-app") ? " (patch IP virtual)" : "");
+  }
+  return "";
+}
+function crHost(doc) {
+  const get = (o, path) => path.split(".").reduce((a, k) => (a && a[k] !== undefined ? a[k] : undefined), o);
+  const v = get(doc, "InternetGatewayDevice.ManagementServer.ConnectionRequestURL._value") || get(doc, "Device.ManagementServer.ConnectionRequestURL._value") || "";
+  const m = String(v).match(/^[a-z]+:\/\/(?:[^@/]*@)?([0-9.]+)/i);
+  return m ? m[1] : "";
+}
+let GENIE_CACHE = { t: 0, data: null };
+async function genieDevices() {
+  if (GENIE_CACHE.data && Date.now() - GENIE_CACHE.t < 60000) return GENIE_CACHE.data;
+  const port = readGenieEnv("GENIEACS_NBI_PORT") || "7557";
+  const base = NBI_URL || `http://127.0.0.1:${port}`;
+  const proj = ["_id", "_lastInform", "InternetGatewayDevice.ManagementServer.ConnectionRequestURL", "Device.ManagementServer.ConnectionRequestURL"].join(",");
+  const r = await httpJson("GET", `${base}/devices/?projection=${encodeURIComponent(proj)}`, null, null, 20000);
+  if (r.status !== 200 || !Array.isArray(r.json)) {
+    return { error: r.status === 0 ? `GenieACS NBI tidak menjawab (${r.error})` : `GenieACS NBI menolak (HTTP ${r.status})` };
+  }
+  const data = { devices: r.json.map((d) => ({ id: d._id, last: d._lastInform ? Date.parse(d._lastInform) : 0, ip: crHost(d) })) };
+  GENIE_CACHE = { t: Date.now(), data };
+  return data;
+}
+async function genieStatus(d) {
+  const st = settings(d);
+  const services = [];
+  for (const [unit, label] of GENIE_UNITS) {
+    const r = await run("systemctl", ["is-active", unit]);
+    const out = r.out.trim();
+    services.push({ unit, label, active: r.code === 0 && (out === "" || out === "active"), state: out || (r.code === 0 ? "active" : "tidak ada") });
+  }
+  const dev = await genieDevices();
+  const now = Date.now();
+  const HOUR = 3600 * 1000;
+  const per = d.sites.map((s) => ({ id: s.id, name: s.name, transport: isZt(s) ? "zt" : "l2tp", virtualSubnet: s.virtualSubnet, total: 0, active: 0, last: 0 }));
+  const other = { total: 0, active: 0, last: 0 };
+  let total = 0;
+  let active = 0;
+  if (!dev.error) {
+    const subs = d.sites.map((s) => parseCidr(s.virtualSubnet));
+    for (const x of dev.devices) {
+      total++;
+      const on = x.last && now - x.last < HOUR;
+      if (on) active++;
+      const i = x.ip ? subs.findIndex((c) => inSubnet(x.ip, c)) : -1;
+      const row = i >= 0 ? per[i] : other;
+      row.total++;
+      if (on) row.active++;
+      if (x.last > row.last) row.last = x.last;
+    }
+  }
+  const cidr = st.genieCidr;
+  return {
+    installed: cidr !== null || services.some((x) => x.active),
+    version: genieVersion(),
+    services,
+    patch: { cidr, active: cidr !== null && !!cidr, outside: d.sites.filter((s) => insideGenie(s.virtualSubnet, cidr) === false).map((s) => ({ id: s.id, name: s.name, virtualSubnet: s.virtualSubnet })) },
+    url: genieUrl(d, st.publicIp),
+    urlManual: (d.settings && d.settings.genieUrl) || "",
+    subdomain: (d.settings && d.settings.subdomains && d.settings.subdomains.acs && d.settings.subdomains.acs.host) || "",
+    acsUrl: `http://${st.tun.local}:${ACS_PORT}`,
+    devicesError: dev.error || "",
+    totals: { total, active, idle: total - active, other: other.total },
+    perRouter: per,
+    other,
+    cachedAt: GENIE_CACHE.t,
+  };
+}
+
+// =====================================================================
 //  ZeroTier: controller lokal di VPS (dipakai bersama ZTNET)
 // =====================================================================
 function ztToken() {
@@ -986,6 +1073,29 @@ async function ztStatus(d) {
       iface: j.ok ? j.json.portDeviceName || z.iface : "",
       sites: d.sites.filter(isZt).length,
     });
+    // Semua anggota jaringan: VPS, router panel, dan perangkat lain
+    const mi = await ztMemberIps(z.nwid);
+    const peers = await ztApi("GET", "/peer");
+    const pmap = {};
+    if (peers.ok) for (const p of peers.json || []) pmap[p.address] = p;
+    out.members = [];
+    for (const [id, m] of Object.entries(mi.members || {})) {
+      const site = d.sites.find((s) => s.ztNode === id);
+      const p = pmap[id];
+      const path = p && (p.paths || []).find((x) => x.active || x.preferred);
+      out.members.push({
+        node: id,
+        role: id === z.vpsNode ? "vps" : site ? "router" : "other",
+        name: id === z.vpsNode ? "VPS (panel ini)" : site ? site.name : "",
+        siteId: site ? site.id : "",
+        authorized: !!m.authorized,
+        ips: m.ipAssignments || [],
+        online: id === z.vpsNode ? true : site ? !!ZT_ONLINE.get(site.id) : !!path,
+        physical: path ? String(path.address).split("/")[0] : "",
+      });
+    }
+    const order = { vps: 0, router: 1, other: 2 };
+    out.members.sort((a, b) => order[a.role] - order[b.role] || (a.name || a.node).localeCompare(b.name || b.node));
   }
   return out;
 }
@@ -2403,6 +2513,12 @@ async function handleApi(req, res, url) {
     return send(res, 200, { ok: true });
   }
 
+  // --- GenieACS ---
+  if (p === "/api/genie" && method === "GET") {
+    if (url.searchParams.get("refresh") === "1") GENIE_CACHE.t = 0;
+    return send(res, 200, await genieStatus(loadData()));
+  }
+
   // --- ZeroTier ---
   if (p === "/api/zt" && method === "GET") {
     return send(res, 200, await ztStatus(loadData()));
@@ -2965,6 +3081,7 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .kv:last-child{border-bottom:0}
   .kv span{color:var(--muted)}
   .kv b{font-weight:500;font-family:var(--mono);font-size:13px;text-align:right;word-break:break-all}
+  .kv b .pill{font-family:var(--font)}
   .copy{border:0;background:none;color:var(--muted);padding:2px;border-radius:5px;display:inline-grid;place-items:center}
   .copy:hover{color:var(--primary);background:var(--primary-soft)}
   .copy svg{width:15px;height:15px}
@@ -3246,6 +3363,8 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
     <div class="brand"><span class="brand-mark" data-ic="shield"></span><span><b>VPN ACS</b><small>Control Panel</small></span></div>
     <button class="nav" data-go="#/"><span data-ic="home"></span>Dashboard</button>
     <button class="nav" data-go="#/router"><span data-ic="router"></span>Router</button>
+    <button class="nav" data-go="#/genieacs"><span data-ic="box"></span>GenieACS</button>
+    <button class="nav" data-go="#/zerotier"><span data-ic="hub"></span>ZeroTier</button>
     <button class="nav" data-go="#/pengaturan"><span data-ic="gear"></span>Pengaturan</button>
     <button class="nav" data-go="#/panduan"><span data-ic="book"></span>Panduan</button>
     <button class="nav" data-go="#/log"><span data-ic="list"></span>Log aktivitas</button>
@@ -3310,6 +3429,7 @@ const ICONS = {
   play: '<path d="M7 5l12 7-12 7z"/>',
   wifi_off: '<path d="M2 2l20 20M8.5 16.5a5 5 0 0 1 7 0M5 12.9a10 10 0 0 1 5.2-2.8M19 12.9a10 10 0 0 0-2-1.4M12 20h.01"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  box: '<path d="M21 8l-9-5-9 5v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
   hub: '<circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M12 7.2v4.3M12 11.5l-5.5 4.6M12 11.5l5.5 4.6"/>',
   bolt: '<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',
   share: '<path d="M4 12h11M11 8l4 4-4 4"/><rect x="15" y="5" width="6" height="14" rx="2"/>',
@@ -3460,6 +3580,7 @@ function route() {
   if (!LOADED) return;
   let h = location.hash || "#/";
   if (/^#\/(lokasi|server)(\/|$)/.test(h)) { h = h.replace(/^#\/(lokasi|server)/, "#/router"); history.replaceState(null, "", h); }
+  if (/^#\/pengaturan\/zerotier/.test(h)) { h = "#/zerotier"; history.replaceState(null, "", h); }
   const parts = h.replace(/^#\/?/, "").split("/").filter(Boolean);
   document.querySelectorAll(".nav[data-go]").forEach((n) => {
     const g = n.dataset.go.replace(/^#\/?/, "");
@@ -3482,6 +3603,8 @@ function route() {
   else if (parts[0] === "router") { viewList(v); title = "Router"; }
   else if (parts[0] === "panduan") { viewGuide(v); title = "Panduan"; }
   else if (parts[0] === "pengaturan") { viewSettings(v, parts[1] || "umum"); title = "Pengaturan"; }
+  else if (parts[0] === "genieacs") { viewGenie(v); title = "GenieACS"; }
+  else if (parts[0] === "zerotier") { viewZerotier(v); title = "ZeroTier"; }
   else if (parts[0] === "log") { viewLog(v); title = "Log aktivitas"; }
   else { viewDashboard(v); }
   document.title = `${title} · VPN ACS`;
@@ -3497,7 +3620,7 @@ window.addEventListener("hashchange", route);
 function issues() {
   const s = STATE.settings, list = [];
   if (!s.publicIp) list.push({ t: "Alamat VPS belum diisi", d: "Script MikroTik membutuhkan alamat VPS.", go: "#/pengaturan" });
-  if (s.genieCidr !== null && !genieOk(s.genieCidr)) list.push({ t: "Patch IP virtual GenieACS belum aktif", d: "Summon ke ONT akan gagal.", go: "#/pengaturan" });
+  if (s.genieCidr !== null && !genieOk(s.genieCidr)) list.push({ t: "Patch IP virtual GenieACS belum aktif", d: "Summon ke ONT akan gagal.", go: "#/genieacs" });
   const off = STATE.sites.filter((x) => x.state === "down");
   if (off.length === 1) list.push({ t: `${off[0].name} terputus`, d: off[0].downSince ? `Sejak ${fmtT(off[0].downSince, true)} (${fmtDur(Date.now() - off[0].downSince)}). Klik untuk tes koneksi.` : "Klik untuk tes koneksi.", go: `#/router/${off[0].id}/tes` });
   else if (off.length > 1) {
@@ -3575,7 +3698,7 @@ function serverKv() {
   const https = s.cloudflare && s.cloudflare.https ? "Aktif" : "Tidak";
   const genie = s.genieUrl
     ? `<div class="kv"><span>GenieACS</span><b><a class="ext" href="${esc(s.genieUrl)}" target="_blank" rel="noopener" title="Buka GenieACS di tab baru">${esc(s.genieUrl.replace(/^https?:\/\//, ""))}${ic("ext", "")}</a></b></div>`
-    : `<div class="kv"><span>GenieACS</span><b><a href="#/pengaturan/umum">Atur alamat</a></b></div>`;
+    : `<div class="kv"><span>GenieACS</span><b><a href="#/genieacs">Atur alamat</a></b></div>`;
   const ztnet = s.ztnetUrl ? `<div class="kv"><span>ZTNET</span><b><a class="ext" href="${esc(s.ztnetUrl)}" target="_blank" rel="noopener" title="Buka ZTNET di tab baru">${esc(s.ztnetUrl.replace(/^https?:\/\//, ""))}${ic("ext", "")}</a></b></div>` : "";
   const zt = s.zt ? `${s.zt.name || s.zt.nwid} · ${s.zt.vpsIp}` : "Tidak dipakai";
   return genie + ztnet + [["Alamat VPS", s.publicIp || "—"], ["URL ACS ONT", s.acsUrl || "—"], ["Jaringan VPN", s.tunnelNet || "—"], ["ZeroTier", zt], ["Patch GenieACS", g], ["Notifikasi Telegram", tgs], ["HTTPS panel", https]]
@@ -3894,7 +4017,7 @@ function siteForm(x) {
   return `
     <label>Jalur ke VPS</label>
     <div class="seg"><label><input type="radio" name="fTr" value="l2tp" ${cur !== "zt" ? "checked" : ""}>L2TP</label><label ${z ? "" : 'class="netopt dis" style="margin:0;padding:8px 12px" title="Atur ZeroTier di Pengaturan dulu"'}><input type="radio" name="fTr" value="zt" ${cur === "zt" ? "checked" : ""} ${z ? "" : "disabled"}>ZeroTier</label></div>
-    <div class="help">${z ? "ZeroTier butuh RouterOS v7 dengan paket zerotier (router ARM/ARM64). Router lain pakai L2TP." : 'ZeroTier belum diatur. Buka <a href="#/pengaturan/zerotier">Pengaturan → ZeroTier</a> untuk mengaktifkan.'}</div>
+    <div class="help">${z ? "ZeroTier butuh RouterOS v7 dengan paket zerotier (router ARM/ARM64). Router lain pakai L2TP." : 'ZeroTier belum diatur. Buka <a href="#/zerotier">menu ZeroTier</a> untuk mengaktifkan.'}</div>
     <div id="fZtBox" class="${cur === "zt" ? "" : "hidden"}"><label for="fZtNode">Node ID ZeroTier router <span class="muted" style="font-weight:400">(opsional)</span></label>
       <input id="fZtNode" type="text" maxlength="10" placeholder="Bisa dipilih nanti setelah script dipasang" value="${esc(x?.ztNode || "")}"></div>
     <label for="fName">Nama router</label>
@@ -3996,7 +4119,7 @@ function viewGuide(v) {
     <div class="card"><div class="ch"><h2>Router lewat ZeroTier (opsional)</h2></div><div class="cb"><ol class="ol">
       <li><b>Pasang ZTNET di VPS</b>Jalankan <code>bash pasang-ztnet.sh</code> dari folder <code>suwazed-panel</code>. Web ZTNET berjalan di port 3300.</li>
       <li><b>Buat jaringan di ZTNET</b>Networks → Create Network, lalu atur rentang IPv4, misalnya <code>172.27.0.0/24</code>.</li>
-      <li><b>Hubungkan VPS</b>Pengaturan → ZeroTier → pilih jaringan → Hubungkan VPS.</li>
+      <li><b>Hubungkan VPS</b>Menu ZeroTier → pilih jaringan → Hubungkan VPS.</li>
       <li><b>Tambah router dengan jalur ZeroTier</b>Pasang script di MikroTik (RouterOS v7, router ARM/ARM64), lalu di tab Ringkasan klik <b>Pilih router yang bergabung</b>.</li>
     </ol><p class="help">URL ACS di ONT tetap sama (<code>${esc(s.acsUrl || "")}</code>), baik lewat L2TP maupun ZeroTier. Router MIPS (hAP lite, hEX, RB951) tetap memakai L2TP.</p></div></div>
     <div class="card"><div class="ch"><h2>Remote MikroTik dari mana saja</h2></div><div class="cb"><ol class="ol">
@@ -4021,7 +4144,7 @@ function viewGuide(v) {
 }
 
 /* ================= Pengaturan ================= */
-const SET_TABS = [["umum", "Umum", "sliders"], ["zerotier", "ZeroTier", "hub"], ["telegram", "Notifikasi Telegram", "send"], ["domain", "Domain & HTTPS", "globe"]];
+const SET_TABS = [["umum", "Umum", "sliders"], ["telegram", "Notifikasi Telegram", "send"], ["domain", "Domain & HTTPS", "globe"]];
 function viewSettings(v, tab) {
   if (!SET_TABS.some(([k]) => k === tab)) tab = "umum";
   crumb([["Pengaturan", "#/pengaturan"], [SET_TABS.find(([k]) => k === tab)[1]]]);
@@ -4031,26 +4154,16 @@ function viewSettings(v, tab) {
     <div id="setBody"></div>`;
   const b = $("#setBody");
   if (tab === "telegram") setTelegram(b);
-  else if (tab === "zerotier") setZerotier(b);
   else if (tab === "domain") setDomain(b);
   else setGeneral(b);
 }
 function setGeneral(b) {
   const s = STATE.settings;
-  const g = s.genieCidr === null ? { c: "info", t: "GenieACS tidak ditemukan di VPS ini", d: "Abaikan jika GenieACS dipasang di router lain." }
-    : genieOk(s.genieCidr) ? { c: "ok", t: "Patch IP virtual aktif", d: `GENIEACS_CR_USE_REMOTE_ADDRESS = ${s.genieCidr}` }
-    : { c: "warn", t: "Patch IP virtual belum aktif", d: `Nilai sekarang: ${s.genieCidr || "(kosong)"}. Jalankan genieacs-virtualip.sh.` };
   b.innerHTML = `
     <div class="card"><div class="ch"><h2>VPS</h2></div><form class="cb" id="vpsForm" style="padding-top:4px">
       <label for="sIp">Alamat VPS</label>
       <input id="sIp" type="text" placeholder="103.20.30.40 atau vpn.domain.com" value="${esc(s.publicIp || "")}">
       <div class="help">Dipakai sebagai <i>connect-to</i> di MikroTik.${s.cloudflare ? ` Saat ini diatur lewat <a href="#/pengaturan/domain">Domain &amp; HTTPS</a>.` : ""}</div>
-      <label for="sGenie">Alamat GenieACS <span class="muted" style="font-weight:400">(opsional)</span></label>
-      <input id="sGenie" type="text" placeholder="${esc(s.genieUrlManual ? "" : s.genieUrl || "http://acs.domain.com:3000")}" value="${esc(s.genieUrlManual || "")}">
-      <div class="help">Ditampilkan sebagai link di dashboard. Kosongkan untuk otomatis (alamat VPS + port GenieACS).</div>
-      <label for="sZtnet">Alamat ZTNET <span class="muted" style="font-weight:400">(opsional)</span></label>
-      <input id="sZtnet" type="text" placeholder="${esc(s.ztnetUrlManual ? "" : s.ztnetUrl || "http://zt.domain.com:3300")}" value="${esc(s.ztnetUrlManual || "")}">
-      <div class="help">Web pengelola ZeroTier. Kosongkan untuk otomatis (alamat VPS + port 3300).</div>
       <label for="sTz">Zona waktu</label>
       <select id="sTz">${(s.timezones || []).map((z) => `<option value="${z.id}" ${z.id === tzId() ? "selected" : ""}>${z.label} (${z.id})</option>`).join("")}</select>
       <div class="help">Untuk jam di riwayat, log aktivitas, dan pesan Telegram.</div>
@@ -4060,9 +4173,6 @@ function setGeneral(b) {
       <div class="err" id="vpsErr"></div>
       <div class="form-actions"><button class="btn pri">Simpan</button></div>
     </form></div>
-    <div class="card"><div class="ch"><h2>GenieACS</h2></div><div class="cb">
-      <div class="note ${g.c}" style="margin:0">${ic(g.c === "ok" ? "check" : g.c === "warn" ? "alert" : "info")}<div><b>${esc(g.t)}</b>${esc(g.d)}</div></div>
-    </div></div>
     <div class="card"><div class="ch"><h2>Jaringan VPN (L2TP)</h2></div>
       <div class="kv"><span>Jaringan</span><b>${esc(s.tunnelNet || "")}</b></div>
       <div class="kv"><span>IP VPS (URL ACS)</span><b>${esc(s.tunnelLocal || "")}</b></div>
@@ -4087,7 +4197,7 @@ function setGeneral(b) {
     e.preventDefault(); $("#vpsErr").textContent = "";
     const changed = $("#sIpsec").checked !== !!s.useIpsec;
     const btn = e.submitter || $("#vpsForm button"); busyBtn(btn, true);
-    try { await api("/api/settings", { method: "PUT", body: { publicIp: $("#sIp").value, genieUrl: $("#sGenie").value, ztnetUrl: $("#sZtnet").value, useIpsec: $("#sIpsec").checked, timezone: $("#sTz").value } }); await load(); route(); doneDialog("Pengaturan disimpan", changed ? "IPsec diubah. Pasang ulang script di semua MikroTik." : "", "ok", !changed); }
+    try { await api("/api/settings", { method: "PUT", body: { publicIp: $("#sIp").value, useIpsec: $("#sIpsec").checked, timezone: $("#sTz").value } }); await load(); route(); doneDialog("Pengaturan disimpan", changed ? "IPsec diubah. Pasang ulang script di semua MikroTik." : "", "ok", !changed); }
     catch (err) { $("#vpsErr").textContent = err.message; busyBtn(btn, false); }
   };
   $("#tunForm").onsubmit = (e) => {
@@ -4109,13 +4219,94 @@ function setGeneral(b) {
   };
 }
 
+/* ================= GenieACS ================= */
+function viewGenie(v) {
+  crumb([["GenieACS"]]);
+  const s = STATE.settings;
+  v.innerHTML = `
+    <div class="ph"><div><h1>GenieACS</h1><p>Status layanan, patch IP virtual, dan ONT yang melapor dari setiap router.</p></div>
+      <div class="acts">${s.genieUrl ? `<a class="btn" href="${esc(s.genieUrl)}" target="_blank" rel="noopener">${ic("ext")}Buka GenieACS</a>` : ""}</div></div>
+    <div id="gBody"><div class="card"><div class="empty"><p>Membaca data GenieACS…</p></div></div></div>`;
+  fillGenie(false);
+}
+async function fillGenie(refresh) {
+  const b = $("#gBody"); if (!b) return;
+  let g;
+  try { g = await api("/api/genie" + (refresh ? "?refresh=1" : "")); } catch (e) { b.innerHTML = `<div class="note bad">${ic("alert")}<div><b>Gagal membaca GenieACS</b>${esc(e.message)}</div></div>`; return; }
+  if (!$("#gBody") || !location.hash.startsWith("#/genieacs")) return;
+  const s = STATE.settings, T = g.totals;
+  const rows = g.perRouter.slice().sort((a, b2) => b2.total - a.total || a.name.localeCompare(b2.name, "id"));
+  const ago = (t) => (t ? fmtDur(Date.now() - t) + " lalu" : "—");
+  const patch = g.patch.cidr === null ? { c: "info", t: "GenieACS tidak ditemukan di VPS ini", d: "Abaikan jika GenieACS dipasang di server lain." }
+    : g.patch.active ? { c: "ok", t: "Patch IP virtual aktif", d: `Rentang: ${g.patch.cidr}` }
+    : { c: "warn", t: "Patch IP virtual belum aktif", d: "Summon ke ONT akan gagal. Jalankan genieacs-virtualip.sh." };
+  b.innerHTML = `
+    <div class="kpis">
+      <div class="kpi"><span>Total ONT</span><b>${g.devicesError ? "—" : T.total}</b><small>terdaftar di GenieACS</small></div>
+      <div class="kpi"><span><i class="dot ok"></i>Melapor</span><b>${g.devicesError ? "—" : T.active}</b><small>dalam 1 jam terakhir</small></div>
+      <div class="kpi"><span><i class="dot bad"></i>Tidak melapor</span><b>${g.devicesError ? "—" : T.idle}</b><small>lebih dari 1 jam</small></div>
+      <div class="kpi"><span>Tanpa router</span><b>${g.devicesError ? "—" : T.other}</b><small>IP tidak cocok dengan router panel</small></div>
+    </div>
+    <div class="grid-dash">
+      <div class="card">
+        <div class="ch"><h2>ONT per router</h2><button class="btn sm ghost" id="gRefresh" title="Baca ulang dari GenieACS">${ic("refresh")}Perbarui</button></div>
+        ${g.devicesError ? `<div class="cb"><div class="note warn" style="margin:0">${ic("alert")}<div><b>Data ONT tidak bisa dibaca</b>${esc(g.devicesError)}</div></div></div>`
+          : !rows.length ? `<div class="empty"><p>Belum ada router.</p></div>`
+          : `<table class="t"><thead><tr><th>Router</th><th class="r">ONT</th><th class="r">Melapor</th><th class="r hide-sm">Terakhir lapor</th></tr></thead><tbody>
+            ${rows.map((r) => `<tr class="click" data-go="#/router/${r.id}"><td><b style="font-weight:550">${esc(r.name)}</b>${r.transport === "zt" ? ' <span class="tag">ZT</span>' : ""}<div class="muted mono" style="font-size:12px">${esc(r.virtualSubnet)}</div></td>
+              <td class="r pc">${r.total}</td><td class="r pc ${r.total && r.active < r.total ? "warn" : ""}">${r.active}</td><td class="r muted hide-sm">${ago(r.last)}</td></tr>`).join("")}
+            ${g.other.total ? `<tr><td><span class="muted">Tanpa router</span><div class="muted" style="font-size:12px">IP di luar IP virtual router panel</div></td><td class="r pc">${g.other.total}</td><td class="r pc">${g.other.active}</td><td class="r muted hide-sm">${ago(g.other.last)}</td></tr>` : ""}
+          </tbody></table>`}
+        <div class="cb" style="border-top:1px solid var(--line);padding:12px 20px"><span class="help" style="margin:0">ONT dikelompokkan menurut IP virtual di ConnectionRequestURL. Diperbarui tiap 1 menit${g.cachedAt ? ` · dibaca ${esc(fmtT(g.cachedAt))}` : ""}.</span></div>
+      </div>
+      <div class="stack">
+        <div class="card"><div class="ch"><h2>Layanan</h2>${g.version ? `<span class="muted mono" style="font-size:12px">v${esc(g.version)}</span>` : ""}</div>
+          ${g.services.map((x) => `<div class="kv"><span>${esc(x.label)}</span><b>${x.active ? `<span class="pill ok">Berjalan</span>` : `<span class="pill bad">${esc(x.state === "tidak ada" ? "Tidak ada" : "Mati")}</span>`}</b></div>`).join("")}
+        </div>
+        <div class="card"><div class="ch"><h2>Patch IP virtual</h2></div><div class="cb">
+          <div class="note ${patch.c}" style="margin:0">${ic(patch.c === "ok" ? "check" : patch.c === "warn" ? "alert" : "info")}<div><b>${esc(patch.t)}</b>${esc(patch.d)}</div></div>
+          ${g.patch.outside.length ? `<div class="note warn" style="margin:12px 0 0">${ic("alert")}<div><b>${g.patch.outside.length} router di luar rentang patch</b>${g.patch.outside.map((o) => `<a href="#/router/${o.id}">${esc(o.name)}</a> (${esc(o.virtualSubnet)})`).join(", ")}</div></div>` : ""}
+        </div></div>
+        <div class="card"><div class="ch"><h2>Alamat</h2></div>
+          <div class="kv"><span>GenieACS UI</span><b>${g.url ? `<a class="ext" href="${esc(g.url)}" target="_blank" rel="noopener">${esc(g.url.replace(/^https?:\/\//, ""))}${ic("ext", "")}</a>` : "—"}</b></div>
+          <div class="kv"><span>Subdomain</span><b>${g.subdomain ? esc(g.subdomain) : s.cloudflare ? `<a href="#/pengaturan/domain">Buat subdomain</a>` : "—"}</b></div>
+          <div class="kv"><span>URL ACS untuk ONT</span><b>${esc(g.acsUrl)} ${copyBtn(g.acsUrl, "URL ACS tersalin")}</b></div>
+          <form class="cb" id="genieForm" style="border-top:1px solid var(--line)">
+            <label for="sGenie" style="margin-top:0">Alamat GenieACS UI</label>
+            <input id="sGenie" type="text" placeholder="${esc(g.urlManual ? "" : g.url || "http://acs.domain.com:3000")}" value="${esc(g.urlManual)}">
+            <div class="help">Kosongkan untuk otomatis (alamat VPS + port GenieACS).</div>
+            <div class="err" id="genieErr"></div>
+            <div class="form-actions"><button class="btn pri">Simpan</button></div>
+          </form>
+        </div>
+      </div>
+    </div>`;
+  paintIcons(b);
+  $("#gRefresh") && ($("#gRefresh").onclick = async () => { busyBtn($("#gRefresh"), true); await fillGenie(true); });
+  $("#genieForm").onsubmit = async (e) => {
+    e.preventDefault(); $("#genieErr").textContent = "";
+    const btn = $("#genieForm button"); busyBtn(btn, true);
+    try { await api("/api/settings", { method: "PUT", body: { genieUrl: $("#sGenie").value } }); await load(); route(); doneDialog("Alamat GenieACS disimpan", ""); }
+    catch (err) { $("#genieErr").textContent = err.message; busyBtn(btn, false); }
+  };
+}
+
 /* ---------- ZeroTier ---------- */
 let ZTPICK = false; // sedang memilih jaringan lain
+function viewZerotier(v) {
+  crumb([["ZeroTier"]]);
+  const s = STATE.settings;
+  v.innerHTML = `
+    <div class="ph"><div><h1>ZeroTier</h1><p>Jaringan ZeroTier untuk router yang tersambung ke GenieACS lewat ZeroTier.</p></div>
+      <div class="acts">${s.ztnetUrl ? `<a class="btn" href="${esc(s.ztnetUrl)}" target="_blank" rel="noopener">${ic("ext")}Buka ZTNET</a>` : ""}</div></div>
+    <div id="ztBody"></div>`;
+  setZerotier($("#ztBody"));
+}
 async function setZerotier(b) {
   b.innerHTML = `<div class="card"><div class="empty"><p>Memeriksa ZeroTier di VPS…</p></div></div>`;
   let z;
   try { z = await api("/api/zt"); } catch (e) { b.innerHTML = `<div class="note bad">${ic("alert")}<div><b>Gagal memeriksa ZeroTier</b>${esc(e.message)}</div></div>`; return; }
-  if (!location.hash.startsWith("#/pengaturan/zerotier")) return;
+  if (!location.hash.startsWith("#/zerotier")) return;
   const s = STATE.settings;
   if (!z.installed) {
     b.innerHTML = `
@@ -4133,7 +4324,7 @@ async function setZerotier(b) {
   const showPick = !cur || ZTPICK;
   b.innerHTML = `
     ${cur ? `<div class="note ${cur.status === "OK" ? "ok" : "warn"}">${ic(cur.status === "OK" ? "check" : "alert")}<div><b>${cur.status === "OK" ? "ZeroTier aktif untuk GenieACS" : "VPS belum tersambung ke jaringan ZeroTier"}</b>Jaringan ${esc(cur.name || cur.nwid)} · status ${esc(cur.status || "-")}${cur.sites ? ` · ${cur.sites} router memakai ZeroTier` : ""}</div></div>` : ""}
-    <div class="card"><div class="ch"><h2>Controller ZeroTier di VPS</h2>${s.ztnetUrl ? `<a class="btn sm" href="${esc(s.ztnetUrl)}" target="_blank" rel="noopener">${ic("ext")}Buka ZTNET</a>` : ""}</div>
+    <div class="card"><div class="ch"><h2>Controller ZeroTier di VPS</h2></div>
       <div class="kv"><span>Node ID VPS</span><b>${esc(z.node || "—")}</b></div>
       <div class="kv"><span>Versi</span><b>${esc(z.version || "—")}</b></div>
       <div class="kv"><span>Status</span><b>${z.online ? "Online" : "Offline"}</b></div>
@@ -4158,7 +4349,28 @@ async function setZerotier(b) {
       <div class="err" id="ztErr"></div>
       <div class="form-actions"><button class="btn pri" id="ztUse" ${z.networks.length ? "" : "disabled"}>${ic("hub")}Hubungkan VPS</button>${cur ? `<button class="btn" id="ztCancel">Batal</button>` : ""}<button class="btn ghost" id="ztRe">${ic("refresh")}Muat ulang</button></div>
     </div></div>` : ""}
+    ${cur && z.members ? `<div class="card"><div class="ch"><h2>Anggota jaringan</h2><span class="muted" style="font-size:12.5px">${z.members.length} perangkat</span></div>
+      <table class="t"><thead><tr><th>Perangkat</th><th>Node ID</th><th>IP ZeroTier</th><th class="hide-sm">Asal</th><th class="r">Status</th></tr></thead><tbody>
+      ${z.members.map((m) => `<tr${m.siteId ? ` class="click" data-go="#/router/${m.siteId}"` : ""}>
+        <td>${m.role === "vps" ? `<b style="font-weight:550">VPS</b> <span class="tag gray">panel ini</span>` : m.role === "router" ? `<b style="font-weight:550">${esc(m.name)}</b> <span class="tag">Router</span>` : `<span class="muted">Perangkat lain</span>`}</td>
+        <td class="mono">${esc(m.node)}</td><td class="mono">${esc((m.ips || []).join(", ") || "—")}</td>
+        <td class="hide-sm mono muted">${esc(m.physical || "—")}</td>
+        <td class="r">${!m.authorized ? `<span class="pill wait">Belum disetujui</span>` : m.online ? `<span class="pill ok">Online</span>` : `<span class="pill bad">Offline</span>`}</td></tr>`).join("")}
+      </tbody></table></div>` : ""}
+    <div class="card"><div class="ch"><h2>Alamat ZTNET</h2></div><form class="cb" id="ztnetForm" style="padding-top:4px">
+      <label for="sZtnet">Alamat web ZTNET</label>
+      <input id="sZtnet" type="text" placeholder="${esc(s.ztnetUrlManual ? "" : s.ztnetUrl || "http://zt.domain.com:3300")}" value="${esc(s.ztnetUrlManual || "")}">
+      <div class="help">Link "Buka ZTNET" dan di dashboard. Kosongkan untuk otomatis (alamat VPS + port 3300).${s.cloudflare ? ` Subdomain bisa dibuat di <a href="#/pengaturan/domain">Domain &amp; HTTPS</a>.` : ""}</div>
+      <div class="err" id="ztnetErr"></div>
+      <div class="form-actions"><button class="btn pri">Simpan</button></div>
+    </form></div>
     <p class="help" style="margin-top:12px">Rentang IP jaringan ZeroTier tidak boleh bentrok dengan ${esc(s.tunnelNet || "")} (L2TP), ${esc(s.virtualPool || "")} (IP virtual), subnet ONT, dan 172.17.0.0/16 (Docker).</p>`;
+  $("#ztnetForm").onsubmit = async (e) => {
+    e.preventDefault(); $("#ztnetErr").textContent = "";
+    const btn = $("#ztnetForm button"); busyBtn(btn, true);
+    try { await api("/api/settings", { method: "PUT", body: { ztnetUrl: $("#sZtnet").value } }); await load(); route(); doneDialog("Alamat ZTNET disimpan", ""); }
+    catch (err) { $("#ztnetErr").textContent = err.message; busyBtn(btn, false); }
+  };
   const sw = $("#ztSwitch"); if (sw) sw.onclick = () => { ZTPICK = true; setZerotier(b); };
   const cc = $("#ztCancel"); if (cc) cc.onclick = () => { ZTPICK = false; setZerotier(b); };
   const re = $("#ztRe"); if (re) re.onclick = () => setZerotier(b);
@@ -4556,7 +4768,7 @@ paintIcons();
     if ($("#appView").classList.contains("hidden") || $("#mbg") || TEST) return;
     const h = location.hash;
     if (CF && CF.running) return;
-    try { await load(); if (!/\/(tes|port)$|^#\/(pengaturan|log)/.test(h) && !document.activeElement.matches("input,select")) route(); } catch (e) {}
+    try { await load(); if (!/\/(tes|port)$|^#\/(pengaturan|log|genieacs|zerotier)/.test(h) && !document.activeElement.matches("input,select")) route(); } catch (e) {}
   }, 30000);
 })();
 </script>

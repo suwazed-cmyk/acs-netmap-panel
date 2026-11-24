@@ -129,8 +129,7 @@ Menu **Pengaturan**:
 1. **Alamat VPS**: IP publik atau domain VPS → Simpan
 2. **Pakai IPsec**: biarkan mati (L2TP biasa)
 3. **Jaringan VPN (L2TP)**: tentukan **sekarang** (default `192.168.42.0/24`). Mengganti belakangan berarti URL ACS di semua ONT ikut berubah.
-4. **Patch IP virtual GenieACS** harus berstatus **Aktif**
-5. **Alamat GenieACS** (opsional): link GenieACS di dashboard. Kosongkan untuk otomatis (`http://alamat-VPS:3000`).
+4. Menu **GenieACS**: **Patch IP virtual** harus berstatus **Aktif** dan keempat layanan **Berjalan**. Di halaman ini juga terlihat **jumlah ONT per router** (berapa yang melapor dalam 1 jam terakhir) dan isian **Alamat GenieACS UI** (opsional, kosong = otomatis `http://alamat-VPS:3000`).
 
 ### 8b. Notifikasi Telegram (opsional)
 Menu **Pengaturan → Notifikasi Telegram**:
@@ -167,7 +166,7 @@ Router **ARM/ARM64 dengan RouterOS v7** (paket `zerotier`) bisa tersambung ke VP
    ```
    Script ini memeriksa Node.js dan RAM (menawarkan swap 2 GB bila perlu), memindahkan port ZTNET ke 3300 agar tidak bentrok dengan GenieACS (3000), lalu menjalankan installer resmi ZTNET. Saat ditanya alamat, isi subdomain sendiri, misalnya `zt.inetwifi.xyz`. Saat ditanya kirim laporan error, jawab `No`.
 2. Buka `http://zt.domain-anda:3300` dan **segera daftar** (akun pertama menjadi admin). Buat jaringan di **Networks → Create Network**, lalu atur rentang IPv4, misalnya `172.27.0.0/24`. Rentang ini tidak boleh bentrok dengan `192.168.42.0/24`, `10.100.0.0/14`, subnet ONT, atau `172.17.0.0/16`.
-3. Panel → **Pengaturan → ZeroTier** → pilih jaringan → **Hubungkan VPS**.
+3. Panel → menu **ZeroTier** → pilih jaringan → **Hubungkan VPS**. Halaman ini juga menampilkan semua anggota jaringan (VPS, router, perangkat lain) beserta statusnya.
 4. **Tambah router** → jalur **ZeroTier** → pasang script di MikroTik → tab **Ringkasan** → **Pilih router yang bergabung**. Panel otomatis menyetujui router, memberi IP ZeroTier, dan memasang route ke IP virtual.
 
 URL ACS di ONT tetap `http://192.168.42.1:7547`, baik lewat L2TP maupun ZeroTier. Status, riwayat uptime, notifikasi Telegram, tes koneksi, dan port forwarding berlaku untuk kedua jalur.

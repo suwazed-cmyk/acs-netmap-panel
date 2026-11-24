@@ -157,5 +157,5 @@ echo "   Buka port di firewall provider VPS: TCP ${ZTNET_PORT} (web ZTNET) dan U
 echo "   Panel VPN ACS -> Pengaturan -> Domain & HTTPS -> Subdomain layanan: buat record DNS acs/zt otomatis."
 echo "   Langkah berikutnya:"
 echo "     1. Di ZTNET: Networks -> Create Network, atur rentang IPv4 (contoh 172.27.0.0/24)"
-echo "     2. Di panel VPN ACS: Pengaturan -> ZeroTier -> pilih jaringan -> Hubungkan VPS"
+echo "     2. Di panel VPN ACS: menu ZeroTier -> pilih jaringan -> Hubungkan VPS"
 echo "   Update ZTNET nanti: jalankan lagi bash $0 (port 3300 tetap)."

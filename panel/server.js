@@ -40,7 +40,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "1.5.1";
+const VERSION = "1.6.0";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
 const VIRTUAL_POOL = "10.100.0.0/14";
@@ -56,6 +56,9 @@ const ZT_TOKEN_FILE = ROOT + "/var/lib/zerotier-one/authtoken.secret";
 const ZTNET_DIR = ROOT + "/opt/ztnet";
 const ZTNET_PORT = 3300;
 const ZT_IFACE_MT = "zt-acs"; // nama interface ZeroTier di MikroTik
+// GenieACS NBI (hanya dibaca, untuk menghitung ONT per router)
+const NBI_URL = process.env.VPNACS_NBI || "";
+const GENIE_UNITS = [["genieacs-cwmp", "CWMP (ONT melapor)"], ["genieacs-nbi", "NBI (API)"], ["genieacs-fs", "File server"], ["genieacs-ui", "Web UI"]];
 const SERVICE_PRESETS = {
   winbox: { label: "Winbox", port: 8291, proto: "tcp" },
   webfig: { label: "WebFig", port: 80, proto: "tcp" },
@@ -767,6 +770,90 @@ async function runTestStep(site, key, st) {
 }
 
 // =====================================================================
+//  GenieACS: status layanan, patch, dan ONT per router (hanya baca)
+// =====================================================================
+function readGenieEnv(key) {
+  try {
+    const m = fs.readFileSync(GENIE_ENV, "utf8").match(new RegExp("^" + key + "=(.*)$", "m"));
+    return m ? m[1].trim() : "";
+  } catch (e) {
+    return null;
+  }
+}
+function genieVersion() {
+  for (const p of ["/opt/genieacs-app/package.json", "/usr/lib/node_modules/genieacs/package.json", "/usr/local/lib/node_modules/genieacs/package.json"]) {
+    const j = readJson(ROOT + p, null);
+    if (j && j.version) return j.version + (p.startsWith("/opt/genieacs-app") ? " (patch IP virtual)" : "");
+  }
+  return "";
+}
+function crHost(doc) {
+  const get = (o, path) => path.split(".").reduce((a, k) => (a && a[k] !== undefined ? a[k] : undefined), o);
+  const v = get(doc, "InternetGatewayDevice.ManagementServer.ConnectionRequestURL._value") || get(doc, "Device.ManagementServer.ConnectionRequestURL._value") || "";
+  const m = String(v).match(/^[a-z]+:\/\/(?:[^@/]*@)?([0-9.]+)/i);
+  return m ? m[1] : "";
+}
+let GENIE_CACHE = { t: 0, data: null };
+async function genieDevices() {
+  if (GENIE_CACHE.data && Date.now() - GENIE_CACHE.t < 60000) return GENIE_CACHE.data;
+  const port = readGenieEnv("GENIEACS_NBI_PORT") || "7557";
+  const base = NBI_URL || `http://127.0.0.1:${port}`;
+  const proj = ["_id", "_lastInform", "InternetGatewayDevice.ManagementServer.ConnectionRequestURL", "Device.ManagementServer.ConnectionRequestURL"].join(",");
+  const r = await httpJson("GET", `${base}/devices/?projection=${encodeURIComponent(proj)}`, null, null, 20000);
+  if (r.status !== 200 || !Array.isArray(r.json)) {
+    return { error: r.status === 0 ? `GenieACS NBI tidak menjawab (${r.error})` : `GenieACS NBI menolak (HTTP ${r.status})` };
+  }
+  const data = { devices: r.json.map((d) => ({ id: d._id, last: d._lastInform ? Date.parse(d._lastInform) : 0, ip: crHost(d) })) };
+  GENIE_CACHE = { t: Date.now(), data };
+  return data;
+}
+async function genieStatus(d) {
+  const st = settings(d);
+  const services = [];
+  for (const [unit, label] of GENIE_UNITS) {
+    const r = await run("systemctl", ["is-active", unit]);
+    const out = r.out.trim();
+    services.push({ unit, label, active: r.code === 0 && (out === "" || out === "active"), state: out || (r.code === 0 ? "active" : "tidak ada") });
+  }
+  const dev = await genieDevices();
+  const now = Date.now();
+  const HOUR = 3600 * 1000;
+  const per = d.sites.map((s) => ({ id: s.id, name: s.name, transport: isZt(s) ? "zt" : "l2tp", virtualSubnet: s.virtualSubnet, total: 0, active: 0, last: 0 }));
+  const other = { total: 0, active: 0, last: 0 };
+  let total = 0;
+  let active = 0;
+  if (!dev.error) {
+    const subs = d.sites.map((s) => parseCidr(s.virtualSubnet));
+    for (const x of dev.devices) {
+      total++;
+      const on = x.last && now - x.last < HOUR;
+      if (on) active++;
+      const i = x.ip ? subs.findIndex((c) => inSubnet(x.ip, c)) : -1;
+      const row = i >= 0 ? per[i] : other;
+      row.total++;
+      if (on) row.active++;
+      if (x.last > row.last) row.last = x.last;
+    }
+  }
+  const cidr = st.genieCidr;
+  return {
+    installed: cidr !== null || services.some((x) => x.active),
+    version: genieVersion(),
+    services,
+    patch: { cidr, active: cidr !== null && !!cidr, outside: d.sites.filter((s) => insideGenie(s.virtualSubnet, cidr) === false).map((s) => ({ id: s.id, name: s.name, virtualSubnet: s.virtualSubnet })) },
+    url: genieUrl(d, st.publicIp),
+    urlManual: (d.settings && d.settings.genieUrl) || "",
+    subdomain: (d.settings && d.settings.subdomains && d.settings.subdomains.acs && d.settings.subdomains.acs.host) || "",
+    acsUrl: `http://${st.tun.local}:${ACS_PORT}`,
+    devicesError: dev.error || "",
+    totals: { total, active, idle: total - active, other: other.total },
+    perRouter: per,
+    other,
+    cachedAt: GENIE_CACHE.t,
+  };
+}
+
+// =====================================================================
 //  ZeroTier: controller lokal di VPS (dipakai bersama ZTNET)
 // =====================================================================
 function ztToken() {
@@ -849,6 +936,29 @@ async function ztStatus(d) {
       iface: j.ok ? j.json.portDeviceName || z.iface : "",
       sites: d.sites.filter(isZt).length,
     });
+    // Semua anggota jaringan: VPS, router panel, dan perangkat lain
+    const mi = await ztMemberIps(z.nwid);
+    const peers = await ztApi("GET", "/peer");
+    const pmap = {};
+    if (peers.ok) for (const p of peers.json || []) pmap[p.address] = p;
+    out.members = [];
+    for (const [id, m] of Object.entries(mi.members || {})) {
+      const site = d.sites.find((s) => s.ztNode === id);
+      const p = pmap[id];
+      const path = p && (p.paths || []).find((x) => x.active || x.preferred);
+      out.members.push({
+        node: id,
+        role: id === z.vpsNode ? "vps" : site ? "router" : "other",
+        name: id === z.vpsNode ? "VPS (panel ini)" : site ? site.name : "",
+        siteId: site ? site.id : "",
+        authorized: !!m.authorized,
+        ips: m.ipAssignments || [],
+        online: id === z.vpsNode ? true : site ? !!ZT_ONLINE.get(site.id) : !!path,
+        physical: path ? String(path.address).split("/")[0] : "",
+      });
+    }
+    const order = { vps: 0, router: 1, other: 2 };
+    out.members.sort((a, b) => order[a.role] - order[b.role] || (a.name || a.node).localeCompare(b.name || b.node));
   }
   return out;
 }
@@ -2264,6 +2374,12 @@ async function handleApi(req, res, url) {
     }
     logActivity(req, "Cloudflare dilepas", `${dom} tidak dipakai lagi, kembali ke ${s.publicIp || "IP otomatis"}`);
     return send(res, 200, { ok: true });
+  }
+
+  // --- GenieACS ---
+  if (p === "/api/genie" && method === "GET") {
+    if (url.searchParams.get("refresh") === "1") GENIE_CACHE.t = 0;
+    return send(res, 200, await genieStatus(loadData()));
   }
 
   // --- ZeroTier ---
