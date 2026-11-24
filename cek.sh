@@ -72,6 +72,10 @@ panel_get() {
     else if (k === "cfDomain") v = cf.domain || "";
     else if (k === "useIpsec") v = s.useIpsec ? "1" : "";
     else if (k === "ztNwid") v = (s.zt && s.zt.nwid) || "";
+    else if (k === "wgOn") v = s.addons && s.addons.wireguard && s.addons.wireguard.installed ? "1" : "";
+    else if (k === "wgPort") v = s.wg ? String(s.wg.port || 51820) : "";
+    else if (k === "wgSites") v = String((d.sites || []).filter((x) => x.transport === "wg").length);
+    else if (k === "healthOn") v = !s.health || s.health.enabled !== false ? `tiap ${(s.health && s.health.days) || 7} hari jam ${(s.health && s.health.time) || "08:00"}` : "";
     else if (k === "subHosts") v = Object.values(s.subdomains || {}).map((x) => x && x.host).filter(Boolean).join(" ");
     else if (k === "sites") v = String((d.sites || []).length);
     else if (k === "stdHttp") v = String(s.stdHttp || 80);
@@ -256,6 +260,40 @@ if svc_exists zerotier-one; then
   [ -d "$ZTNET_DIR" ] && warn "ZTNET lama masih terpasang (tidak dipakai lagi)" "Panel → menu ZeroTier → Pindahkan & lepas ZTNET"
 else
   skip "ZeroTier belum dipasang (opsional: panel → Add-on → ZeroTier)"
+fi
+
+# ---------- WireGuard ----------
+head1 "WireGuard (opsional)"
+if [ -n "$(panel_get wgOn)" ]; then
+  WGP="$(panel_get wgPort)"
+  if command -v wg >/dev/null; then ok "wireguard-tools ada ($(wg --version 2>/dev/null | awk '{print $2}'))"
+  else bad "wireguard-tools tidak ada" "apt-get install -y wireguard-tools"; fi
+  cek_svc "wg-quick@wg0" "WireGuard"
+  [ -n "$WGP" ] && cek_udp "$WGP" "WireGuard" "systemctl restart wg-quick@wg0"
+  if command -v wg >/dev/null && wg show wg0 >/dev/null 2>&1; then
+    N="$(panel_get wgSites)"; NOW="$(date +%s)"; ON=0
+    while read -r _ hs; do [ -n "$hs" ] && [ "$hs" -gt 0 ] && [ $((NOW - hs)) -lt 180 ] && ON=$((ON + 1)); done < <(wg show wg0 latest-handshakes 2>/dev/null)
+    if [ "${N:-0}" = "0" ]; then skip "Belum ada router memakai WireGuard"
+    elif [ "$ON" -ge "$N" ]; then ok "Router WireGuard tersambung: $ON dari $N"
+    else warn "Router WireGuard tersambung: $ON dari $N" "Pastikan UDP $WGP dibuka di firewall provider VPS dan script MikroTik terbaru terpasang"; fi
+  fi
+else
+  skip "WireGuard belum dipasang (opsional: panel → Add-on → WireGuard)"
+fi
+
+# ---------- Laporan kesehatan VPS ----------
+head1 "Laporan kesehatan VPS"
+HL="$(panel_get healthOn)"
+if [ -n "$HL" ]; then ok "Laporan Telegram aktif ($HL)"; else skip "Laporan kesehatan VPS dimatikan (panel → Pengaturan → Notifikasi Telegram)"; fi
+DISK="$(df -P / 2>/dev/null | awk 'NR==2{gsub("%","",$5); print $5}')"
+if [ -n "$DISK" ]; then
+  if [ "$DISK" -ge 90 ]; then bad "Disk / terpakai ${DISK}%" "Hapus berkas lama: journalctl --vacuum-time=7d; apt-get clean"
+  elif [ "$DISK" -ge 80 ]; then warn "Disk / terpakai ${DISK}%" "Sebaiknya bersihkan: journalctl --vacuum-time=7d; apt-get clean"
+  else ok "Disk / terpakai ${DISK}%"; fi
+fi
+MEM="$(free 2>/dev/null | awk '/^Mem:/{printf "%d", ($2-$7)*100/$2}')"
+if [ -n "$MEM" ]; then
+  if [ "$MEM" -ge 90 ]; then bad "RAM terpakai ${MEM}%" "Cek proses: top -o %MEM"; else ok "RAM terpakai ${MEM}%"; fi
 fi
 
 # ---------- Hasil ----------

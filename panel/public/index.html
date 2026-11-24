@@ -239,6 +239,27 @@
   .zt-empty .big svg{width:24px;height:24px}
   .zt-empty p{max-width:460px;margin:6px auto 0;line-height:1.55}
   .zt-hero{overflow:hidden}
+  .hl-row{display:grid;grid-template-columns:160px 160px;gap:12px}
+  .hl-in{display:flex;align-items:center;gap:8px}.hl-in input{width:90px}.hl-in span{color:var(--muted);font-size:13.5px}
+  .vh{padding:14px 20px 16px;display:grid;gap:12px}
+  .vh-t{display:flex;justify-content:space-between;font-size:13px}.vh-t span{color:var(--muted);font-weight:500}.vh-t b{font-weight:650;font-variant-numeric:tabular-nums}
+  .vh-r .zt-bar{margin-top:5px}.vh-r small{display:block;font-size:12px;color:var(--muted);margin-top:3px}
+  .vh-f{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px}
+  #dashHealth:empty{display:none}
+  .stack>#dashHealth,.stack>#dashHealth+.card{margin-top:16px}
+  .sec-steps{list-style:none;padding:0;display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:6px 0 10px;counter-reset:st}
+  .sec-steps li{border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 12px;counter-increment:st;display:grid;gap:2px}
+  .sec-steps li b{font-size:13px}.sec-steps li b::before{content:counter(st) ". ";color:var(--muted)}
+  .sec-steps li span{font-size:13px;color:var(--warn);font-weight:600}
+  .sess{list-style:none;padding:0;margin:0}
+  .sess li{display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid var(--line)}
+  .sess li:last-child{border-bottom:0}
+  .sess-ic{width:34px;height:34px;flex:none;display:grid;place-items:center;border-radius:9px;background:var(--subtle);color:var(--text-2)}.sess-ic svg{width:17px;height:17px}
+  .sess-b{flex:1;min-width:0}
+  .idle-bg{z-index:95}
+  @media (max-width:720px){.sec-steps{grid-template-columns:1fr}}
+  .wg-key{font-size:12.5px;word-break:break-all;color:var(--text-2)}
+  .wg-port{display:flex;align-items:center;gap:8px;margin-top:10px;padding:10px 12px;border-radius:var(--r-sm);background:var(--subtle);border:1px solid var(--line);font-weight:600}
   .det-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px;align-items:start}
   .det-main{min-width:0}.det-side{display:grid;gap:16px;min-width:0}.det-side>.card{margin:0}
   .det-main>.card:first-child,.det-main>.note:first-child{margin-top:0}
@@ -625,6 +646,8 @@
   .btn.del-ic{color:var(--bad)}
   .tag{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:5px;font-size:11px;font-weight:600;letter-spacing:.02em;background:var(--primary-soft);color:var(--primary);white-space:nowrap;vertical-align:middle}
   .tag.gray{background:var(--subtle);color:var(--muted);border:1px solid var(--line)}
+  .tag.violet{background:color-mix(in srgb,#7c3aed 12%,transparent);color:#7c3aed}
+  [data-theme=dark] .tag.violet{color:#a78bfa}
   .pick{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:var(--r-sm);margin-top:8px}
   .pick b{font-family:var(--mono);font-size:14px}
   .pick small{display:block;color:var(--muted);font-size:12px}
@@ -646,7 +669,7 @@
     .top{padding:0 14px}
     .main{padding:20px 16px}
     #topWarn{padding:16px 16px 0}
-    .grid2,.grid-dash{grid-template-columns:1fr}
+    .grid2,.grid-dash{grid-template-columns:minmax(0,1fr)}.grid-dash>.card{overflow-x:auto}
   }
   @media (max-width:1280px){ .hide-md{display:none} }
   @media (max-width:720px){
@@ -695,6 +718,7 @@
     <button class="nav" data-go="#/router"><span data-ic="router"></span>Router</button>
     <button class="nav" data-go="#/genieacs"><span data-ic="box"></span>GenieACS</button>
     <button class="nav hidden" id="navZt" data-go="#/zerotier"><span data-ic="hub"></span>ZeroTier</button>
+    <button class="nav hidden" id="navWg" data-go="#/wireguard"><span data-ic="bolt"></span>WireGuard</button>
     <button class="nav" data-go="#/pengaturan"><span data-ic="gear"></span>Pengaturan</button>
     <button class="nav" data-go="#/addon"><span data-ic="puzzle"></span>Add-on</button>
     <button class="nav" data-go="#/panduan"><span data-ic="book"></span>Panduan</button>
@@ -740,6 +764,8 @@ const $ = (s, el = document) => el.querySelector(s);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const SV = 'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
 const ICONS = {
+  phone: '<rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M11 18h2"/>',
+  monitor: '<rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>',
   shield: '<path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/>',
   home: '<path d="M3 10.5L12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
   router: '<rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 16.5h.01M11 16.5h.01M8 9a6 6 0 0 1 8 0M5.5 6.5a10 10 0 0 1 13 0"/>',
@@ -794,7 +820,7 @@ let STATE = { settings: {}, sites: [] };
 let LOADED = false;
 
 async function api(path, opts = {}) {
-  const o = { method: opts.method || "GET", headers: {}, credentials: "same-origin" };
+  const o = { method: opts.method || "GET", headers: { "X-Idle": String(Math.floor((Date.now() - lastAct()) / 1000)) }, credentials: "same-origin" };
   if (o.method !== "GET") { o.headers["Content-Type"] = "application/json"; o.body = JSON.stringify(opts.body || {}); }
   const r = await fetch(path, o);
   let data = {};
@@ -820,7 +846,7 @@ const copyBtn = (text, msg) => `<button class="copy" title="Salin" data-copy="${
 const site = (id) => STATE.sites.find((s) => s.id === id);
 const ST = { up: ["ok", "Tersambung"], down: ["bad", "Terputus"], pending: ["wait", "Menunggu pemasangan"] };
 const stOf = (x) => ST[x.state] || ST.down;
-const ztTag = (x) => (x.transport === "zt" ? ` <span class="tag" title="Tersambung lewat ZeroTier">ZT</span>` : "");
+const ztTag = (x) => (x.transport === "zt" ? ` <span class="tag" title="Tersambung lewat ZeroTier">ZT</span>` : x.transport === "wg" ? ` <span class="tag violet" title="Tersambung lewat WireGuard">WG</span>` : "");
 function tzId() { return STATE.settings.timezone || "Asia/Makassar"; }
 function tzLabel() { const z = (STATE.settings.timezones || []).find((t) => t.id === tzId()); return z ? z.label : ""; }
 function fmtT(t, full) {
@@ -906,6 +932,68 @@ function doneDialog(title, text, kind = "ok", autoClose = true) {
   if (autoClose) { const el = $("#mbg"); setTimeout(() => { if ($("#mbg") === el) closeModal(); }, 2600); }
 }
 
+/* ================= Logout otomatis saat diam ================= */
+// Aktivitas nyata (klik, ketik, sentuh, gulir, pindah halaman) dicatat di localStorage agar
+// berlaku untuk semua tab. Penyegaran otomatis tidak dihitung sebagai aktivitas.
+let ACT_MEM = Date.now(), IDLE_MS = 60 * 60e3, IDLE_TIMER = null, BEAT_AT = 0;
+function lastAct() {
+  let v = 0; try { v = parseInt(localStorage.getItem("vpnacs-act"), 10) || 0; } catch (e) {}
+  return Math.max(ACT_MEM, v);
+}
+function markAct() {
+  const n = Date.now();
+  if (n - ACT_MEM < 2000) return;
+  ACT_MEM = n; try { localStorage.setItem("vpnacs-act", String(n)); } catch (e) {}
+}
+["click", "keydown", "touchstart", "wheel", "scroll"].forEach((ev) => window.addEventListener(ev, markAct, { passive: true, capture: true }));
+window.addEventListener("hashchange", markAct);
+async function idleStart() {
+  markAct(); ACT_MEM = Date.now();
+  try { const r = await api("/api/session"); IDLE_MS = r.idleMs || IDLE_MS; } catch (e) { return; }
+  clearInterval(IDLE_TIMER);
+  IDLE_TIMER = setInterval(idleTick, 5000);
+}
+async function idleTick() {
+  if (!LOADED || $("#appView").classList.contains("hidden")) return;
+  const idle = Date.now() - lastAct();
+  // Ada aktivitas sejak tanda terakhir: beri tahu server (paling sering 1x per menit)
+  if (lastAct() > BEAT_AT && Date.now() - BEAT_AT > 60e3) { BEAT_AT = Date.now(); api("/api/session", { method: "POST" }).catch(() => {}); }
+  if (idle < IDLE_MS - 60e3 || $("#idleWarn")) return;
+  // Pastikan ke server: mungkin tab lain masih dipakai
+  let remain = 0;
+  try { remain = (await api("/api/session")).remainMs; } catch (e) { return; }
+  if (remain > 65e3) { ACT_MEM = Date.now() - (IDLE_MS - remain); return; }
+  idleWarn(remain);
+}
+function idleWarn(remain) {
+  const end = Date.now() + Math.max(5e3, remain);
+  const el = document.createElement("div");
+  el.id = "idleWarn"; el.className = "mbg idle-bg";
+  el.innerHTML = `<div class="modal dlg sm" role="alertdialog" aria-modal="true"><div class="dlg-b"><span class="dlg-ic info">${ic("clock")}</span>
+    <div style="flex:1;min-width:0"><h2>Sesi akan berakhir</h2><div class="dlg-t">Tidak ada aktivitas selama ${esc(fmtDurShort(IDLE_MS))}. Panel keluar otomatis dalam <b id="idleSec">60</b> detik.</div></div></div>
+    <div class="mf"><button class="btn" id="idleOut">Keluar</button><button class="btn pri" id="idleStay">Tetap masuk</button></div></div>`;
+  document.body.appendChild(el);
+  paintIcons(el);
+  $("#idleStay").focus();
+  const t = setInterval(() => {
+    if (!document.body.contains(el)) return clearInterval(t);
+    if (lastAct() > Date.now() - 3000 && document.activeElement !== $("#idleStay")) { /* aktivitas dari tab lain */ }
+    const left = Math.max(0, Math.ceil((end - Date.now()) / 1000));
+    if ($("#idleSec")) $("#idleSec").textContent = left;
+    if (left <= 0) { clearInterval(t); idleLogout(true); }
+  }, 500);
+  $("#idleStay").onclick = async () => { clearInterval(t); el.remove(); ACT_MEM = 0; markAct(); try { await api("/api/session", { method: "POST" }); toast("Sesi diperpanjang"); } catch (e) {} };
+  $("#idleOut").onclick = () => { clearInterval(t); idleLogout(false); };
+}
+async function idleLogout(auto) {
+  const w = $("#idleWarn"); if (w) w.remove();
+  clearInterval(IDLE_TIMER);
+  await fetch("/api/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}", credentials: "same-origin" }).catch(() => {});
+  LOADED = false; closeModal(); showLogin();
+  if (auto) $("#loginErr").innerHTML = `<span style="color:var(--muted)">Anda keluar otomatis karena tidak ada aktivitas.</span>`;
+}
+function fmtDurShort(ms) { const m = Math.round(ms / 60e3); return m >= 60 ? `${m / 60} jam` : `${m} menit`; }
+
 /* ================= Login ================= */
 let BRAND = "VPN ACS";
 function setBrand(n) {
@@ -917,7 +1005,7 @@ function showApp() { $("#loginView").classList.add("hidden"); $("#appView").clas
 $("#loginForm").addEventListener("submit", async (e) => {
   e.preventDefault(); $("#loginErr").textContent = "";
   const btn = $("#loginForm button"); busyBtn(btn, true);
-  try { await api("/api/login", { method: "POST", body: { password: $("#lp").value } }); $("#lp").value = ""; showApp(); await load(); route(); }
+  try { await api("/api/login", { method: "POST", body: { password: $("#lp").value } }); $("#lp").value = ""; showApp(); await load(); route(); idleStart(); }
   catch (err) { $("#loginErr").textContent = err.message; }
   busyBtn(btn, false);
 });
@@ -932,9 +1020,12 @@ async function load() {
   setBrand(STATE.settings.panelName);
   const A = STATE.settings.addons || {};
   $("#navZt").classList.toggle("hidden", !(A.zerotier && A.zerotier.installed));
+  $("#navWg").classList.toggle("hidden", !(A.wireguard && A.wireguard.installed));
 
 }
 function ztOn() { const a = (STATE.settings.addons || {}).zerotier; return !!(a && a.installed); }
+function wgOn() { const a = (STATE.settings.addons || {}).wireguard; return !!(a && a.installed); }
+const TRL = { l2tp: "L2TP", zt: "ZeroTier", wg: "WireGuard" };
 
 /* ================= Router ================= */
 let TEST = null; // tes koneksi yang sedang tampil
@@ -979,6 +1070,8 @@ function route() {
   else if (parts[0] === "genieacs") { viewGenie(v); title = "GenieACS"; }
   else if (parts[0] === "zerotier" && !ztOn()) { location.hash = "#/addon"; return; }
   else if (parts[0] === "zerotier") { viewZerotier(v); title = "ZeroTier"; }
+  else if (parts[0] === "wireguard" && !wgOn()) { location.hash = "#/addon"; return; }
+  else if (parts[0] === "wireguard") { viewWireguard(v); title = "WireGuard"; }
   else if (parts[0] === "addon") { viewAddons(v); title = "Add-on"; }
   else if (parts[0] === "log") { viewLog(v); title = "Log aktivitas"; }
   else { viewDashboard(v); }
@@ -1005,6 +1098,7 @@ function issues() {
     list.push({ t: `${off.length} router terputus`, d: names.slice(0, 4).join(", ") + (names.length > 4 ? ` dan ${names.length - 4} lainnya` : ""), go: "#/router/terputus" });
   }
   if (s.zt && s.zt.checkError) list.push({ t: "Jaringan ZeroTier bermasalah", d: s.zt.checkError, go: "#/zerotier" });
+  for (const x of STATE.sites.filter((y) => y.wgStale && y.transport === "wg")) list.push({ t: `${x.name}: pasang ulang script WireGuard`, d: "Port, rentang, atau kunci WireGuard berubah. Salin script terbaru ke MikroTik.", go: `#/router/${x.id}/script` });
   for (const x of STATE.sites.filter((y) => y.ztStale && y.transport === "zt")) list.push({ t: `${x.name}: pasang ulang script ZeroTier`, d: "IP ZeroTier VPS berubah. Salin script terbaru ke MikroTik.", go: `#/router/${x.id}/script` });
   const tg = s.telegram || {};
   if (tg.active && tg.lastError) list.push({ t: "Notifikasi Telegram gagal terkirim", d: tg.lastError, go: "#/pengaturan/telegram" });
@@ -1050,12 +1144,14 @@ function viewDashboard(v) {
           ${iss.length ? `<ul class="rows">${iss.slice(0, 6).map((x) => `<li><a class="row ${x.k || "warn"}" href="${x.go}"><span class="ic">${ic(x.k === "info" ? "clock" : "alert")}</span><span class="grow"><span class="nm">${esc(x.t)}</span><span class="sb" style="display:block">${esc(x.d)}</span></span><span class="chev">${ic("chev")}</span></a></li>`).join("")}</ul>`
             : `<div class="empty"><div class="big">${ic("check")}</div><h3>Semua normal</h3><p>Semua router tersambung dan pengaturan lengkap.</p></div>`}
         </div>
+        <div id="dashHealth"></div>
         <div class="card">
           <div class="ch"><h2>VPS</h2><a href="#/pengaturan">Pengaturan</a></div>
           ${serverKv()}
         </div>
       </div>
     </div>`;
+  dashHealth();
 }
 // Add-on yang terpasang, dibuka langsung dari Dashboard
 function dashApps() {
@@ -1093,7 +1189,7 @@ function serverKv() {
     ? `<div class="kv"><span>GenieACS</span><b><a class="ext" href="${esc(s.genieUrl)}" target="_blank" rel="noopener" title="Buka GenieACS di tab baru">${esc(s.genieUrl.replace(/^https?:\/\//, ""))}${ic("ext", "")}</a></b></div>`
     : `<div class="kv"><span>GenieACS</span><b><a href="#/genieacs">Atur alamat</a></b></div>`;
   const zt = s.zt ? `${s.zt.name || s.zt.nwid} · ${s.zt.vpsIp}` : "Tidak dipakai";
-  return genie + [["Alamat VPS", s.publicIp || "—"], ["URL ACS ONT", s.acsUrl || "—"], ["Jaringan VPN", s.tunnelNet || "—"], ["ZeroTier", zt], ["Patch GenieACS", g], ["Notifikasi Telegram", tgs], ["HTTPS panel", https]]
+  return genie + [["Alamat VPS", s.publicIp || "—"], ["URL ACS ONT", s.acsUrl || "—"], ["Jaringan VPN", s.tunnelNet || "—"], ["ZeroTier", zt], ...(s.wg ? [["WireGuard", `${s.wg.subnet} · UDP ${s.wg.port}`]] : []), ["Patch GenieACS", g], ["Notifikasi Telegram", tgs], ["HTTPS panel", https]]
     .map(([k, val]) => `<div class="kv"><span>${k}</span><b>${esc(val)}</b></div>`).join("");
 }
 function rowHtml(x) {
@@ -1153,14 +1249,14 @@ function viewDetail(v, id, tab) {
   crumb([["Router", "#/router"], [x.name]]);
   v.innerHTML = `
     <div class="dh">
-      <div><h1>${esc(x.name)} <span class="pill ${stOf(x)[0]}">${stOf(x)[1]}</span> <span class="tag ${x.transport === "zt" ? "" : "gray"}">${x.transport === "zt" ? "ZeroTier" : "L2TP"}</span></h1>
+      <div><h1>${esc(x.name)} <span class="pill ${stOf(x)[0]}">${stOf(x)[1]}</span> <span class="tag ${x.transport === "zt" ? "" : x.transport === "wg" ? "violet" : "gray"}">${TRL[x.transport] || "L2TP"}</span></h1>
         ${x.note ? `<p>${esc(x.note)}</p>` : ""}</div>
       <div class="acts" style="display:flex;gap:8px">
         ${tab === "ringkasan" ? "" : `<button class="btn" data-act="test" data-id="${x.id}">${ic("play")}Tes koneksi</button>`}
         <div class="menu"><button class="btn icon" data-act="menu" aria-label="Lainnya">${ic("dots")}</button>
           <div class="menu-list hidden" id="menuList">
             <button data-act="edit" data-id="${x.id}">${ic("edit")}Ubah router</button>
-            ${x.transport === "zt" ? `<button data-act="ztpick" data-id="${x.id}">${ic("hub")}Pilih router ZeroTier</button>` : `<button data-act="resetpw" data-id="${x.id}">${ic("key")}Buat password VPN baru</button>`}
+            ${x.transport === "zt" ? `<button data-act="ztpick" data-id="${x.id}">${ic("hub")}Pilih router ZeroTier</button>` : x.transport === "wg" ? `<button data-act="wgrekey" data-id="${x.id}">${ic("key")}Buat kunci WireGuard baru</button>` : `<button data-act="resetpw" data-id="${x.id}">${ic("key")}Buat password VPN baru</button>`}
             <hr><button class="d" data-act="del" data-id="${x.id}">${ic("trash")}Hapus router</button>
           </div></div>
       </div>
@@ -1181,7 +1277,8 @@ function detSide(x) {
   return `<div class="det-side">
     <div class="card"><div class="ch"><h2>Status koneksi</h2><span class="pill ${c}">${t}</span></div>
       <div class="ds-body">
-        <div class="ds-kv"><span>Jalur</span><b>${x.transport === "zt" ? "ZeroTier" : "VPN L2TP"}</b></div>
+        <div class="ds-kv"><span>Jalur</span><b>${x.transport === "zt" ? "ZeroTier" : x.transport === "wg" ? "WireGuard" : "VPN L2TP"}</b></div>
+        ${x.transport === "wg" && x.wg ? `<div class="ds-kv"><span>Handshake</span><b>${x.wg.handshake ? esc(ztAgo(x.wg.handshake)) : "belum pernah"}</b></div>` : ""}
         <div class="ds-kv"><span>Keterangan</span><b>${esc(since)}</b></div>
         ${U ? `${bar("d1", "24 jam")}${bar("d7", "7 hari")}${bar("d30", "30 hari")}` : `<p class="muted zt-small" style="margin-top:6px">Uptime tampil setelah router tersambung.</p>`}
       </div></div>
@@ -1203,10 +1300,10 @@ function tabSummary(b, x) {
         <div><dt>Subnet ONT (asli)</dt><dd>${esc(x.realSubnet)}</dd></div>
         <div><dt>IP virtual di GenieACS</dt><dd>${esc(x.virtualSubnet)}</dd></div>
         <div><dt>URL ACS untuk ONT</dt><dd>${esc(x.acsUrl)} ${copyBtn(x.acsUrl, "URL ACS tersalin")}</dd></div>
-        <div><dt>${x.transport === "zt" ? "IP ZeroTier MikroTik" : "IP VPN MikroTik"}</dt><dd>${x.transport === "zt" ? (x.ztIp ? esc(x.ztIp) : '<span class="muted">Belum dipilih</span>') : esc(x.tunnelIp)}</dd></div>
+        <div><dt>${x.transport === "zt" ? "IP ZeroTier MikroTik" : x.transport === "wg" ? "IP WireGuard MikroTik" : "IP VPN MikroTik"}</dt><dd>${x.transport === "wg" ? esc(x.wgIp || "—") : x.transport === "zt" ? (x.ztIp ? esc(x.ztIp) : '<span class="muted">Belum dipilih</span>') : esc(x.tunnelIp)}</dd></div>
       </dl>
     </div>
-    ${x.transport === "zt" ? ztCard(x) : `<div class="card">
+    ${x.transport === "zt" ? ztCard(x) : x.transport === "wg" ? wgCard(x) : `<div class="card">
       <div class="ch"><h2>Akun VPN</h2></div>
       <dl class="dl" style="margin:0">
         <div><dt>Alamat VPS (connect-to)</dt><dd>${esc(STATE.settings.publicIp || "—")}</dd></div>
@@ -1215,6 +1312,24 @@ function tabSummary(b, x) {
         <div><dt>IPsec</dt><dd>${STATE.settings.useIpsec ? "Aktif" : "Tidak dipakai"}</dd></div>
       </dl>
     </div>`}</div>${detSide(x)}</div>`;
+}
+function wgStaleNote(x, style) {
+  return x.wgStale ? `<div class="note warn"${style ? ` style="${style}"` : ""}>${ic("alert")}<div><b>Pasang ulang script WireGuard</b>Port, rentang IP, atau kunci WireGuard berubah. Salin script terbaru dari tab <a href="#/router/${x.id}/script">Script MikroTik</a> ke MikroTik, lalu klik <a href="#" data-act="wgdone" data-id="${x.id}">Sudah dipasang</a>.</div></div>` : "";
+}
+function wgCard(x) {
+  const w = STATE.settings.wg || {}, p = x.wg || {};
+  const fb = (n) => (n >= 1024 ** 3 ? (n / 1024 ** 3).toFixed(1).replace(".", ",") + " GB" : n >= 1024 ** 2 ? (n / 1024 ** 2).toFixed(1).replace(".", ",") + " MB" : Math.round(n / 1024) + " KB");
+  return `${wgStaleNote(x, "margin-top:16px")}
+    <div class="card">
+      <div class="ch"><h2>WireGuard</h2><a href="#/wireguard">Menu WireGuard</a></div>
+      <dl class="dl" style="margin:0">
+        <div><dt>Endpoint VPS</dt><dd>${esc(STATE.settings.publicIp || "—")}:${esc(w.port || 51820)}</dd></div>
+        <div><dt>IP WireGuard VPS</dt><dd>${esc(w.vpsIp || "—")}</dd></div>
+        <div><dt>Handshake terakhir</dt><dd>${p.handshake ? esc(ztAgo(p.handshake)) : '<span class="muted">belum pernah</span>'}${p.endpoint ? ` <span class="muted">dari ${esc(p.endpoint)}</span>` : ""}</dd></div>
+        <div><dt>Data diterima / dikirim</dt><dd>${fb(p.rx || 0)} / ${fb(p.tx || 0)}</dd></div>
+        <div style="grid-column:1/-1"><dt>Public key router</dt><dd>${esc(x.wgPub || "—")} ${x.wgPub ? copyBtn(x.wgPub, "Public key tersalin") : ""}</dd></div>
+      </dl>
+    </div>`;
 }
 function ztStaleNote(x, style) {
   return x.ztStale ? `<div class="note warn"${style ? ` style="${style}"` : ""}>${ic("alert")}<div><b>Pasang ulang script ZeroTier</b>Rentang atau IP ZeroTier VPS berubah (sekarang ${esc((STATE.settings.zt || {}).vpsIp || "-")}). Salin script terbaru dari tab <a href="#/router/${x.id}/script">Script MikroTik</a> ke MikroTik, lalu klik <a href="#" data-act="ztdone" data-id="${x.id}">Sudah dipasang</a>.</div></div>` : "";
@@ -1326,7 +1441,8 @@ function fwdForm(x) {
 }
 function tabScript(b, x) {
   b.innerHTML = `
-    ${x.transport === "zt" ? ztStaleNote(x) : ""}
+    ${x.transport === "zt" ? ztStaleNote(x) : x.transport === "wg" ? wgStaleNote(x) : ""}
+    ${x.transport === "wg" ? `<div class="note info">${ic("bolt")}<div><b>Jalur WireGuard</b>Butuh RouterOS v7 (semua jenis router). Script membuat interface <code>wg-acs</code> dengan kunci khusus router ini, lalu tersambung ke VPS lewat UDP ${esc((STATE.settings.wg || {}).port || 51820)}. Pastikan port itu terbuka di firewall provider VPS.</div></div>` : ""}
     ${x.transport === "zt" ? `<div class="note info">${ic("hub")}<div><b>Jalur ZeroTier</b>Butuh RouterOS v7 dengan paket <code>zerotier</code> (router ARM/ARM64). Script otomatis melaporkan Node ID ke panel, jadi router langsung terpilih. Jika gagal (misalnya MikroTik tidak bisa menjangkau panel), pilih manual lewat <a href="#" data-act="ztpick" data-id="${x.id}">Pilih router yang bergabung</a>.</div></div>` : ""}
     ${x.state !== "pending" ? "" : `<ol class="howto">
       <li><b><i>1</i>Salin script</b>Klik tombol Salin di kotak script.</li>
@@ -1683,12 +1799,13 @@ async function runTest() {
 
 /* ================= Tambah / ubah / hapus router ================= */
 function siteForm(x) {
-  const z = STATE.settings.zt, cur = x ? x.transport : "l2tp";
-  if (!ztOn() && cur !== "zt") return `<input type="radio" name="fTr" value="l2tp" checked class="hidden"><div id="fZtBox" class="hidden"></div>` + siteFormRest(x);
+  const z = STATE.settings.zt, w = STATE.settings.wg, cur = x ? x.transport : "l2tp";
+  const showZt = ztOn() || cur === "zt", showWg = wgOn() || cur === "wg";
+  if (!showZt && !showWg) return `<input type="radio" name="fTr" value="l2tp" checked class="hidden"><div id="fZtBox" class="hidden"></div>` + siteFormRest(x);
   return `
     <label>Jalur ke VPS</label>
-    <div class="seg"><label><input type="radio" name="fTr" value="l2tp" ${cur !== "zt" ? "checked" : ""}>L2TP</label><label ${z ? "" : 'class="netopt dis" style="margin:0;padding:8px 12px" title="Hubungkan VPS ke jaringan di menu ZeroTier dulu"'}><input type="radio" name="fTr" value="zt" ${cur === "zt" ? "checked" : ""} ${z ? "" : "disabled"}>ZeroTier</label></div>
-    <div class="help">${z ? "ZeroTier butuh RouterOS v7 dengan paket zerotier (router ARM/ARM64). Router lain pakai L2TP." : 'ZeroTier belum diatur. Buka <a href="#/zerotier">menu ZeroTier</a> untuk mengaktifkan.'}</div>
+    <div class="seg"><label><input type="radio" name="fTr" value="l2tp" ${cur === "l2tp" || !cur ? "checked" : ""}>L2TP</label>${showWg ? `<label ${w ? "" : 'class="netopt dis" style="margin:0;padding:8px 12px" title="WireGuard belum siap di VPS"'}><input type="radio" name="fTr" value="wg" ${cur === "wg" ? "checked" : ""} ${w ? "" : "disabled"}>WireGuard</label>` : ""}${showZt ? `<label ${z ? "" : 'class="netopt dis" style="margin:0;padding:8px 12px" title="Hubungkan VPS ke jaringan di menu ZeroTier dulu"'}><input type="radio" name="fTr" value="zt" ${cur === "zt" ? "checked" : ""} ${z ? "" : "disabled"}>ZeroTier</label>` : ""}</div>
+    <div class="help" id="fTrHelp"></div>
     <div id="fZtBox" class="${cur === "zt" ? "" : "hidden"}">${x && x.ztNode ? `<label for="fZtNode">Node ID ZeroTier router</label>
       <input id="fZtNode" type="text" maxlength="10" value="${esc(x.ztNode)}"><div class="help">Untuk mengganti, pakai tombol Ganti router di tab Ringkasan.</div>`
       : `<label for="fZtSel">Perangkat ZeroTier <span class="muted" style="font-weight:400">(opsional)</span></label>
@@ -1730,8 +1847,11 @@ async function loadZtFree() {
 function bindTrForm() {
   const sel = $("#fZtSel");
   const showZt = () => {
-    const zt = (document.querySelector("input[name=fTr]:checked") || {}).value === "zt";
+    const tr = (document.querySelector("input[name=fTr]:checked") || {}).value;
+    const zt = tr === "zt";
     $("#fZtBox").classList.toggle("hidden", !zt);
+    const hp = $("#fTrHelp");
+    if (hp) hp.innerHTML = tr === "wg" ? `WireGuard: semua RouterOS v7, ringan dan cepat. Kunci dan IP (${esc((STATE.settings.wg || {}).subnet || "10.66.0.0/24")}) dibuat otomatis.` : tr === "zt" ? (STATE.settings.zt ? "ZeroTier butuh RouterOS v7 dengan paket zerotier (router ARM/ARM64)." : 'ZeroTier belum diatur. Buka <a href="#/zerotier">menu ZeroTier</a> untuk mengaktifkan.') : "L2TP: semua versi RouterOS (v6 dan v7).";
     if (zt && sel && ZTFREE === null) loadZtFree();
   };
   document.querySelectorAll("input[name=fTr]").forEach((r) => (r.onchange = showZt));
@@ -1794,8 +1914,8 @@ function openDelete(id) {
   const x = site(id);
   confirmDialog({
     title: `Hapus ${esc(x.name)}?`, danger: true, ok: "Hapus router", wide: true,
-    text: `<p>${x.transport === "zt" ? "Router ini dikeluarkan dari jaringan ZeroTier panel" : "Akun VPN router ini dihapus"}, beserta port forwarding-nya. GenieACS tidak bisa lagi Summon ONT di router ini.</p>
-      ${x.state === "pending" ? "" : `<div class="note warn" style="margin:12px 0 10px">${ic("alert")}<div><b>Bersihkan MikroTik ${esc(x.name)} dulu</b>Aturan dari panel (${x.transport === "zt" ? "interface zt-acs" : "interface l2tp-acs"}, route, NETMAP, dan firewall) tetap tertinggal di MikroTik kalau tidak dihapus. Salin script di bawah, tempel di Winbox → New Terminal, lalu hapus router di panel.</div></div>`}
+    text: `<p>${x.transport === "zt" ? "Router ini dikeluarkan dari jaringan ZeroTier panel" : x.transport === "wg" ? "Kunci WireGuard router ini dihapus dari VPS" : "Akun VPN router ini dihapus"}, beserta port forwarding-nya. GenieACS tidak bisa lagi Summon ONT di router ini.</p>
+      ${x.state === "pending" ? "" : `<div class="note warn" style="margin:12px 0 10px">${ic("alert")}<div><b>Bersihkan MikroTik ${esc(x.name)} dulu</b>Aturan dari panel (${x.transport === "zt" ? "interface zt-acs" : x.transport === "wg" ? "interface wg-acs" : "interface l2tp-acs"}, route, NETMAP, dan firewall) tetap tertinggal di MikroTik kalau tidak dihapus. Salin script di bawah, tempel di Winbox → New Terminal, lalu hapus router di panel.</div></div>`}
       <div class="codebox"><pre class="code" style="max-height:200px;padding-top:46px">${esc(x.removeScript)}</pre><button class="btn sm" data-copy="${esc(x.removeScript)}" data-msg="Script hapus tersalin. Tempel di Winbox → New Terminal">${ic("copy")}Salin</button></div>`,
     check: x.state === "pending" ? "" : "Script hapus sudah saya jalankan di MikroTik, atau MikroTik ini sudah tidak dipakai.",
     onOk: async () => {
@@ -1819,12 +1939,12 @@ function viewGuide(v) {
   crumb([["Panduan"]]);
   const s = STATE.settings;
   const names = [BRAND].concat(s.brandHistory || []);
-  const rm = [`/interface l2tp-client remove [find where name="l2tp-acs"]`, `:do { /zerotier interface remove [find where name="zt-acs"] } on-error={}`]
+  const rm = [`/interface l2tp-client remove [find where name="l2tp-acs"]`, `:do { /zerotier interface remove [find where name="zt-acs"] } on-error={}`, `:do { /interface wireguard peers remove [find where interface="wg-acs"]; /interface wireguard remove [find where name="wg-acs"] } on-error={}`]
     .concat(names.map((n) => `/ip route remove [find where comment="${n}"]`), names.map((n) => `/ip firewall nat remove [find where comment~"^${n} - "]`), names.map((n) => `/ip firewall filter remove [find where comment~"^${n} - "]`), [`:put "Pengaturan ${BRAND} sudah dihapus."`]).join("\n");
   v.innerHTML = `
     <div class="ph"><div><h1>Panduan</h1><p>Cara kerja dan langkah pemakaian, dengan bahasa sederhana.</p></div></div>
     <div class="card guide"><div class="ch"><h2>Cara kerja</h2></div><div class="cb">
-      <div class="flow"><span>ONT</span><i>→</i><span>OLT</span><i>→</i><span>MikroTik</span><i>⇄ VPN L2TP ⇄</i><span>VPS · GenieACS</span></div>
+      <div class="flow"><span>ONT</span><i>→</i><span>OLT</span><i>→</i><span>MikroTik</span><i>⇄ L2TP / WireGuard / ZeroTier ⇄</i><span>VPS · GenieACS</span></div>
       <p>Tanpa VPN, GenieACS hanya bisa membaca ONT, tetapi tidak bisa memberi perintah (Summon), karena ONT berada di jaringan lokal.</p>
       <p>Setiap MikroTik membuat VPN ke VPS. Karena subnet ONT di semua router boleh sama, tiap router mendapat <b>IP virtual</b> berbeda; MikroTik menerjemahkannya kembali ke IP asli (NETMAP).</p>
     </div></div>
@@ -1838,6 +1958,16 @@ ${ztOn() ? `    <div class="card"><div class="ch"><h2>Router lewat ZeroTier (ops
       <li><b>Buat jaringan</b>Menu ZeroTier → <b>Buat jaringan</b>, misalnya rentang <code>172.27.0.0/24</code>. Centang "Langsung hubungkan VPS".</li>
       <li><b>Tambah router dengan jalur ZeroTier</b>Pasang script di MikroTik (RouterOS v7, router ARM/ARM64), lalu di tab Ringkasan klik <b>Pilih router yang bergabung</b>.</li>
     </ol><p class="help">URL ACS di ONT tetap sama (<code>${esc(s.acsUrl || "")}</code>), baik lewat L2TP maupun ZeroTier. Router MIPS (hAP lite, hEX, RB951) tetap memakai L2TP.</p></div></div>` : `<div class="card"><div class="ch"><h2>Router lewat ZeroTier (opsional)</h2></div><div class="cb"><p style="color:var(--text-2)">Untuk router RouterOS v7 ARM/ARM64, pasang add-on <b>ZeroTier</b> di menu <a href="#/addon">Add-on</a>.</p></div></div>`}
+${wgOn() ? `    <div class="card"><div class="ch"><h2>Router lewat WireGuard (opsional)</h2></div><div class="cb"><ol class="ol">
+      <li><b>Buka port UDP</b>Buka UDP <code>${esc((s.wg || {}).port || 51820)}</code> di firewall provider VPS (firewall VPS sudah dibuka panel).</li>
+      <li><b>Tambah router dengan jalur WireGuard</b>Pasang script di MikroTik (semua RouterOS v7). Kunci dan IP WireGuard dibuat panel, router tersambung dalam beberapa detik.</li>
+      <li><b>Pantau</b>Menu WireGuard menampilkan handshake terakhir, endpoint, dan data setiap router.</li>
+    </ol><p class="help">URL ACS di ONT tetap sama (<code>${esc(s.acsUrl || "")}</code>). Bila port atau rentang WireGuard diganti, pasang ulang script di router WireGuard.</p></div></div>` : ""}
+    <div class="card"><div class="ch"><h2>Keamanan panel</h2></div><div class="cb"><ol class="ol">
+      <li><b>Logout otomatis</b>Panel keluar sendiri bila tidak ada aktivitas (bawaan 1 jam). Atur di Pengaturan → Keamanan.</li>
+      <li><b>Blokir salah password</b>5 kali salah: IP diblokir 5 menit, lalu 30 menit, lalu 24 jam. Notifikasi dikirim ke Telegram.</li>
+      <li><b>Sesi aktif</b>Lihat perangkat yang sedang login dan keluarkan yang tidak dikenal. Ganti password admin juga mengeluarkan perangkat lain.</li>
+    </ol></div></div>
     <div class="card"><div class="ch"><h2>Remote MikroTik dari mana saja</h2></div><div class="cb"><ol class="ol">
       <li><b>Tambah akses remote</b>Buka router → tab Port Forwarding → Tambah → pilih Winbox atau WebFig.</li>
       <li><b>Hubungkan Winbox</b>Isi Connect To dengan alamat yang diberikan, misalnya <code>${esc(s.publicIp || "IP_VPS")}:20001</code>.</li>
@@ -1853,6 +1983,8 @@ ${ztOn() ? `    <div class="card"><div class="ch"><h2>Router lewat ZeroTier (ops
       <details><summary>Remote Winbox tidak bisa masuk</summary><p>Pasang ulang script MikroTik terbaru (berisi aturan "remote dari VPS"), cek IP → Services → winbox aktif, dan pastikan provider VPS tidak memblokir port tersebut.</p></details>
       <details><summary>Bolehkah IP virtual sama dengan ZeroTier?</summary><p>Boleh. Yang tidak boleh: dua router memakai IP virtual yang sama, atau IP virtual sama dengan subnet lokal mana pun.</p></details>
       <details><summary>Apa arti status "Menunggu pemasangan"?</summary><p>Router sudah dibuat di panel tetapi MikroTik-nya belum pernah tersambung. Router ini tidak dihitung terputus dan tidak dikirim notifikasi Telegram. Statusnya berubah sendiri saat MikroTik tersambung pertama kali.</p></details>
+      <details><summary>Router WireGuard tetap Terputus</summary><p>Buka menu WireGuard: bila handshake "belum pernah", port UDP WireGuard kemungkinan tertutup di firewall provider VPS atau script belum dipasang. Di MikroTik cek WireGuard → Peers → Last Handshake.</p></details>
+      <details><summary>Saya keluar sendiri dari panel</summary><p>Itu logout otomatis karena tidak ada aktivitas. Ubah batas waktunya di Pengaturan → Keamanan (15 menit sampai 12 jam).</p></details>
       <details><summary>Notifikasi Telegram tidak masuk</summary><p>Buka Pengaturan → Notifikasi Telegram, klik Kirim pesan tes. Jika gagal, pesan kesalahannya menjelaskan penyebabnya (token salah, bot bukan admin, topik terhapus). Ingat: notifikasi baru dikirim setelah VPN putus melewati jeda yang diatur.</p></details>
       <details><summary>Setelah HTTPS aktif, panel tidak bisa dibuka lewat IP</summary><p>Itu normal. Buka lewat <code>https://domain:${esc(String(s.port || 8088))}</code>; alamat http dan IP akan dialihkan otomatis ke sana. Jika domain bermasalah, lepas domain di Pengaturan → Domain &amp; HTTPS.</p></details>
       <details><summary>Aman menjalankan script MikroTik berulang kali?</summary><p>Aman. Script menghapus pengaturan lama bertanda "${esc(BRAND)}" (termasuk nama panel sebelumnya) terlebih dulu; pengaturan lain tidak disentuh.</p></details>
@@ -1860,19 +1992,74 @@ ${ztOn() ? `    <div class="card"><div class="ch"><h2>Router lewat ZeroTier (ops
 }
 
 /* ================= Pengaturan ================= */
-const SET_TABS = [["umum", "Umum", "sliders"], ["vpn", "VPN L2TP", "lock"], ["telegram", "Notifikasi Telegram", "send"], ["domain", "Domain & HTTPS", "globe"]];
+const SET_TABS = [["umum", "Umum", "sliders"], ["keamanan", "Keamanan", "shield"], ["vpn", "VPN L2TP", "lock"], ["telegram", "Notifikasi Telegram", "send"], ["domain", "Domain & HTTPS", "globe"]];
 function viewSettings(v, tab) {
   if (!SET_TABS.some(([k]) => k === tab)) tab = "umum";
   crumb([["Pengaturan", "#/pengaturan"], [SET_TABS.find(([k]) => k === tab)[1]]]);
   v.innerHTML = `
-    <div class="ph"><div><h1>Pengaturan</h1><p>Pengaturan VPS, VPN L2TP, notifikasi, dan domain panel.</p></div></div>
+    <div class="ph"><div><h1>Pengaturan</h1><p>Pengaturan VPS, keamanan login, VPN L2TP, notifikasi, dan domain panel.</p></div></div>
     ${tabsHtml(SET_TABS, tab, "#/pengaturan")}
     <div id="setBody"></div>`;
   const b = $("#setBody");
   if (tab === "telegram") setTelegram(b);
+  else if (tab === "keamanan") setSecurity(b);
   else if (tab === "domain") setDomain(b);
   else if (tab === "vpn") setVpn(b);
   else setGeneral(b);
+}
+// ---------- Pengaturan → Keamanan ----------
+async function setSecurity(b) {
+  if (!b.innerHTML) b.innerHTML = `<div class="card"><div class="empty"><span class="spin"></span></div></div>`;
+  let x;
+  try { x = await api("/api/security"); } catch (e) { b.innerHTML = `<div class="note bad">${ic("alert")}<div><b>Gagal membaca pengaturan keamanan</b>${esc(e.message)}</div></div>`; return; }
+  if (!location.hash.startsWith("#/pengaturan/keamanan")) return;
+  const tg = STATE.settings.telegram || {};
+  const tgOn = !!(tg.tokenSet && tg.enabled && tg.chatId);
+  const lbl = (m) => (m >= 60 ? `${m / 60} jam` : `${m} menit`);
+  const step = (ms) => (ms >= 3600e3 ? `${ms / 3600e3} jam` : `${ms / 60e3} menit`);
+  const others = x.sessions.filter((z) => !z.current).length;
+  b.innerHTML = `
+    <div class="card"><div class="ch"><h2>Logout otomatis</h2><span class="pill info">${lbl(x.idleMin)}</span></div>
+      <form class="cb" id="idleForm" style="padding-top:4px">
+        <label for="secIdle">Keluar otomatis bila tidak ada aktivitas selama</label>
+        <select id="secIdle" style="max-width:260px">${x.idleChoices.map((m) => `<option value="${m}" ${m === x.idleMin ? "selected" : ""}>${lbl(m)}${m === 60 ? " (disarankan)" : ""}</option>`).join("")}</select>
+        <div class="help">Aktivitas = klik, ketik, gulir, atau pindah halaman. Penyegaran otomatis (misalnya di halaman ZeroTier) tidak dihitung, jadi tab yang dibiarkan terbuka tetap keluar. Satu menit sebelumnya muncul peringatan dengan tombol <b>Tetap masuk</b>.</div>
+        <div class="form-actions"><button class="btn pri">Simpan</button></div>
+      </form></div>
+
+    <div class="card"><div class="ch"><h2>Blokir salah password</h2><span class="muted zt-small">${x.blocked.length ? `${x.blocked.length} IP diblokir` : "tidak ada IP diblokir"}</span></div>
+      <div class="cb" style="padding-top:4px">
+        <ol class="sec-steps">${x.blockSteps.map((ms, i) => `<li><b>${i === 0 ? "5 kali salah" : i === 1 ? "Mengulang lagi" : "Masih mengulang"}</b><span>diblokir ${step(ms)}</span></li>`).join("")}</ol>
+        <div class="help">Blokir berlaku per alamat IP dan tetap tersimpan walaupun panel di-restart. Tingkat blokir kembali ke awal setelah 24 jam tanpa percobaan salah.</div>
+        <label class="check" style="margin-top:14px"><input type="checkbox" id="secNotify" ${x.notifyBlock ? "checked" : ""}> Kirim notifikasi Telegram saat ada IP diblokir</label>
+        ${tgOn ? "" : `<div class="help">Telegram belum diatur. Atur dulu di <a href="#/pengaturan/telegram">Notifikasi Telegram</a>.</div>`}
+      </div>
+      ${x.blocked.length ? `<table class="t"><thead><tr><th>IP</th><th>Tingkat</th><th class="hide-sm">Salah total</th><th>Diblokir sampai</th><th class="r"></th></tr></thead><tbody>
+        ${x.blocked.map((z) => `<tr><td class="mono">${esc(z.ip)}</td><td>${z.level} dari 3</td><td class="hide-sm">${z.total}×</td><td>${esc(fmtT(z.until, true))}</td><td class="r"><button class="btn sm" data-unblock="${esc(z.ip)}">Buka blokir</button></td></tr>`).join("")}
+      </tbody></table>` : ""}
+    </div>
+
+    <div class="card"><div class="ch"><h2>Sesi aktif</h2><span class="muted zt-small">${x.sessions.length} perangkat</span></div>
+      <ul class="sess">${x.sessions.map((z) => `<li><span class="sess-ic">${ic(z.mobile ? "phone" : "monitor")}</span>
+        <div class="sess-b"><b>${esc(z.device)}</b> ${z.current ? `<span class="pill ok">Perangkat ini</span>` : ""}
+          <div class="muted zt-small"><span class="mono">${esc(z.ip || "—")}</span> · masuk ${esc(fmtT(z.created, true))} · aktif ${esc(ztAgo(z.last))}</div></div>
+        ${z.current ? "" : `<button class="btn sm ghost danger" data-kick="${esc(z.id)}">Keluarkan</button>`}</li>`).join("")}</ul>
+      <div class="cb card-actions"><span class="muted zt-small">Mengganti password admin otomatis mengeluarkan semua perangkat lain.</span><span class="sp"></span><button class="btn danger" id="kickAll" ${others ? "" : "disabled"}>${ic("logout")}Keluarkan semua perangkat lain</button></div>
+    </div>`;
+  paintIcons(b);
+  $("#idleForm").onsubmit = async (e) => {
+    e.preventDefault(); const btn = e.target.querySelector("button"); busyBtn(btn, true);
+    try { await api("/api/security", { method: "PUT", body: { idleMin: parseInt($("#secIdle").value, 10) } }); IDLE_MS = parseInt($("#secIdle").value, 10) * 60e3; toast("Logout otomatis disimpan"); setSecurity(b); }
+    catch (err) { toast(err.message); busyBtn(btn, false); }
+  };
+  $("#secNotify").onchange = async (e) => { try { await api("/api/security", { method: "PUT", body: { notifyBlock: e.target.checked } }); toast(e.target.checked ? "Notifikasi blokir aktif" : "Notifikasi blokir dimatikan"); } catch (err) { toast(err.message); } };
+  b.querySelectorAll("[data-unblock]").forEach((btn) => (btn.onclick = async () => { busyBtn(btn, true); try { await api("/api/security/unblock", { method: "POST", body: { ip: btn.dataset.unblock } }); toast("Blokir dibuka"); setSecurity(b); } catch (e) { toast(e.message); busyBtn(btn, false); } }));
+  b.querySelectorAll("[data-kick]").forEach((btn) => (btn.onclick = async () => { busyBtn(btn, true); try { await api(`/api/sessions/${btn.dataset.kick}`, { method: "DELETE" }); toast("Sesi dikeluarkan"); setSecurity(b); } catch (e) { toast(e.message); busyBtn(btn, false); } }));
+  $("#kickAll").onclick = () => confirmDialog({
+    title: "Keluarkan semua perangkat lain?", danger: true, icon: "logout", ok: "Keluarkan",
+    text: `<p>${others} perangkat lain harus login lagi. Perangkat ini tetap masuk.</p>`,
+    onOk: async () => { const r = await api("/api/sessions/others", { method: "DELETE" }); closeModal(); toast(`${r.count} perangkat dikeluarkan`); setSecurity(b); },
+  });
 }
 function setGeneral(b) {
   const s = STATE.settings;
@@ -2063,7 +2250,7 @@ async function fillGenie(refresh) {
         ${g.devicesError ? `<div class="cb"><div class="note warn" style="margin:0">${ic("alert")}<div><b>Data ONT tidak bisa dibaca</b>${esc(g.devicesError)}</div></div></div>`
           : !rows.length ? `<div class="empty"><p>Belum ada router.</p></div>`
           : `<table class="t"><thead><tr><th>Router</th><th class="r">ONT</th><th class="r">Melapor</th><th class="r hide-sm">Terakhir lapor</th></tr></thead><tbody>
-            ${rows.map((r) => `<tr class="click" data-go="#/router/${r.id}"><td><b style="font-weight:550">${esc(r.name)}</b>${r.transport === "zt" ? ' <span class="tag">ZT</span>' : ""}<div class="muted mono" style="font-size:12px">${esc(r.virtualSubnet)}</div></td>
+            ${rows.map((r) => `<tr class="click" data-go="#/router/${r.id}"><td><b style="font-weight:550">${esc(r.name)}</b>${r.transport === "zt" ? ' <span class="tag">ZT</span>' : r.transport === "wg" ? ' <span class="tag violet">WG</span>' : ""}<div class="muted mono" style="font-size:12px">${esc(r.virtualSubnet)}</div></td>
               <td class="r pc">${r.total}</td><td class="r pc ${r.total && r.active < r.total ? "warn" : ""}">${r.active}</td><td class="r muted hide-sm">${ago(r.last)}</td></tr>`).join("")}
             ${g.other.total ? `<tr><td><span class="muted">Tanpa router</span><div class="muted" style="font-size:12px">IP di luar IP virtual router panel</div></td><td class="r pc">${g.other.total}</td><td class="r pc">${g.other.active}</td><td class="r muted hide-sm">${ago(g.other.last)}</td></tr>` : ""}
           </tbody></table>`}
@@ -2542,6 +2729,108 @@ async function ztMemberAct(btn, m, cur, b) {
   });
 }
 
+/* ================= WireGuard ================= */
+function viewWireguard(v) {
+  crumb([["WireGuard"]]);
+  v.innerHTML = `
+    <div class="ph"><div><h1>WireGuard</h1><p id="wgSub">Jalur VPN UDP yang ringan untuk router RouterOS v7.</p></div>
+      <div class="acts"><button class="btn" id="wgRe">${ic("refresh")}Muat ulang</button><button class="btn pri" data-act="add">${ic("plus")}Tambah router</button></div></div>
+    <div id="wgBody"></div>`;
+  const b = $("#wgBody");
+  $("#wgRe").onclick = () => { busyBtn($("#wgRe"), true); setWireguard(b).finally(() => busyBtn($("#wgRe"), false)); };
+  setWireguard(b);
+}
+let WGPOLL = null;
+async function setWireguard(b) {
+  if (!b.innerHTML) b.innerHTML = `<div class="card"><div class="empty"><span class="spin"></span><p style="margin-top:10px">Membaca WireGuard…</p></div></div>`;
+  let w;
+  try { w = await api("/api/wg"); } catch (e) { b.innerHTML = `<div class="note bad">${ic("alert")}<div><b>Gagal membaca WireGuard</b>${esc(e.message)}</div></div>`; return; }
+  if (!location.hash.startsWith("#/wireguard")) return;
+  const sub = $("#wgSub");
+  if (sub) sub.innerHTML = `<span class="zt-node"><span class="dot ${w.up ? "ok" : "bad"}"></span>Interface <b class="mono">${esc(w.iface)}</b> · ${esc(w.version || "wireguard-tools")} · ${w.up ? "menyala" : "mati"}</span>`;
+  const S = w.sites, on = S.filter((x) => x.online).length;
+  const fb = (n) => (n >= 1024 ** 3 ? (n / 1024 ** 3).toFixed(1).replace(".", ",") + " GB" : n >= 1024 ** 2 ? (n / 1024 ** 2).toFixed(1).replace(".", ",") + " MB" : Math.round(n / 1024) + " KB");
+  const stale = S.filter((x) => x.stale);
+  b.innerHTML = `
+    ${!w.up ? `<div class="note bad">${ic("alert")}<div><b>Interface ${esc(w.iface)} tidak menyala</b>Router WireGuard tidak bisa tersambung. Coba <code>systemctl restart wg-quick@${esc(w.iface)}</code>, atau buka Add-on → WireGuard → Periksa.</div></div>` : ""}
+    ${stale.length ? `<div class="note warn">${ic("alert")}<div><b>${stale.length} router perlu pasang ulang script</b>${stale.map((x) => `<a href="#/router/${esc(x.id)}/script">${esc(x.name)}</a>`).join(", ")}. Port, rentang, atau kunci berubah; salin script terbaru ke MikroTik.</div></div>` : ""}
+    <div class="zt-top">
+      <div class="zt-main">
+        <div class="card">
+          <div class="ch"><h2>Server WireGuard di VPS</h2>${w.up ? `<span class="pill ok">Menyala</span>` : `<span class="pill bad">Mati</span>`}</div>
+          <div class="zt-cur">
+            <div class="zt-hrow"><span class="zt-hl">Endpoint</span><span class="zt-hv"><span class="zt-idbox"><span class="zt-nwid mono" style="font-size:15px">${esc(w.endpoint)}</span><button class="zt-ib" data-copy="${esc(w.endpoint)}" data-msg="Endpoint tersalin" title="Salin endpoint">${ic("copy")}</button></span></span></div>
+            <div class="zt-hrow"><span class="zt-hl">Public key VPS</span><span class="zt-hv"><span class="mono wg-key">${esc(w.pub)}</span><button class="zt-ib" data-copy="${esc(w.pub)}" data-msg="Public key tersalin" title="Salin public key">${ic("copy")}</button></span></div>
+            <div class="zt-hmeta"><span class="pill info">UDP ${esc(w.port)}</span><span class="muted">interface <span class="mono">${esc(w.iface)}</span></span></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="ch"><h2>Konfigurasi &amp; kesehatan</h2><span class="muted zt-small">diperbarui tiap menit</span></div>
+          <div class="zt-health">
+            <div class="zt-hc"><span>Rentang IP</span><b class="mono">${esc(w.subnet)}</b><small>IP router dibagikan otomatis mulai .2</small></div>
+            <div class="zt-hc"><span>IP VPS (gateway)</span><b class="mono">${esc(w.vpsIp)}</b><small>${S.length} router memakai jalur ini</small></div>
+            <div class="zt-hc"><span>Router tersambung</span><b>${on} <em>dari ${S.length}</em></b><div class="zt-bar"><i style="width:${S.length ? Math.round((on / S.length) * 100) : 0}%"></i></div></div>
+            <div class="zt-hc"><span>Data total</span><b>${fb(S.reduce((a, x) => a + x.rx, 0))}</b><small>diterima · ${fb(S.reduce((a, x) => a + x.tx, 0))} dikirim</small></div>
+          </div>
+        </div>
+      </div>
+      <div class="zt-side">
+        <div class="card"><div class="ch"><h2>Firewall provider</h2><span class="zt-tip" title="Panel sudah membuka port ini di firewall VPS (iptables/UFW).">${ic("info")}</span></div>
+          <div class="cb" style="padding-top:12px">
+            <p class="muted" style="font-size:13px;line-height:1.55">Buka port berikut di firewall/security group provider VPS (bila ada), supaya MikroTik bisa tersambung:</p>
+            <div class="wg-port"><span class="mono">UDP ${esc(w.port)}</span>${copyBtn(String(w.port), "Port tersalin")}</div>
+          </div></div>
+        <div class="card zt-actc">
+          <button class="btn pri" id="wgSet">${ic("sliders")}Pengaturan WireGuard</button>
+          <a class="btn" href="#/addon">${ic("puzzle")}Periksa di Add-on</a>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="ch"><h2>Router WireGuard</h2><span class="muted" style="font-size:12.5px">${S.length} router</span></div>
+      ${S.length ? `<div class="zt-tw"><table class="t"><thead><tr><th>Router</th><th>IP WireGuard</th><th class="hide-sm">Endpoint</th><th class="hide-sm">Handshake</th><th class="hide-md">Data</th><th>Status</th></tr></thead><tbody>
+        ${S.map((x) => `<tr class="click" data-go="#/router/${esc(x.id)}"><td><div class="zt-dev"><span class="zt-av router">${ic("router")}</span><div style="min-width:0"><div class="zt-nm">${esc(x.name)}${x.stale ? ' <span class="tag gray">pasang ulang script</span>' : ""}</div><div class="muted zt-small mono">${esc(x.virtualSubnet)}</div></div></div></td>
+          <td class="mono">${esc(x.wgIp || "—")}</td>
+          <td class="hide-sm mono">${esc(x.endpoint || "—")}</td>
+          <td class="hide-sm">${x.handshake ? esc(ztAgo(x.handshake)) : '<span class="muted">belum pernah</span>'}</td>
+          <td class="hide-md muted">${x.handshake ? `↓ ${fb(x.rx)} · ↑ ${fb(x.tx)}` : "—"}</td>
+          <td>${x.online ? `<span class="pill ok">Tersambung</span>` : x.installed ? `<span class="pill bad">Terputus</span>` : `<span class="pill wait">Menunggu</span>`}</td></tr>`).join("")}
+      </tbody></table></div>`
+      : `<div class="empty"><div class="big">${ic("bolt")}</div><h3>Belum ada router WireGuard</h3><p>Tambah router baru dengan jalur WireGuard, atau ubah jalur router yang sudah ada.</p><button class="btn pri" style="margin-top:12px" data-act="add">${ic("plus")}Tambah router</button></div>`}
+    </div>
+    <p class="help" style="margin-top:12px">Router dianggap tersambung bila handshake terakhir kurang dari 3 menit. Script memakai <code>persistent-keepalive</code> 25 detik, jadi tetap tersambung walau MikroTik di belakang NAT.</p>`;
+  paintIcons(b);
+  b.querySelectorAll("tr[data-go]").forEach((tr) => (tr.onclick = (e) => { if (!e.target.closest("a,button")) location.hash = tr.dataset.go; }));
+  $("#wgSet").onclick = () => wgSettingsDialog(w, b);
+  clearInterval(WGPOLL);
+  WGPOLL = setInterval(() => {
+    if (!location.hash.startsWith("#/wireguard") || !document.body.contains(b)) return clearInterval(WGPOLL);
+    if ($("#modalRoot").innerHTML || document.hidden) return;
+    setWireguard(b);
+  }, 30000);
+}
+function wgSettingsDialog(w, b) {
+  modal("Pengaturan WireGuard", `
+    <label for="wsPort">Port UDP</label>
+    <input id="wsPort" type="number" min="1024" max="65535" value="${esc(w.port)}" style="max-width:180px">
+    <div class="help">Bawaan 51820. Ganti bila port itu diblokir provider. Panel membuka port baru di firewall VPS; buka juga di firewall provider.</div>
+    <label for="wsSub">Rentang IP</label>
+    <input id="wsSub" type="text" class="mono" value="${esc(w.subnet)}">
+    <div class="help">IP private /16 sampai /28. VPS memakai alamat .1, router mulai .2. Tidak boleh bentrok dengan L2TP, ZeroTier, IP virtual, atau subnet ONT.</div>
+    ${w.sites.length ? `<div class="note warn" style="margin-top:12px">${ic("alert")}<div><b>${w.sites.length} router perlu pasang ulang script</b>Bila port atau rentang diganti, router WireGuard terputus sampai script terbaru dipasang di MikroTik.</div></div>` : ""}
+    <div class="err" id="wsErr"></div>`,
+    `<button class="btn" data-act="closemodal">Batal</button><button class="btn pri" id="wsOk">Simpan</button>`, { size: "md" });
+  $("#wsOk").onclick = async () => {
+    $("#wsErr").textContent = ""; busyBtn($("#wsOk"), true);
+    try {
+      const r = await api("/api/wg", { method: "PUT", body: { port: parseInt($("#wsPort").value, 10), subnet: $("#wsSub").value.trim() } });
+      await load(); setWireguard(b);
+      if (!r.changed) { closeModal(); toast("Tidak ada perubahan"); }
+      else doneDialog("Pengaturan WireGuard disimpan", r.stale ? `<p>${r.stale} router perlu pasang ulang script MikroTik. Daftarnya ada di bagian atas halaman WireGuard.</p>` : "", "ok", !r.stale);
+    } catch (e) { $("#wsErr").textContent = e.message; busyBtn($("#wsOk"), false); }
+  };
+}
+
 /* ---------- Telegram ---------- */
 let TGDET = null; // hasil deteksi grup & topik
 function setTelegram(b) {
@@ -2692,7 +2981,60 @@ function setTelegram(b) {
       onOk: async () => { await api("/api/telegram", { method: "PUT", body: { clear: true } }); TGDET = null; await load(); route(); doneDialog("Pengaturan Telegram dihapus", ""); },
     });
   };
+  const hc = document.createElement("div"); b.appendChild(hc); healthSettings(hc);
 }
+// ---------- Laporan kesehatan VPS (tab Notifikasi Telegram) ----------
+async function healthSettings(el) {
+  let x;
+  try { x = await api("/api/health"); } catch (e) { el.innerHTML = ""; return; }
+  if (!document.body.contains(el)) return;
+  const c = x.conf;
+  el.innerHTML = `<div class="card" style="margin-top:16px"><div class="ch"><h2>Laporan kesehatan VPS</h2>${c.enabled ? `<span class="pill ok">tiap ${c.days} hari · ${esc(c.time)}</span>` : `<span class="pill wait">nonaktif</span>`}</div>
+    <form class="cb" id="hlForm" style="padding-top:4px">
+      <label class="check" style="margin-top:4px"><input type="checkbox" id="hlOn" ${c.enabled ? "checked" : ""}> Kirim laporan kesehatan VPS secara berkala</label>
+      <div class="hl-row">
+        <div><label for="hlDays">Interval</label><div class="hl-in"><input id="hlDays" type="number" min="1" max="30" value="${c.days}"><span>hari</span></div></div>
+        <div><label for="hlTime">Jam kirim</label><input id="hlTime" type="time" value="${esc(c.time)}"></div>
+      </div>
+      <div class="help">Isi: CPU, RAM, swap, disk, uptime VPS, status layanan (panel, VPN, GenieACS, add-on), dan ringkasan router. ${x.next ? `Laporan berikutnya <b>${esc(fmtT(x.next, true))}</b>.` : ""}${x.lastSent ? ` Terakhir dikirim ${esc(fmtT(x.lastSent, true))}.` : ""}</div>
+      <label class="check" style="margin-top:14px"><input type="checkbox" id="hlAlert" ${c.alerts ? "checked" : ""}> Peringatan langsung bila disk atau RAM di atas 90% atau ada layanan mati</label>
+      <div class="help">Dikirim saat masalah muncul, diulang paling sering sekali per 6 jam selama belum beres, dan ada pesan saat kembali normal.</div>
+      ${x.tgActive ? "" : `<div class="note warn" style="margin-top:12px">${ic("alert")}<div><b>Telegram belum aktif</b>Atur bot dan grup di atas dulu; laporan baru dikirim setelah Telegram aktif.</div></div>`}
+      <div class="err" id="hlErr"></div>
+      <div class="form-actions"><button type="button" class="btn" id="hlTest" ${x.tgActive ? "" : "disabled"}>${ic("send")}Kirim sekarang</button><button class="btn pri">Simpan</button></div>
+    </form></div>`;
+  paintIcons(el);
+  const sync = () => { const on = $("#hlOn").checked; $("#hlDays").disabled = !on; $("#hlTime").disabled = !on; };
+  $("#hlOn").onchange = sync; sync();
+  $("#hlForm").onsubmit = async (e) => {
+    e.preventDefault(); $("#hlErr").textContent = ""; const btn = e.target.querySelector("button.pri"); busyBtn(btn, true);
+    try {
+      const r = await api("/api/health", { method: "PUT", body: { enabled: $("#hlOn").checked, days: parseInt($("#hlDays").value, 10), time: $("#hlTime").value, alerts: $("#hlAlert").checked } });
+      toast(r.next ? `Disimpan · laporan berikutnya ${fmtT(r.next, true)}` : "Disimpan"); healthSettings(el);
+    } catch (err) { $("#hlErr").textContent = err.message; busyBtn(btn, false); }
+  };
+  $("#hlTest").onclick = async () => { const btn = $("#hlTest"); busyBtn(btn, true); try { await api("/api/health/send", { method: "POST" }); toast("Laporan dikirim ke Telegram"); } catch (err) { $("#hlErr").textContent = err.message; } busyBtn(btn, false); };
+}
+// ---------- Kartu Kesehatan VPS (Dashboard) ----------
+async function dashHealth() {
+  const el = $("#dashHealth"); if (!el) return;
+  let x;
+  try { x = await api("/api/health"); } catch (e) { el.innerHTML = ""; return; }
+  if (!document.body.contains(el)) return;
+  const col = (p) => (p >= 90 ? "var(--bad)" : p >= 75 ? "var(--warn)" : "var(--ok)");
+  const bar = (label, p, sub) => `<div class="vh-r"><div class="vh-t"><span>${label}</span><b>${p == null ? "—" : p + "%"}</b></div><div class="zt-bar"><i style="width:${p || 0}%;background:${col(p || 0)}"></i></div><small>${sub}</small></div>`;
+  const fb = (n) => (n >= 1024 ** 3 ? (n / 1024 ** 3).toFixed(1).replace(".", ",") + " GB" : Math.round(n / 1024 ** 2) + " MB");
+  const down = x.services.filter((v) => !v.active);
+  el.innerHTML = `<div class="card"><div class="ch"><h2>Kesehatan VPS</h2><a href="#/pengaturan/telegram">Laporan</a></div>
+    <div class="vh">
+      ${bar("CPU", x.cpu == null ? null : Math.round(x.cpu), `beban ${x.load[0].toFixed(2).replace(".", ",")} · ${x.cores} inti`)}
+      ${bar("RAM", x.mem.pct, `${fb(x.mem.used)} / ${fb(x.mem.total)}`)}
+      ${x.disk ? bar("Disk", x.disk.pct, `${fb(x.disk.used)} / ${fb(x.disk.total)}`) : ""}
+      <div class="vh-f"><span class="pill ${down.length ? "bad" : "ok"}">${down.length ? `${down.length} layanan mati` : `${x.services.length} layanan berjalan`}</span><span class="muted zt-small">uptime ${esc(fmtDurShortD(x.uptime))}</span></div>
+      ${down.length ? `<div class="zt-small" style="color:var(--bad)">${down.map((v) => esc(v.label)).join(", ")}</div>` : ""}
+    </div></div>`;
+}
+function fmtDurShortD(ms) { const d = Math.floor(ms / 86400e3), h = Math.floor((ms % 86400e3) / 3600e3); return d ? `${d} hari ${h} jam` : `${h} jam ${Math.floor((ms % 3600e3) / 60e3)} menit`; }
 
 /* ---------- Domain & HTTPS (Cloudflare) ---------- */
 let CF = null; // proses verifikasi yang sedang berjalan
@@ -2902,6 +3244,17 @@ document.addEventListener("click", async (e) => {
     const id = a.dataset.id || cur;
     try { await api(`/api/sites/${id}/zt-script-done`, { method: "POST", body: {} }); await load(); route(); toast("Ditandai sudah dipasang"); } catch (err) { toast(err.message, true); }
   }
+  else if (act === "wgdone") {
+    const id = a.dataset.id || cur;
+    try { await api(`/api/sites/${id}/wg-script-done`, { method: "POST", body: {} }); await load(); route(); toast("Ditandai sudah dipasang"); } catch (err) { toast(err.message, true); }
+  }
+  else if (act === "wgrekey") {
+    $("#menuList").classList.add("hidden");
+    const id = a.dataset.id || cur, xs = site(id);
+    confirmDialog({ title: "Buat kunci WireGuard baru?", icon: "key", ok: "Buat kunci baru", danger: true,
+      text: `<p>Kunci lama <b>${esc(xs ? xs.name : "")}</b> langsung tidak berlaku, jadi router terputus sampai script baru dipasang di MikroTik. Pakai ini bila kunci router mungkin bocor.</p>`,
+      onOk: async () => { await api(`/api/sites/${id}/wg-rekey`, { method: "POST", body: {} }); closeModal(); await load(); location.hash = `#/router/${id}/script`; route(); toast("Kunci baru dibuat. Pasang ulang script."); } });
+  }
   else if (act === "ztpick") { const m = $("#menuList"); if (m) m.classList.add("hidden"); openZtPick(a.dataset.id || cur); }
   else if (act === "del") { $("#menuList").classList.add("hidden"); openDelete(a.dataset.id); }
   else if (act === "test") openTest(a.dataset.id || cur);
@@ -2918,13 +3271,13 @@ paintIcons();
   try {
     const me = await api("/api/me");
     setBrand(me.panelName);
-    if (me.loggedIn) { showApp(); await load(); route(); } else showLogin();
+    if (me.loggedIn) { showApp(); await load(); route(); idleStart(); } else showLogin();
   } catch (e) { showLogin(); }
   setInterval(async () => {
     if ($("#appView").classList.contains("hidden") || $("#mbg") || TEST) return;
     const h = location.hash;
     if (CF && CF.running) return;
-    try { await load(); if (!/\/(tes|port)$|^#\/(pengaturan|log|genieacs|zerotier)/.test(h) && !document.activeElement.matches("input,select")) route(); } catch (e) {}
+    try { await load(); if (!/\/(tes|port)$|^#\/(pengaturan|log|genieacs|zerotier|wireguard)/.test(h) && !document.activeElement.matches("input,select")) route(); } catch (e) {}
   }, 30000);
 })();
 </script>

@@ -56,6 +56,12 @@ panel_get() {
     else if (k === "stdHttp") v = String(s.stdHttp || 80);
     else if (k === "stdHttps") v = String(s.stdHttps || 443);
     else if (k === "ztNet") v = s.zt && s.zt.nwid ? `${s.zt.name || s.zt.nwid} (${s.zt.subnet || "-"})` : "";
+    else if (k === "wgOn") v = s.addons && s.addons.wireguard && s.addons.wireguard.installed ? "1" : "";
+    else if (k === "wgNet") v = s.wg ? `${s.wg.subnet} · VPS ${s.wg.vpsIp} · UDP ${s.wg.port}` : "";
+    else if (k === "wgPort") v = s.wg ? String(s.wg.port || 51820) : "";
+    else if (k === "wgSites") v = String((d.sites || []).filter((x) => x.transport === "wg").length);
+    else if (k === "healthOn") v = !s.health || s.health.enabled !== false ? `tiap ${(s.health && s.health.days) || 7} hari jam ${(s.health && s.health.time) || "08:00"}` : "nonaktif";
+    else if (k === "idleMin") v = String((s.security && s.security.idleMin) || 60);
     else if (k === "tunnelLocal") {
       const net = s.tunnelNet || "192.168.42.0/24";
       const p = net.split("/")[0].split(".").map(Number);
@@ -182,6 +188,27 @@ if svc_exists zerotier-one; then
 else
   line "Status" "${DIM}belum dipasang${NC} (tidak wajib, hanya untuk router RouterOS v7 ARM/ARM64)"
   MISSING+=("ZeroTier           : panel → Add-on → ZeroTier → Install   (opsional)")
+fi
+
+# ---------- WireGuard (opsional) ----------
+head1 "WireGuard (opsional)"
+if [ -n "$(panel_get wgOn)" ]; then
+  line "WireGuard" "$(badge "$(svc_state wg-quick@wg0)")"
+  line "Jaringan" "$(panel_get wgNet)"
+  line "Router" "$(panel_get wgSites) router memakai WireGuard"
+  line "Pengelolaan" "panel → menu WireGuard"
+  WGP="$(panel_get wgPort)"; [ -n "$WGP" ] && UDP_OPEN+=("$WGP|WireGuard")
+else
+  line "Status" "${DIM}belum dipasang${NC} (tidak wajib, jalur VPN UDP untuk RouterOS v7)"
+  MISSING+=("WireGuard          : panel → Add-on → WireGuard → Install  (opsional)")
+fi
+
+# ---------- Keamanan & laporan ----------
+head1 "Keamanan & laporan"
+if [ -f "$PANEL_DATA" ]; then
+  line "Logout otomatis" "setelah diam $(panel_get idleMin) menit (panel → Pengaturan → Keamanan)"
+  line "Blokir login" "5x salah: 5 menit → 30 menit → 24 jam"
+  line "Laporan VPS" "$(panel_get healthOn) (Pengaturan → Notifikasi Telegram)"
 fi
 
 # ---------- Firewall ----------

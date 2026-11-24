@@ -3,15 +3,15 @@
 Paket untuk menjalankan **GenieACS di VPS** yang bisa mengelola dan memberi perintah (Summon) ke ONT di **banyak router MikroTik**, walaupun semua router memakai **subnet lokal yang sama** (misalnya semua `10.0.0.0/24`).
 
 ```
-ONT ─ OLT ─ MikroTik router A ═══ VPN L2TP / ZeroTier ═══╗
-ONT ─ OLT ─ MikroTik router B ═══ VPN L2TP / ZeroTier ═══╬══ VPS (GenieACS + Panel)
-ONT ─ OLT ─ MikroTik router C ═══ VPN L2TP / ZeroTier ═══╝        ▲
+ONT ─ OLT ─ MikroTik router A ═══ VPN L2TP / WireGuard / ZeroTier ═══╗
+ONT ─ OLT ─ MikroTik router B ═══ VPN L2TP / WireGuard / ZeroTier ═══╬══ VPS (GenieACS + Panel)
+ONT ─ OLT ─ MikroTik router C ═══ VPN L2TP / WireGuard / ZeroTier ═══╝        ▲
                                                 Remote Winbox: IP_VPS:20001
 ```
 
 ## Fitur
 
-- **VPN L2TP** dari setiap MikroTik ke VPS, atau **ZeroTier** untuk router RouterOS v7 ARM/ARM64
+- **VPN L2TP** dari setiap MikroTik ke VPS, atau **WireGuard** (semua RouterOS v7) dan **ZeroTier** (RouterOS v7 ARM/ARM64)
 - **IP virtual (NETMAP)** per router: ONT `10.0.0.25` di router A terlihat di GenieACS sebagai `10.100.1.25`, di router B sebagai `10.100.2.25`
 - **Patch GenieACS** agar Summon memakai IP virtual
 - **Panel web**:
@@ -20,11 +20,14 @@ ONT ─ OLT ─ MikroTik router C ═══ VPN L2TP / ZeroTier ═══╝    
   - **Port forwarding** untuk remote Winbox / WebFig / web ONT lewat IP publik VPS
   - Halaman **GenieACS** (status layanan, patch, jumlah ONT per router) dan **ZeroTier** (controller lengkap: jaringan, rentang IP, perangkat, rute; pemilih jaringan untuk membuka dan mengelola semua jaringan di controller, Network ID + tombol salin, ganti nama langsung di kartu, QR Network ID)
   - **Notifikasi Telegram** saat VPN putus, dikirim ke grup bertopik
+  - **Laporan kesehatan VPS** ke Telegram (CPU, RAM, disk, layanan, router) dengan interval hari yang bisa diatur, plus peringatan disk/RAM/layanan mati
+  - **Keamanan login**: logout otomatis saat diam (bisa diatur), blokir salah password bertingkat, notifikasi blokir ke Telegram, daftar sesi aktif
   - **Domain Cloudflare + HTTPS** otomatis, termasuk subdomain untuk GenieACS dan add-on (Panel ACS, Bilingku)
   - **Log aktivitas** dan **nama panel** yang bisa diganti
   - **Alamat tanpa port**: panel dibuka di port 80/443 (`http://IP-VPS` atau `https://domain`)
   - Menu **Add-on** dengan tombol **Install** dan progres 0–100%:
     - **ZeroTier** (add-on sistem, hanya paket zerotier-one; menu ZeroTier baru muncul setelah dipasang)
+    - **WireGuard** (add-on sistem, hanya paket wireguard-tools; menu WireGuard baru muncul setelah dipasang)
     - **[Panel ACS](https://github.com/suwazed-cmyk/panel-acs)**: monitoring ONT, **history redaman** seperti SmartOLT, peta lokasi. Dibuka di `/acs`
     - **[Bilingku](https://github.com/suwazed-cmyk/bilingku)**: billing PPPoE & Hotspot MikroTik. Dibuka di `/billing`
 - Script bantu: **`ringkasan.sh`** (alamat web dan port) dan **`cek.sh`** (tes semua layanan)
@@ -61,7 +64,7 @@ Selain VPS: MikroTik (RouterOS v6 atau v7) dengan akses Winbox, dan ONT yang men
 | **A. Siapkan VPS** | 1–2 | VPS siap, repo terunduh |
 | **B. Pasang layanan** | 3–7 | L2TP, GenieACS, patch IP virtual, panel berjalan, port terbuka |
 | **C. Hubungkan router** | 8–11 | Router tersambung, ONT muncul di GenieACS, Summon berhasil |
-| **D. Fitur opsional** | — | Telegram, domain + HTTPS, ZeroTier (bisa kapan saja, tidak wajib) |
+| **D. Fitur opsional** | — | Telegram, domain + HTTPS, ZeroTier, WireGuard (bisa kapan saja, tidak wajib) |
 
 Setelah setiap langkah, Anda bisa menjalankan `bash ringkasan.sh` (alamat web dan port) atau `bash cek.sh` (tes apakah semuanya berjalan).
 
@@ -151,6 +154,7 @@ Jangan menyalakan `ufw` karena bentrok dengan aturan VPN. Buka port berikut di f
 | 20001-20999 | TCP | Port forwarding (remote Winbox / web ONT) |
 | 500, 4500 | UDP | Hanya jika IPsec dinyalakan |
 | 9993 | UDP | ZeroTier, hanya jika memakai ZeroTier |
+| 51820 | UDP | WireGuard, hanya jika memakai WireGuard (port bisa diganti) |
 
 Port 7547 dan 7557 **tidak perlu** dibuka: ONT menghubungi GenieACS lewat VPN. Panel dibuka di port 80/443; port 8088 tetap jalan sebagai cadangan.
 
@@ -176,7 +180,7 @@ Buka **GenieACS UI** di `http://IP_VPS:3000`. Jika muncul *initialization wizard
 
 ### 9. Tambah router
 Panel → **Tambah router**:
-1. **Jalur ke VPS**: pilih **L2TP** (semua MikroTik). Jalur **ZeroTier** dibahas di [Fitur opsional E](#e-router-lewat-zerotier).
+1. **Jalur ke VPS**: pilih **L2TP** (semua MikroTik). Jalur **ZeroTier** dibahas di [Fitur opsional E](#e-router-lewat-zerotier), **WireGuard** di [Fitur opsional F](#f-router-lewat-wireguard).
 2. **Nama router**, misalnya `Nangahale`.
 3. **Subnet ONT di MikroTik**: lihat di Winbox → IP → DHCP Server → Networks, misalnya `10.0.0.0/24`.
 4. **IP virtual**: kosongkan agar dipilih otomatis (`10.100.x.0/24`), atau isi sendiri dengan IP private apa saja (misalnya `172.16.10.0/24`). GenieACS di VPS ikut menyesuaikan otomatis. Tidak boleh sama dengan router lain.
@@ -257,6 +261,7 @@ Menu **Add-on**: cari add-on, klik untuk melihat detail dan fiturnya, lalu **Ins
 | Add-on | Isi | Dibuka di |
 |---|---|---|
 | **ZeroTier** | Controller ZeroTier di VPS (lihat bagian E) | menu ZeroTier |
+| **WireGuard** | Jalur VPN UDP untuk semua RouterOS v7 (lihat bagian F) | menu WireGuard |
 | **Panel ACS** | Monitoring ONT dari GenieACS: daftar perangkat per router, history redaman (tiap 15 menit, disimpan 90 hari), redaman memburuk 24 jam, peta lokasi | `/acs` |
 | **Bilingku** | Billing PPPoE & Hotspot. Router bisa diambil langsung dari panel utama: cukup isi user/password API | `/billing` |
 
@@ -295,7 +300,29 @@ Semua pengelolaan ada di menu **ZeroTier** (tidak perlu web lain):
 
 **Pindah dari ZTNET:** jika dulu memakai ZTNET, menu ZeroTier menampilkan tombol **Pindahkan & lepas ZTNET**. Nama dan catatan perangkat disalin ke panel, lalu ZTNET dihapus (opsional beserta database PostgreSQL-nya). Jaringan, perangkat, dan IP tidak berubah karena tersimpan di controller ZeroTier.
 
-URL ACS di ONT tetap `http://192.168.42.1:7547`. Status, riwayat, notifikasi Telegram, tes koneksi, dan port forwarding berlaku untuk kedua jalur.
+URL ACS di ONT tetap `http://192.168.42.1:7547`. Status, riwayat, notifikasi Telegram, tes koneksi, dan port forwarding berlaku untuk semua jalur.
+
+### F. Router lewat WireGuard
+Jalur VPN UDP yang ringan dan cepat untuk **semua router RouterOS v7** (ARM, MIPS, x86). Tidak perlu paket tambahan di MikroTik. Cocok untuk koneksi yang kurang stabil. L2TP, WireGuard, dan ZeroTier bisa dipakai bersamaan.
+
+**Di VPS:**
+1. Panel → menu **Add-on → WireGuard → Install**. Yang dipasang hanya paket `wireguard-tools`; modul WireGuard sudah ada di kernel Ubuntu 22.04. Panel membuat kunci VPS, interface `wg0` (`10.66.0.1/24`), dan membuka port UDP **51820** di firewall VPS (iptables, dan UFW bila aktif).
+2. Buka UDP **51820** di firewall provider VPS (bila ada).
+
+**Tambah router:** panel → **Tambah router** → jalur **WireGuard** → **Simpan** → tab **Script MikroTik** → tempel di New Terminal. Panel membuat kunci khusus router itu dan IP WireGuard (mulai `10.66.0.2`). Router tersambung dalam beberapa detik.
+
+Menu **WireGuard** menampilkan endpoint, public key VPS, rentang IP, serta setiap router dengan **handshake terakhir**, endpoint, dan data masuk/keluar. Router dianggap tersambung bila handshake kurang dari 3 menit (script memakai keepalive 25 detik).
+- **Pengaturan WireGuard:** ganti **port UDP** atau **rentang IP**. Router WireGuard diberi tanda **Pasang ulang script WireGuard** karena script lama tidak lagi cocok.
+- **Buat kunci WireGuard baru** (menu ⋯ di detail router) bila kunci router mungkin bocor.
+- Router yang sudah ada bisa dipindah jalurnya (L2TP ↔ WireGuard ↔ ZeroTier) lewat **Ubah router**, lalu pasang script baru.
+
+### G. Keamanan login & laporan kesehatan VPS
+**Pengaturan → Keamanan:**
+- **Logout otomatis** setelah diam 15 menit, 30 menit, **1 jam** (bawaan), 4 jam, atau 12 jam. Yang dihitung hanya aktivitas nyata (klik, ketik, gulir, pindah halaman); penyegaran otomatis tidak memperpanjang sesi. Satu menit sebelumnya muncul peringatan dengan tombol **Tetap masuk**.
+- **Blokir salah password bertingkat** per IP: 5 kali salah diblokir **5 menit**, diulang **30 menit**, lalu **24 jam**. Tersimpan walau panel di-restart; bisa dibuka manual. Notifikasi Telegram dikirim saat ada IP diblokir.
+- **Sesi aktif**: daftar perangkat yang sedang login (browser/HP, IP, terakhir aktif) dengan tombol **Keluarkan**. Mengganti password admin otomatis mengeluarkan semua perangkat lain.
+
+**Pengaturan → Notifikasi Telegram → Laporan kesehatan VPS:** laporan berkala (bawaan **tiap 7 hari jam 08:00**, interval 1–30 hari) berisi CPU, RAM, swap, disk, uptime, status layanan (panel, VPN, GenieACS, add-on), dan ringkasan router. **Peringatan langsung** bila disk/RAM di atas 90% atau ada layanan mati (diulang paling sering 6 jam sekali, dan ada pesan saat normal lagi). Dashboard menampilkan kartu **Kesehatan VPS**.
 
 ---
 
@@ -330,6 +357,7 @@ Jalankan dulu `bash cek.sh`. Sebagian besar masalah langsung terlihat di sana.
 | ONT tidak muncul di GenieACS | URL ACS salah, Periodic Inform mati, atau router belum tersambung | Cek [langkah 10](#10-atur-ont). Tes koneksi harus lolos langkah **Jaringan ONT** |
 | Summon gagal, `ConnectionRequestURL` berisi IP asli | Patch belum aktif, atau ONT belum Inform ulang setelah patch | `bash genieacs-virtualip.sh status`, tunggu Inform berikutnya (maks. 5 menit) |
 | Router diberi tanda "IP virtual di luar patch GenieACS" | Panel gagal memperbarui `genieacs.env` | Buka menu **GenieACS** di panel, lalu cek `journalctl -u vpn-acs -n 50` |
+| Router WireGuard tetap Terputus (handshake belum pernah) | Port UDP WireGuard tertutup di firewall provider, script belum dipasang, atau alamat VPS salah | Buka UDP 51820 di firewall provider; di MikroTik cek **WireGuard → Peers → wg-acs** (Last Handshake). `bash cek.sh` memeriksa port dan handshake |
 | Router ZeroTier tidak muncul di "Pilih router yang bergabung" | Paket zerotier belum terpasang, VPS belum dihubungkan, atau UDP 9993 tertutup | Cek [Fitur opsional E](#e-router-lewat-zerotier). Di MikroTik: **ZeroTier → Interfaces → zt-acs** |
 | Notifikasi Telegram tidak masuk | Bot bukan admin, topik salah, atau token dipakai webhook lain | **Kirim pesan tes** di panel, lalu **Hapus webhook** jika ditawarkan |
 | Domain gagal: "Domain tidak ditemukan di akun Cloudflare ini" / "Token tidak boleh membaca domain ini" | Token belum punya izin **Zone → Zone → Read** | Edit token di Cloudflare, tambahkan izin itu |
