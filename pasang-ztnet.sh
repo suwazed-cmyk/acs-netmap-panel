@@ -87,6 +87,9 @@ fi
 
 # 4) Alamat web ZTNET
 DEF_HOST="$(hostname -I | awk '{print $1}')"
+# Bawaan dari panel: subdomain ZTNET yang sudah diatur, atau zt.<domain Cloudflare>
+PANEL_HOST="$(node -e 'try{const s=require("/opt/vpn-acs/data.json").settings||{};const z=s.subdomains&&s.subdomains.zt;if(z&&z.host)console.log(z.host);else if(s.cloudflare&&s.cloudflare.zoneName)console.log("zt."+s.cloudflare.zoneName)}catch(e){}' 2>/dev/null)"
+[ -n "$PANEL_HOST" ] && DEF_HOST="$PANEL_HOST"
 if [ -f "$ZTNET_DIR/.env" ]; then
   CUR_URL="$(grep '^NEXTAUTH_URL=' "$ZTNET_DIR/.env" | cut -d= -f2- | tr -d '"')"
   DEF_HOST="$(echo "$CUR_URL" | sed -E 's#^https?://##; s#:[0-9]+.*$##; s#/.*$##')"
@@ -151,6 +154,7 @@ echo
 ok "Selesai."
 echo -e "   Buka ZTNET : ${GREEN}${ZT_URL}${NC}  (akun pertama yang mendaftar menjadi admin, segera daftar)"
 echo "   Buka port di firewall provider VPS: TCP ${ZTNET_PORT} (web ZTNET) dan UDP 9993 (ZeroTier)."
+echo "   Panel VPN ACS -> Pengaturan -> Domain & HTTPS -> Subdomain layanan: buat record DNS acs/zt otomatis."
 echo "   Langkah berikutnya:"
 echo "     1. Di ZTNET: Networks -> Create Network, atur rentang IPv4 (contoh 172.27.0.0/24)"
 echo "     2. Di panel VPN ACS: Pengaturan -> ZeroTier -> pilih jaringan -> Hubungkan VPS"

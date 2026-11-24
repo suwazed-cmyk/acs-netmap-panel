@@ -40,7 +40,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "1.5.0";
+const VERSION = "1.5.1";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
 const VIRTUAL_POOL = "10.100.0.0/14";
@@ -1657,6 +1657,152 @@ async function cfRollback(job) {
   return notes;
 }
 
+// ---------- Subdomain layanan (GenieACS, ZTNET) ----------
+const SUB_SERVICES = {
+  acs: { label: "GenieACS", port: () => readGenieUiPort() || 3000, def: "acs" },
+  zt: { label: "ZTNET", port: () => ZTNET_PORT, def: "zt" },
+};
+function subUrl(svc, host) {
+  return `http://${host}:${SUB_SERVICES[svc].port()}`;
+}
+// Buat / perbarui record A (DNS only) untuk satu nama host
+async function cfUpsertA(job, host, ip) {
+  const zone = job.ctx.zone;
+  const r0 = await cfApi(job, "GET", `/zones/${zone.id}/dns_records?name=${encodeURIComponent(host)}&per_page=100`);
+  if (!r0.ok) return { ok: false, detail: "Gagal membaca DNS: " + cfErr(r0), hint: "Pastikan token masih punya izin Zone → DNS → Edit." };
+  const recs = r0.result || [];
+  if (recs.find((x) => x.type === "CNAME")) return { ok: false, detail: `Sudah ada record CNAME untuk ${host}`, hint: "Hapus record CNAME itu di Cloudflare, atau pakai nama subdomain lain." };
+  const as = recs.filter((x) => x.type === "A");
+  if (as.length > 1) return { ok: false, detail: `Ada ${as.length} record A untuk ${host}`, hint: "Sisakan satu record A di Cloudflare, atau pakai nama subdomain lain." };
+  if (as.length === 1) {
+    const a = as[0];
+    if (a.content === ip && !a.proxied) return { ok: true, detail: `${host} sudah mengarah ke ${ip}, tidak diubah`, recordId: a.id };
+    const r = await cfApi(job, "PATCH", `/zones/${zone.id}/dns_records/${a.id}`, { content: ip, proxied: false });
+    if (!r.ok) return { ok: false, detail: "Gagal memperbarui record: " + cfErr(r), hint: "Pastikan token punya izin Zone → DNS → Edit." };
+    return { ok: true, detail: `Record A diperbarui: ${host} → ${ip} (DNS only)`, recordId: a.id, prev: { id: a.id, content: a.content, proxied: !!a.proxied } };
+  }
+  const r = await cfApi(job, "POST", `/zones/${zone.id}/dns_records`, { type: "A", name: host, content: ip, ttl: 1, proxied: false });
+  if (!r.ok) return { ok: false, detail: "Gagal membuat record: " + cfErr(r), hint: "Pastikan token punya izin Zone → DNS → Edit." };
+  return { ok: true, detail: `Record A dibuat: ${host} → ${ip} (DNS only)`, recordId: r.result.id, created: r.result.id };
+}
+function cfSubSteps(subs) {
+  const steps = [
+    { key: "token", label: "Cek token", desc: "Token Cloudflare yang tersimpan masih aktif" },
+    { key: "ip", label: "IP publik VPS", desc: "Mendeteksi IP publik VPS ini" },
+  ];
+  for (const svc of Object.keys(SUB_SERVICES)) {
+    const host = subs[svc];
+    if (!host) continue;
+    const L = SUB_SERVICES[svc].label;
+    steps.push({ key: "sdns:" + svc, label: `Record ${L}`, desc: `Membuat / memperbarui ${host} (DNS only)` });
+    steps.push({ key: "sres:" + svc, label: `Cek ${host}`, desc: `${host} sudah mengarah ke IP VPS` });
+    if (svc === "zt") steps.push({ key: "ztnet", label: "Alamat login ZTNET", desc: `ZTNET memakai ${subUrl("zt", host)}` });
+  }
+  steps.push({ key: "sapply", label: "Terapkan", desc: "Link di dashboard memakai subdomain baru" });
+  return steps;
+}
+async function cfRunSubStep(job, key) {
+  const c = job.ctx;
+  if (key === "token" || key === "ip") return cfRunStep(job, key);
+  if (key.startsWith("sdns:")) {
+    const svc = key.slice(5);
+    const r = await cfUpsertA(job, job.subs[svc], c.ip);
+    c.subRes = c.subRes || {};
+    c.subRes[svc] = r;
+    return r;
+  }
+  if (key.startsWith("sres:")) {
+    const host = job.subs[key.slice(5)];
+    const until = Date.now() + 30000;
+    let last = null;
+    while (Date.now() < until) {
+      last = await dohLookup(host);
+      if (last.ips.includes(c.ip)) return { ok: true, detail: `${host} → ${c.ip}` };
+      await new Promise((z) => setTimeout(z, 3000));
+    }
+    return { ok: false, detail: last && last.ips.length ? `${host} masih mengarah ke ${last.ips.join(", ")}` : `${host} belum bisa ditemukan di DNS`, hint: "DNS belum menyebar. Tunggu beberapa menit lalu coba lagi." };
+  }
+  if (key === "ztnet") {
+    const envFile = ZTNET_DIR + "/.env";
+    if (!fs.existsSync(envFile)) return { ok: null, detail: "Dilewati: ZTNET belum terpasang. Saat memasang, isi alamat " + job.subs.zt };
+    const url = subUrl("zt", job.subs.zt);
+    try {
+      const old = fs.readFileSync(envFile, "utf8");
+      c.prevZtEnv = old;
+      const line = `NEXTAUTH_URL=${url}`;
+      const next = /^NEXTAUTH_URL=.*$/m.test(old) ? old.replace(/^NEXTAUTH_URL=.*$/m, line) : old.replace(/\n?$/, "\n") + line + "\n";
+      if (next !== old) {
+        fs.writeFileSync(envFile, next);
+        c.ztEnvChanged = true;
+        await run("systemctl", ["restart", "ztnet"]);
+        return { ok: true, detail: `NEXTAUTH_URL=${url} · ZTNET di-restart` };
+      }
+      return { ok: true, detail: `Sudah memakai ${url}` };
+    } catch (e) {
+      return { ok: false, detail: "Gagal mengubah pengaturan ZTNET: " + e.message };
+    }
+  }
+  if (key === "sapply") {
+    const d = loadData();
+    const s = (d.settings = d.settings || {});
+    const old = s.subdomains || {};
+    const next = {};
+    const notes = [];
+    for (const svc of Object.keys(SUB_SERVICES)) {
+      const host = job.subs[svc];
+      const prev = old[svc];
+      const urlKey = svc === "acs" ? "genieUrl" : "ztnetUrl";
+      if (host) {
+        const r = (c.subRes || {})[svc] || {};
+        const sameHost = prev && prev.host === host;
+        next[svc] = { host, recordId: r.recordId || (prev && prev.recordId) || "", created: !!r.created || !!(sameHost && prev.created) };
+        s[urlKey] = subUrl(svc, host);
+        notes.push(`${SUB_SERVICES[svc].label}: ${s[urlKey]}`);
+      } else if (prev) {
+        if (s[urlKey] === subUrl(svc, prev.host)) s[urlKey] = "";
+        notes.push(`${SUB_SERVICES[svc].label}: subdomain dimatikan`);
+      }
+      // Record lama buatan panel yang tidak dipakai lagi dihapus
+      if (prev && prev.created && prev.recordId && prev.host !== host) {
+        const del = await cfApi(job, "DELETE", `/zones/${c.zone.id}/dns_records/${prev.recordId}`);
+        notes.push(del.ok ? `record ${prev.host} dihapus` : `record ${prev.host} gagal dihapus (hapus manual di Cloudflare)`);
+      }
+    }
+    s.subdomains = next;
+    saveData(d);
+    return { ok: true, detail: notes.join(" · ") };
+  }
+  return { ok: null, detail: "Langkah tidak dikenal" };
+}
+async function cfRollbackSub(job) {
+  const c = job.ctx;
+  const notes = [];
+  for (const r of Object.values(c.subRes || {})) {
+    try {
+      if (r.created) {
+        const x = await cfApi(job, "DELETE", `/zones/${c.zone.id}/dns_records/${r.created}`);
+        notes.push(x.ok ? "record baru dihapus lagi" : "record baru gagal dihapus, cek di Cloudflare");
+      } else if (r.prev) {
+        const x = await cfApi(job, "PATCH", `/zones/${c.zone.id}/dns_records/${r.prev.id}`, { content: r.prev.content, proxied: r.prev.proxied });
+        notes.push(x.ok ? "record dikembalikan" : "record gagal dikembalikan, cek di Cloudflare");
+      }
+    } catch (e) {
+      notes.push("pembatalan DNS gagal: " + e.message);
+    }
+  }
+  if (c.ztEnvChanged && c.prevZtEnv != null) {
+    try {
+      fs.writeFileSync(ZTNET_DIR + "/.env", c.prevZtEnv);
+      await run("systemctl", ["restart", "ztnet"]);
+      notes.push("pengaturan ZTNET dikembalikan");
+    } catch (e) {
+      // abaikan
+    }
+  }
+  job.done = true;
+  return notes;
+}
+
 // =====================================================================
 //  HTTPS panel: satu port untuk http & https
 //  - HTTPS aktif: koneksi TLS diteruskan ke router https internal,
@@ -1922,7 +2068,7 @@ async function handleApi(req, res, url) {
           lastErrorAt: TG_STATUS.lastErrorAt,
         },
         cloudflare: cf
-          ? { domain: cf.domain, zoneName: cf.zoneName, ip: cf.ip, https: !!cf.https, httpsActive: HTTPS_ON, appliedAt: cf.appliedAt, certExpiry: cf.https ? certExpiry(cf.domain) : null, publicIpBefore: d.settings.publicIpBeforeCf || "" }
+          ? { domain: cf.domain, zoneName: cf.zoneName, ip: cf.ip, https: !!cf.https, subdomains: d.settings.subdomains || {}, ztnetInstalled: fs.existsSync(ZTNET_DIR), httpsActive: HTTPS_ON, appliedAt: cf.appliedAt, certExpiry: cf.https ? certExpiry(cf.domain) : null, publicIpBefore: d.settings.publicIpBeforeCf || "" }
           : null,
       },
       sites: d.sites.map((s) => {
@@ -2045,8 +2191,26 @@ async function handleApi(req, res, url) {
     const token = String(body.token || "").trim() || saved.token || "";
     if (!token) return send(res, 400, { error: "Isi API token Cloudflare." });
     if (!/^[A-Za-z0-9_-]{20,}$/.test(token)) return send(res, 400, { error: "Format token tidak valid. Pakai API Token (bukan Global API Key)." });
-    if (CF_JOB && !CF_JOB.done) await cfRollback(CF_JOB);
+    if (CF_JOB && !CF_JOB.done) await (CF_JOB.kind === "sub" ? cfRollbackSub(CF_JOB) : cfRollback(CF_JOB));
     CF_JOB = { id: crypto.randomBytes(8).toString("hex"), domain, token, https: body.https !== false, tz: tzName(d), steps: cfSteps(body.https !== false), idx: 0, ctx: {}, created: Date.now(), done: false };
+    return send(res, 200, { jobId: CF_JOB.id, steps: CF_JOB.steps });
+  }
+  if (p === "/api/cloudflare/subs" && method === "POST") {
+    const d = loadData();
+    const cf = d.settings && d.settings.cloudflare;
+    if (!cf || !cf.token || !cf.zoneId) return send(res, 400, { error: "Hubungkan domain Cloudflare dulu." });
+    const subs = {};
+    for (const svc of Object.keys(SUB_SERVICES)) {
+      const label = String((body[svc] === undefined ? "" : body[svc]) || "").trim().toLowerCase();
+      if (!label) continue;
+      if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) return send(res, 400, { error: `Nama subdomain ${SUB_SERVICES[svc].label} tidak valid. Pakai huruf kecil, angka, atau tanda minus, contoh: ${SUB_SERVICES[svc].def}` });
+      const host = `${label}.${cf.zoneName}`;
+      if (host === cf.domain) return send(res, 400, { error: `${host} sudah dipakai panel. Pilih nama lain.` });
+      subs[svc] = host;
+    }
+    if (subs.acs && subs.acs === subs.zt) return send(res, 400, { error: "Subdomain GenieACS dan ZTNET tidak boleh sama." });
+    if (CF_JOB && !CF_JOB.done) await (CF_JOB.kind === "sub" ? cfRollbackSub(CF_JOB) : cfRollback(CF_JOB));
+    CF_JOB = { id: crypto.randomBytes(8).toString("hex"), kind: "sub", domain: cf.zoneName, token: cf.token, subs, tz: tzName(d), steps: cfSubSteps(subs), idx: 0, ctx: { zone: { id: cf.zoneId, name: cf.zoneName } }, created: Date.now(), done: false };
     return send(res, 200, { jobId: CF_JOB.id, steps: CF_JOB.steps });
   }
   if (p === "/api/cloudflare/step" && method === "POST") {
@@ -2056,12 +2220,12 @@ async function handleApi(req, res, url) {
     if (!step || step.key !== body.key) return send(res, 400, { error: "Urutan langkah tidak sesuai." });
     let r;
     try {
-      r = await cfRunStep(job, step.key);
+      r = job.kind === "sub" ? await cfRunSubStep(job, step.key) : await cfRunStep(job, step.key);
     } catch (e) {
       r = { ok: false, detail: "Terjadi kesalahan: " + e.message };
     }
     if (r.ok === false) {
-      const notes = await cfRollback(job);
+      const notes = job.kind === "sub" ? await cfRollbackSub(job) : await cfRollback(job);
       r.rolledBack = true;
       r.rollbackNote = "Dibatalkan, pengaturan tetap seperti semula" + (notes.length ? ` (${notes.join(", ")})` : "") + ".";
       logActivity(req, "Cloudflare gagal", `${job.domain}: ${step.label} — ${r.detail}`);
@@ -2071,11 +2235,15 @@ async function handleApi(req, res, url) {
         job.done = true;
         logActivity(req, "Cloudflare diterapkan", `${job.domain} → ${job.ctx.ip}${job.https ? " + HTTPS" : ""}`);
       }
+      if (step.key === "sapply") {
+        job.done = true;
+        logActivity(req, "Subdomain layanan diterapkan", r.detail);
+      }
     }
     return send(res, 200, Object.assign({ key: step.key }, r));
   }
   if (p === "/api/cloudflare/cancel" && method === "POST") {
-    if (CF_JOB && CF_JOB.id === body.jobId && !CF_JOB.done) await cfRollback(CF_JOB);
+    if (CF_JOB && CF_JOB.id === body.jobId && !CF_JOB.done) await (CF_JOB.kind === "sub" ? cfRollbackSub(CF_JOB) : cfRollback(CF_JOB));
     return send(res, 200, { ok: true });
   }
   if (p === "/api/cloudflare/remove" && method === "POST") {
@@ -2494,7 +2662,7 @@ if (process.argv[2] === "--set-password") {
     }
     // Proses Cloudflare yang ditinggal lebih dari 10 menit dibatalkan
     if (CF_JOB && !CF_JOB.done && Date.now() - CF_JOB.created > 10 * 60 * 1000) {
-      await cfRollback(CF_JOB);
+      await (CF_JOB.kind === "sub" ? cfRollbackSub(CF_JOB) : cfRollback(CF_JOB));
       logActivity(null, "Cloudflare dibatalkan", `${CF_JOB.domain}: proses ditinggal lebih dari 10 menit`);
     }
   }, 60 * 1000);

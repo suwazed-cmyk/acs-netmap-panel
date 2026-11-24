@@ -155,6 +155,8 @@ Setelah berhasil:
 - Jika HTTPS dipilih, panel dibuka lewat `https://domain:8088`, dan alamat http/IP dialihkan otomatis. Sertifikat diperpanjang otomatis oleh certbot.
 - Record harus **DNS only** (awan abu-abu). Proxy Cloudflare (awan oranye) tidak bisa meneruskan L2TP dan Winbox; panel mengaturnya otomatis.
 
+**Subdomain layanan:** setelah domain terhubung, bagian **Subdomain layanan** di halaman yang sama membuat record DNS otomatis untuk **GenieACS** (bawaan `acs`, misalnya `http://acs.inetwifi.xyz:3000`) dan **ZTNET** (bawaan `zt`, misalnya `http://zt.inetwifi.xyz:3300`). Link di dashboard dan alamat login ZTNET ikut diperbarui. Namanya bisa diganti kapan saja; record lama buatan panel dihapus otomatis. Pakai subdomain ini untuk GenieACS dan ZTNET, jangan domain panel, karena domain panel ber-HTTPS membuat browser memaksa https di port lain.
+
 ### 8d. Router lewat ZeroTier (opsional)
 Router **ARM/ARM64 dengan RouterOS v7** (paket `zerotier`) bisa tersambung ke VPS lewat ZeroTier, bukan L2TP. Router MIPS (hAP lite, hEX, RB951) tetap memakai L2TP. Keduanya bisa dipakai bersamaan.
 

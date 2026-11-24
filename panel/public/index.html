@@ -1550,7 +1550,19 @@ function setDomain(b) {
         <button class="btn" id="cfAgain">${ic("refresh")}Verifikasi ulang</button>
         <span style="flex:1"></span>
         <button class="btn ghost danger" id="cfRemove">Lepas domain</button>
-      </div></div>` : ""}
+      </div></div>
+    <div class="card"><div class="ch"><h2>Subdomain layanan</h2></div><form class="cb" id="subForm" style="padding-top:6px">
+      <p class="help" style="margin-top:4px">Panel membuat record DNS (DNS only) untuk GenieACS dan ZTNET di <b>${esc(c.zoneName)}</b>, lalu memasang link-nya di dashboard. Nama subdomain bisa diganti kapan saja; record lama buatan panel ikut dihapus.</p>
+      ${[["acs", "GenieACS", 3000, "acs"], ["zt", "ZTNET", 3300, "zt"]].map(([k, L, port, def]) => {
+        const cur = (c.subdomains || {})[k];
+        const val = cur ? cur.host.slice(0, -(c.zoneName.length + 1)) : def;
+        return `<label class="check" style="margin-top:14px"><input type="checkbox" id="subOn_${k}" ${cur || !c.subdomains || !Object.keys(c.subdomains).length ? "checked" : ""}>${L}${k === "zt" && !c.ztnetInstalled ? ' <span class="muted" style="font-weight:400">(ZTNET belum terpasang)</span>' : ""}</label>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:6px"><input id="sub_${k}" type="text" value="${esc(val)}" style="max-width:200px"><span class="mono muted">.${esc(c.zoneName)}:${port}</span></div>
+          ${cur ? `<div class="help">Aktif: <a class="ext" href="http://${esc(cur.host)}:${port}" target="_blank" rel="noopener">${esc(cur.host)}:${port}${ic("ext", "")}</a></div>` : ""}`;
+      }).join("")}
+      <div class="err" id="subErr"></div>
+      <div class="form-actions"><button class="btn pri" id="subGo">${ic("play")}Terapkan subdomain</button></div>
+    </form></div>` : ""}
     <div class="card" id="cfFormCard"><div class="ch"><h2>${c ? "Ganti domain" : "Hubungkan domain Cloudflare"}</h2></div><form class="cb" id="cfForm" style="padding-top:6px">
       <p class="help" style="margin-top:4px">Panel membuat record DNS yang mengarah ke VPS ini, lalu mengganti alamat VPS di script MikroTik menjadi domain. Setiap langkah diperiksa dulu. <b>Jika ada yang gagal, semua dibatalkan dan pengaturan tetap seperti semula.</b></p>
       <label for="cfDom">Domain / subdomain</label>
@@ -1577,6 +1589,18 @@ function setDomain(b) {
       <div id="cfSum"></div>
     </div>`;
   $("#cfForm").onsubmit = (e) => { e.preventDefault(); runCf($("#cfDom").value.trim(), $("#cfTok").value.trim(), $("#cfHttps").checked); };
+  const sf = $("#subForm");
+  if (sf) {
+    const sync = (k) => { $("#sub_" + k).disabled = !$("#subOn_" + k).checked; };
+    ["acs", "zt"].forEach((k) => { $("#subOn_" + k).onchange = () => sync(k); sync(k); });
+    sf.onsubmit = (e) => {
+      e.preventDefault(); $("#subErr").textContent = "";
+      const body = {};
+      ["acs", "zt"].forEach((k) => { body[k] = $("#subOn_" + k).checked ? $("#sub_" + k).value.trim() : ""; });
+      if (!body.acs && !body.zt && !Object.keys(c.subdomains || {}).length) { $("#subErr").textContent = "Aktifkan minimal satu subdomain."; return; }
+      runCf(c.zoneName, "", false, { path: "/api/cloudflare/subs", body, title: "subdomain", errEl: "#subErr" });
+    };
+  }
   if (c) {
     $("#cfAgain").onclick = () => runCf(c.domain, "", c.https);
     $("#cfRemove").onclick = () => {
@@ -1605,19 +1629,21 @@ function drawCf() {
   if (CF.ok) {
     $("#cfSum").innerHTML = CF.url
       ? `<div class="tst-sum ok" style="flex-wrap:wrap">${ic("check")}<span style="flex:1">Panel sekarang memakai HTTPS. Buka alamat baru lalu login lagi.</span><a class="btn pri" href="${esc(CF.url)}#/pengaturan/domain">${ic("lock")}Buka ${esc(CF.url.replace(/\/$/, ""))}</a></div>`
+      : CF.sub ? `<div class="tst-sum ok">${ic("check")}Subdomain diterapkan. Link GenieACS dan ZTNET di dashboard sudah memakai alamat baru.</div>`
       : `<div class="tst-sum ok">${ic("check")}Alamat VPS sekarang ${esc(CF.domain)}. Script MikroTik baru otomatis memakai domain ini.</div>`;
   } else {
     $("#cfSum").innerHTML = `<div class="tst-sum fail">${ic("alert")}${esc(CF.note || "Dibatalkan, pengaturan tetap seperti semula.")}</div>`;
   }
 }
-async function runCf(domain, token, withHttps) {
+async function runCf(domain, token, withHttps, alt) {
   if (CF && CF.running) return;
-  $("#cfErr").textContent = "";
+  const errEl = (alt && alt.errEl) || "#cfErr";
+  $(errEl).textContent = "";
   let r;
-  try { r = await api("/api/cloudflare/start", { method: "POST", body: { domain, token, https: withHttps } }); }
-  catch (e) { $("#cfErr").textContent = e.message; return; }
-  CF = { domain, plan: r.steps, jobId: r.jobId, res: {}, running: true, ok: false };
-  $("#cfGo").disabled = true; const again = $("#cfAgain"); if (again) again.disabled = true;
+  try { r = await api(alt ? alt.path : "/api/cloudflare/start", { method: "POST", body: alt ? alt.body : { domain, token, https: withHttps } }); }
+  catch (e) { $(errEl).textContent = e.message; return; }
+  CF = { domain: alt ? "Subdomain layanan" : domain, sub: !!alt, plan: r.steps, jobId: r.jobId, res: {}, running: true, ok: false };
+  $("#cfGo").disabled = true; const again = $("#cfAgain"); if (again) again.disabled = true; const sg = $("#subGo"); if (sg) sg.disabled = true;
   drawCf(); $("#cfRun").scrollIntoView({ behavior: "smooth", block: "start" });
   for (const s of CF.plan) {
     CF.current = s.key; drawCf();
@@ -1629,9 +1655,10 @@ async function runCf(domain, token, withHttps) {
     x.ms = performance.now() - t0; CF.res[s.key] = x; CF.current = null;
     if (x.ok === false) { CF.note = x.rollbackNote; break; }
     if (s.key === "apply") { CF.ok = true; CF.url = x.url; }
+    if (s.key === "sapply") CF.ok = true;
   }
   CF.running = false; drawCf();
-  const go = $("#cfGo"); if (go) go.disabled = false; const ag = $("#cfAgain"); if (ag) ag.disabled = false;
+  const go = $("#cfGo"); if (go) go.disabled = false; const ag = $("#cfAgain"); if (ag) ag.disabled = false; const sg2 = $("#subGo"); if (sg2) sg2.disabled = false;
   // Setelah HTTPS aktif, akses http dialihkan, jadi data tidak dimuat ulang di halaman ini
   if (CF.ok && !CF.url) { await load(); const keep = CF; route(); CF = keep; drawCf(); }
 }
