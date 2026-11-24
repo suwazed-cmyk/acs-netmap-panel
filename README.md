@@ -256,7 +256,7 @@ Router **ARM/ARM64 dengan RouterOS v7** bisa tersambung ke VPS lewat ZeroTier, b
 
 **Tambah router:** panel → **Tambah router** → jalur **ZeroTier**.
 - Jika MikroTik **sudah bergabung** ke jaringan (terlihat di ZTNET), pilih dari daftar **Perangkat ZeroTier**. Daftar memakai nama perangkat dari ZTNET, dan nama router terisi otomatis.
-- Jika **belum bergabung**, biarkan "Pilih nanti" → **Simpan** → tab **Script MikroTik** → tempel di New Terminal → tab **Ringkasan** → **Pilih router yang bergabung**.
+- Jika **belum bergabung** (biasanya), biarkan "Pilih nanti" → **Simpan** → tab **Script MikroTik** → tempel di New Terminal. Di akhir, script **melaporkan Node ID MikroTik ke panel** sehingga router terpilih otomatis dalam beberapa detik. MikroTik harus bisa membuka alamat panel (`http(s)://alamat-VPS:8088`) lewat internet. Jika gagal, pilih manual di tab **Ringkasan** → **Pilih router yang bergabung**.
 
 Panel otomatis menyetujui router, memberi IP ZeroTier, dan memasang route ke IP virtual. Nama perangkat dari ZTNET juga tampil di tabel **Anggota jaringan** di menu ZeroTier.
 

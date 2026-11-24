@@ -898,7 +898,7 @@ function ztStaleNote(x, style) {
 }
 function ztCard(x) {
   const z = STATE.settings.zt;
-  return `${ztStaleNote(x, "margin-top:16px")}${!x.ztNode ? `<div class="note info">${ic("hub")}<div><b>Router ZeroTier belum dipilih</b>Pasang script dari tab <a href="#/router/${x.id}/script">Script MikroTik</a>, lalu klik <a href="#" data-act="ztpick" data-id="${x.id}">Pilih router yang bergabung</a>.</div></div>` : ""}
+  return `${ztStaleNote(x, "margin-top:16px")}${!x.ztNode ? `<div class="note info">${ic("hub")}<div><b>Menunggu MikroTik bergabung</b>Pasang script dari tab <a href="#/router/${x.id}/script">Script MikroTik</a>. Script melaporkan Node ID router ke panel, sehingga router terpilih otomatis dalam beberapa detik. Jika tidak, klik <a href="#" data-act="ztpick" data-id="${x.id}">Pilih router yang bergabung</a>.</div></div>` : ""}
     <div class="card">
       <div class="ch"><h2>ZeroTier</h2><button class="btn sm" data-act="ztpick" data-id="${x.id}">${ic("hub")}${x.ztNode ? "Ganti router" : "Pilih router yang bergabung"}</button></div>
       <dl class="dl" style="margin:0">
@@ -1004,7 +1004,7 @@ function fwdForm(x) {
 function tabScript(b, x) {
   b.innerHTML = `
     ${x.transport === "zt" ? ztStaleNote(x) : ""}
-    ${x.transport === "zt" ? `<div class="note info">${ic("hub")}<div><b>Jalur ZeroTier</b>Butuh RouterOS v7 dengan paket <code>zerotier</code> (router ARM/ARM64). Setelah script dipasang, buka tab Ringkasan lalu klik <a href="#" data-act="ztpick" data-id="${x.id}">Pilih router yang bergabung</a>.</div></div>` : ""}
+    ${x.transport === "zt" ? `<div class="note info">${ic("hub")}<div><b>Jalur ZeroTier</b>Butuh RouterOS v7 dengan paket <code>zerotier</code> (router ARM/ARM64). Script otomatis melaporkan Node ID ke panel, jadi router langsung terpilih. Jika gagal (misalnya MikroTik tidak bisa menjangkau panel), pilih manual lewat <a href="#" data-act="ztpick" data-id="${x.id}">Pilih router yang bergabung</a>.</div></div>` : ""}
     ${x.state !== "pending" ? "" : `<ol class="howto">
       <li><b><i>1</i>Salin script</b>Klik tombol Salin di kotak script.</li>
       <li><b><i>2</i>Tempel di MikroTik</b>Winbox → New Terminal → klik kanan → Paste → Enter.</li>
@@ -1129,7 +1129,7 @@ function siteForm(x) {
       : `<label for="fZtSel">Perangkat ZeroTier <span class="muted" style="font-weight:400">(opsional)</span></label>
       <select id="fZtSel"><option value="">Memuat perangkat yang bergabung…</option></select>
       <input id="fZtNode" type="text" maxlength="10" class="hidden" style="margin-top:8px" placeholder="Node ID 10 karakter, contoh: 1a2b3c4d5e">
-      <div class="help" id="fZtHelp">Pilih MikroTik yang sudah bergabung ke jaringan ZeroTier (nama dari ZTNET). Jika belum bergabung, pilih nanti setelah script dipasang.</div>`}</div>
+      <div class="help" id="fZtHelp">Biasanya tidak perlu dipilih: script MikroTik melaporkan Node ID-nya sendiri ke panel. Pilih dari daftar hanya jika MikroTik sudah bergabung lebih dulu (nama dari ZTNET).</div>`}</div>
     <label for="fName">Nama router</label>
     <input id="fName" type="text" maxlength="40" placeholder="contoh: Nangahale" value="${esc(x?.name || "")}">
     <label for="fSub">Subnet ONT di MikroTik</label>
@@ -1189,7 +1189,7 @@ function openAdd() {
       await load(); location.hash = `#/router/${r.site.id}/script`;
       setTimeout(() => r.bindError
         ? doneDialog("Router ditambahkan, ZeroTier belum disetujui", `<p>${esc(r.bindError)}</p><p>Pilih routernya nanti dari tab Ringkasan.</p>`, "warn", false)
-        : doneDialog("Router ditambahkan", `<p><b>${esc(r.site.name)}</b> siap dipasang.</p><p>Langkah berikutnya: salin script di bawah, lalu tempel di Winbox → New Terminal.${r.site.transport === "zt" && !r.site.ztNode ? " Setelah itu pilih router dari daftar yang bergabung." : ""}</p>`, "ok", false), 60);
+        : doneDialog("Router ditambahkan", `<p><b>${esc(r.site.name)}</b> siap dipasang.</p><p>Langkah berikutnya: salin script di bawah, lalu tempel di Winbox → New Terminal.${r.site.transport === "zt" && !r.site.ztNode ? " Router akan terpilih otomatis setelah script dijalankan." : ""}</p>`, "ok", false), 60);
     } catch (e) { $("#fErr").textContent = e.message; busyBtn($("#fSave"), false); }
   };
 }

@@ -184,7 +184,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "1.8.4";
+const VERSION = "1.9.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -490,8 +490,10 @@ function brandsOf(d) {
 }
 function settings(d) {
   const s = d.settings || {};
+  const publicIp = s.publicIp || detectPublicIp();
   return {
-    publicIp: s.publicIp || detectPublicIp(),
+    publicIp,
+    panelUrl: panelPublicUrl({ publicIp }, d),
     psk: readPsk(),
     genieCidr: readGenieCidr(),
     useIpsec: !!s.useIpsec,
@@ -700,6 +702,18 @@ function cleanupLines(st, kind) {
   if (kind === "route") return names.map((n) => `/ip route remove [find where comment="${n}"]`);
   return names.map((n) => `/ip firewall ${kind} remove [find where comment~"^${n} - "]`);
 }
+// Kunci acak per router ZeroTier: script MikroTik memakainya untuk melapor Node ID ke panel
+function ensureJoinKey(site) {
+  if (!isZt(site) || site.joinKey) return false;
+  site.joinKey = crypto.randomBytes(12).toString("hex");
+  return true;
+}
+// Alamat panel yang bisa dijangkau MikroTik lewat internet
+function panelPublicUrl(st, d) {
+  const cf = d && d.settings && d.settings.cloudflare;
+  if (cf && cf.https && cf.domain) return `https://${cf.domain}:${PORT}`;
+  return st.publicIp ? `http://${st.publicIp}:${PORT}` : "";
+}
 function mikrotikScriptZt(s, st) {
   const c = st.brand;
   const z = st.zt || {};
@@ -738,7 +752,14 @@ function mikrotikScriptZt(s, st) {
     `/ip firewall filter move [find where comment="${c} - ACS ke ONT"] destination=0`,
     `/ip firewall filter move [find where comment="${c} - remote dari VPS"] destination=0`,
     ``,
-    `:put "${c} (ZeroTier) selesai dipasang. Buka panel lalu pilih router ini di daftar yang bergabung."`,
+    ...(s.joinKey && st.panelUrl
+      ? [
+          `# 5) Laporkan Node ID router ini ke panel, supaya router langsung dipilih otomatis`,
+          `:do { :delay 3s; :local nid [:pick [/zerotier get [find where name="zt1"] identity] 0 10]; /tool fetch url=("${st.panelUrl}/api/zt/join\\?k=${s.joinKey}&n=" . $nid) check-certificate=no keep-result=no; :put ("Node ID " . $nid . " terdaftar di panel.") } on-error={ :put "Node ID belum terlapor ke panel. Pilih router ini secara manual di tab Ringkasan." }`,
+          ``,
+          `:put "${c} (ZeroTier) selesai dipasang. Cek status router di panel."`,
+        ]
+      : [`:put "${c} (ZeroTier) selesai dipasang. Buka panel lalu pilih router ini di daftar yang bergabung."`]),
   ].join("\n");
 }
 function mikrotikScript(s, st) {
@@ -2559,6 +2580,27 @@ async function handleApi(req, res, url) {
     return send(res, 200, { ok: true }, { "Set-Cookie": `vpnacs=; ${cookieFlags(req)}; Max-Age=0` });
   }
   if (p === "/api/me" && method === "GET") return send(res, 200, { loggedIn: authed(req), panelName: brandOf(loadData()) });
+  // Dipanggil script MikroTik (tanpa login): router ZeroTier melapor Node ID-nya memakai kunci per router
+  if (p === "/api/zt/join" && method === "GET") {
+    const k = String(url.searchParams.get("k") || "");
+    const n = String(url.searchParams.get("n") || "").trim().toLowerCase();
+    if (!/^[0-9a-f]{24}$/.test(k) || !/^[0-9a-f]{10}$/.test(n)) return send(res, 400, "Permintaan tidak valid");
+    const d = loadData();
+    const site = d.sites.find((x) => isZt(x) && x.joinKey && x.joinKey.length === k.length && crypto.timingSafeEqual(Buffer.from(x.joinKey), Buffer.from(k)));
+    if (!site) return send(res, 404, "Router tidak ditemukan");
+    if (site.ztNode === n && site.ztIp) return send(res, 200, `OK ${site.ztIp}`);
+    const before = site.ztNode;
+    const r = await ztBind(d, site, n);
+    if (r.error) {
+      logActivity(req, "Router ZeroTier gagal terdaftar otomatis", `${site.name} · node ${n} · ${r.error}`);
+      return send(res, 409, r.error);
+    }
+    saveData(d);
+    logActivity(req, "Router ZeroTier terdaftar otomatis", `${site.name} · node ${n}${before && before !== n ? ` (sebelumnya ${before})` : ""} · IP ${site.ztIp}`);
+    await applyFirewall(d);
+    ztPingAll(d).catch(() => {});
+    return send(res, 200, `OK ${site.ztIp}`);
+  }
 
   if (!authed(req)) return send(res, 401, { error: "Silakan login dulu." });
 
@@ -2912,6 +2954,7 @@ async function handleApi(req, res, url) {
       ztNode: "",
       ztIp: "",
     };
+    ensureJoinKey(site);
     d.sites.push(site);
     saveData(d);
     logActivity(req, "Router ditambah", `${site.name} · ${isZt(site) ? "ZeroTier" : "L2TP"} · ONT ${site.realSubnet} → virtual ${site.virtualSubnet}`);
@@ -2999,6 +3042,7 @@ async function handleApi(req, res, url) {
             ZT_ONLINE.delete(site.id);
           }
           site.transport = body.transport;
+          ensureJoinKey(site);
         }
       }
       const node = String(body.ztNode || "").trim().toLowerCase();
@@ -3230,7 +3274,9 @@ if (process.argv[2] === "--set-password") {
       d.v2 = true;
       saveData(d);
     }
-    if (genieMigrate(d)) saveData(d);
+    let keys = false;
+    for (const st of d.sites || []) if (ensureJoinKey(st)) keys = true;
+    if (genieMigrate(d) || keys) saveData(d);
     const gs = await genieSync(d);
     if (gs.changed) console.log("Rentang patch GenieACS disesuaikan dengan IP virtual di panel");
     const cf = d.settings && d.settings.cloudflare;
@@ -4179,7 +4225,7 @@ function ztStaleNote(x, style) {
 }
 function ztCard(x) {
   const z = STATE.settings.zt;
-  return `${ztStaleNote(x, "margin-top:16px")}${!x.ztNode ? `<div class="note info">${ic("hub")}<div><b>Router ZeroTier belum dipilih</b>Pasang script dari tab <a href="#/router/${x.id}/script">Script MikroTik</a>, lalu klik <a href="#" data-act="ztpick" data-id="${x.id}">Pilih router yang bergabung</a>.</div></div>` : ""}
+  return `${ztStaleNote(x, "margin-top:16px")}${!x.ztNode ? `<div class="note info">${ic("hub")}<div><b>Menunggu MikroTik bergabung</b>Pasang script dari tab <a href="#/router/${x.id}/script">Script MikroTik</a>. Script melaporkan Node ID router ke panel, sehingga router terpilih otomatis dalam beberapa detik. Jika tidak, klik <a href="#" data-act="ztpick" data-id="${x.id}">Pilih router yang bergabung</a>.</div></div>` : ""}
     <div class="card">
       <div class="ch"><h2>ZeroTier</h2><button class="btn sm" data-act="ztpick" data-id="${x.id}">${ic("hub")}${x.ztNode ? "Ganti router" : "Pilih router yang bergabung"}</button></div>
       <dl class="dl" style="margin:0">
@@ -4285,7 +4331,7 @@ function fwdForm(x) {
 function tabScript(b, x) {
   b.innerHTML = `
     ${x.transport === "zt" ? ztStaleNote(x) : ""}
-    ${x.transport === "zt" ? `<div class="note info">${ic("hub")}<div><b>Jalur ZeroTier</b>Butuh RouterOS v7 dengan paket <code>zerotier</code> (router ARM/ARM64). Setelah script dipasang, buka tab Ringkasan lalu klik <a href="#" data-act="ztpick" data-id="${x.id}">Pilih router yang bergabung</a>.</div></div>` : ""}
+    ${x.transport === "zt" ? `<div class="note info">${ic("hub")}<div><b>Jalur ZeroTier</b>Butuh RouterOS v7 dengan paket <code>zerotier</code> (router ARM/ARM64). Script otomatis melaporkan Node ID ke panel, jadi router langsung terpilih. Jika gagal (misalnya MikroTik tidak bisa menjangkau panel), pilih manual lewat <a href="#" data-act="ztpick" data-id="${x.id}">Pilih router yang bergabung</a>.</div></div>` : ""}
     ${x.state !== "pending" ? "" : `<ol class="howto">
       <li><b><i>1</i>Salin script</b>Klik tombol Salin di kotak script.</li>
       <li><b><i>2</i>Tempel di MikroTik</b>Winbox → New Terminal → klik kanan → Paste → Enter.</li>
@@ -4410,7 +4456,7 @@ function siteForm(x) {
       : `<label for="fZtSel">Perangkat ZeroTier <span class="muted" style="font-weight:400">(opsional)</span></label>
       <select id="fZtSel"><option value="">Memuat perangkat yang bergabung…</option></select>
       <input id="fZtNode" type="text" maxlength="10" class="hidden" style="margin-top:8px" placeholder="Node ID 10 karakter, contoh: 1a2b3c4d5e">
-      <div class="help" id="fZtHelp">Pilih MikroTik yang sudah bergabung ke jaringan ZeroTier (nama dari ZTNET). Jika belum bergabung, pilih nanti setelah script dipasang.</div>`}</div>
+      <div class="help" id="fZtHelp">Biasanya tidak perlu dipilih: script MikroTik melaporkan Node ID-nya sendiri ke panel. Pilih dari daftar hanya jika MikroTik sudah bergabung lebih dulu (nama dari ZTNET).</div>`}</div>
     <label for="fName">Nama router</label>
     <input id="fName" type="text" maxlength="40" placeholder="contoh: Nangahale" value="${esc(x?.name || "")}">
     <label for="fSub">Subnet ONT di MikroTik</label>
@@ -4470,7 +4516,7 @@ function openAdd() {
       await load(); location.hash = `#/router/${r.site.id}/script`;
       setTimeout(() => r.bindError
         ? doneDialog("Router ditambahkan, ZeroTier belum disetujui", `<p>${esc(r.bindError)}</p><p>Pilih routernya nanti dari tab Ringkasan.</p>`, "warn", false)
-        : doneDialog("Router ditambahkan", `<p><b>${esc(r.site.name)}</b> siap dipasang.</p><p>Langkah berikutnya: salin script di bawah, lalu tempel di Winbox → New Terminal.${r.site.transport === "zt" && !r.site.ztNode ? " Setelah itu pilih router dari daftar yang bergabung." : ""}</p>`, "ok", false), 60);
+        : doneDialog("Router ditambahkan", `<p><b>${esc(r.site.name)}</b> siap dipasang.</p><p>Langkah berikutnya: salin script di bawah, lalu tempel di Winbox → New Terminal.${r.site.transport === "zt" && !r.site.ztNode ? " Router akan terpilih otomatis setelah script dijalankan." : ""}</p>`, "ok", false), 60);
     } catch (e) { $("#fErr").textContent = e.message; busyBtn($("#fSave"), false); }
   };
 }

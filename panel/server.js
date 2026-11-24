@@ -41,7 +41,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "1.8.4";
+const VERSION = "1.9.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -347,8 +347,10 @@ function brandsOf(d) {
 }
 function settings(d) {
   const s = d.settings || {};
+  const publicIp = s.publicIp || detectPublicIp();
   return {
-    publicIp: s.publicIp || detectPublicIp(),
+    publicIp,
+    panelUrl: panelPublicUrl({ publicIp }, d),
     psk: readPsk(),
     genieCidr: readGenieCidr(),
     useIpsec: !!s.useIpsec,
@@ -557,6 +559,18 @@ function cleanupLines(st, kind) {
   if (kind === "route") return names.map((n) => `/ip route remove [find where comment="${n}"]`);
   return names.map((n) => `/ip firewall ${kind} remove [find where comment~"^${n} - "]`);
 }
+// Kunci acak per router ZeroTier: script MikroTik memakainya untuk melapor Node ID ke panel
+function ensureJoinKey(site) {
+  if (!isZt(site) || site.joinKey) return false;
+  site.joinKey = crypto.randomBytes(12).toString("hex");
+  return true;
+}
+// Alamat panel yang bisa dijangkau MikroTik lewat internet
+function panelPublicUrl(st, d) {
+  const cf = d && d.settings && d.settings.cloudflare;
+  if (cf && cf.https && cf.domain) return `https://${cf.domain}:${PORT}`;
+  return st.publicIp ? `http://${st.publicIp}:${PORT}` : "";
+}
 function mikrotikScriptZt(s, st) {
   const c = st.brand;
   const z = st.zt || {};
@@ -595,7 +609,14 @@ function mikrotikScriptZt(s, st) {
     `/ip firewall filter move [find where comment="${c} - ACS ke ONT"] destination=0`,
     `/ip firewall filter move [find where comment="${c} - remote dari VPS"] destination=0`,
     ``,
-    `:put "${c} (ZeroTier) selesai dipasang. Buka panel lalu pilih router ini di daftar yang bergabung."`,
+    ...(s.joinKey && st.panelUrl
+      ? [
+          `# 5) Laporkan Node ID router ini ke panel, supaya router langsung dipilih otomatis`,
+          `:do { :delay 3s; :local nid [:pick [/zerotier get [find where name="zt1"] identity] 0 10]; /tool fetch url=("${st.panelUrl}/api/zt/join\\?k=${s.joinKey}&n=" . $nid) check-certificate=no keep-result=no; :put ("Node ID " . $nid . " terdaftar di panel.") } on-error={ :put "Node ID belum terlapor ke panel. Pilih router ini secara manual di tab Ringkasan." }`,
+          ``,
+          `:put "${c} (ZeroTier) selesai dipasang. Cek status router di panel."`,
+        ]
+      : [`:put "${c} (ZeroTier) selesai dipasang. Buka panel lalu pilih router ini di daftar yang bergabung."`]),
   ].join("\n");
 }
 function mikrotikScript(s, st) {
@@ -2416,6 +2437,27 @@ async function handleApi(req, res, url) {
     return send(res, 200, { ok: true }, { "Set-Cookie": `vpnacs=; ${cookieFlags(req)}; Max-Age=0` });
   }
   if (p === "/api/me" && method === "GET") return send(res, 200, { loggedIn: authed(req), panelName: brandOf(loadData()) });
+  // Dipanggil script MikroTik (tanpa login): router ZeroTier melapor Node ID-nya memakai kunci per router
+  if (p === "/api/zt/join" && method === "GET") {
+    const k = String(url.searchParams.get("k") || "");
+    const n = String(url.searchParams.get("n") || "").trim().toLowerCase();
+    if (!/^[0-9a-f]{24}$/.test(k) || !/^[0-9a-f]{10}$/.test(n)) return send(res, 400, "Permintaan tidak valid");
+    const d = loadData();
+    const site = d.sites.find((x) => isZt(x) && x.joinKey && x.joinKey.length === k.length && crypto.timingSafeEqual(Buffer.from(x.joinKey), Buffer.from(k)));
+    if (!site) return send(res, 404, "Router tidak ditemukan");
+    if (site.ztNode === n && site.ztIp) return send(res, 200, `OK ${site.ztIp}`);
+    const before = site.ztNode;
+    const r = await ztBind(d, site, n);
+    if (r.error) {
+      logActivity(req, "Router ZeroTier gagal terdaftar otomatis", `${site.name} · node ${n} · ${r.error}`);
+      return send(res, 409, r.error);
+    }
+    saveData(d);
+    logActivity(req, "Router ZeroTier terdaftar otomatis", `${site.name} · node ${n}${before && before !== n ? ` (sebelumnya ${before})` : ""} · IP ${site.ztIp}`);
+    await applyFirewall(d);
+    ztPingAll(d).catch(() => {});
+    return send(res, 200, `OK ${site.ztIp}`);
+  }
 
   if (!authed(req)) return send(res, 401, { error: "Silakan login dulu." });
 
@@ -2769,6 +2811,7 @@ async function handleApi(req, res, url) {
       ztNode: "",
       ztIp: "",
     };
+    ensureJoinKey(site);
     d.sites.push(site);
     saveData(d);
     logActivity(req, "Router ditambah", `${site.name} · ${isZt(site) ? "ZeroTier" : "L2TP"} · ONT ${site.realSubnet} → virtual ${site.virtualSubnet}`);
@@ -2856,6 +2899,7 @@ async function handleApi(req, res, url) {
             ZT_ONLINE.delete(site.id);
           }
           site.transport = body.transport;
+          ensureJoinKey(site);
         }
       }
       const node = String(body.ztNode || "").trim().toLowerCase();
@@ -3087,7 +3131,9 @@ if (process.argv[2] === "--set-password") {
       d.v2 = true;
       saveData(d);
     }
-    if (genieMigrate(d)) saveData(d);
+    let keys = false;
+    for (const st of d.sites || []) if (ensureJoinKey(st)) keys = true;
+    if (genieMigrate(d) || keys) saveData(d);
     const gs = await genieSync(d);
     if (gs.changed) console.log("Rentang patch GenieACS disesuaikan dengan IP virtual di panel");
     const cf = d.settings && d.settings.cloudflare;
