@@ -1857,7 +1857,7 @@ async function cfRunStep(job, key) {
   }
   if (key === "cert") {
     const v = await run("certbot", ["--version"]);
-    if (v.code === -2) return { ok: false, detail: "certbot belum terpasang di VPS", hint: "Jalankan ulang: cd /root/suwazed-panel && git pull && bash install-vpn-acs.sh" };
+    if (v.code === -2) return { ok: false, detail: "certbot belum terpasang di VPS", hint: "Jalankan ulang: cd /root/acs-netmap-panel && git pull && bash install-vpn-acs.sh" };
     try {
       c.prevIni = fs.existsSync(CF_INI) ? fs.readFileSync(CF_INI, "utf8") : null;
       fs.mkdirSync(path.dirname(CF_INI), { recursive: true });
@@ -4173,7 +4173,7 @@ function viewGuide(v) {
       <li><b>Atur ONT</b>URL ACS di ONT atau profil TR-069 OLT: <code>${esc(s.acsUrl || "")}</code></li>
     </ol></div></div>
     <div class="card"><div class="ch"><h2>Router lewat ZeroTier (opsional)</h2></div><div class="cb"><ol class="ol">
-      <li><b>Pasang ZTNET di VPS</b>Jalankan <code>bash pasang-ztnet.sh</code> dari folder <code>suwazed-panel</code>. Web ZTNET berjalan di port 3300.</li>
+      <li><b>Pasang ZTNET di VPS</b>Jalankan <code>bash pasang-ztnet.sh</code> dari folder <code>acs-netmap-panel</code>. Web ZTNET berjalan di port 3300.</li>
       <li><b>Buat jaringan di ZTNET</b>Networks → Create Network, lalu atur rentang IPv4, misalnya <code>172.27.0.0/24</code>.</li>
       <li><b>Hubungkan VPS</b>Menu ZeroTier → pilih jaringan → Hubungkan VPS.</li>
       <li><b>Tambah router dengan jalur ZeroTier</b>Pasang script di MikroTik (RouterOS v7, router ARM/ARM64), lalu di tab Ringkasan klik <b>Pilih router yang bergabung</b>.</li>
@@ -4185,7 +4185,7 @@ function viewGuide(v) {
     <div class="card"><div class="ch"><h2>Membersihkan pengaturan</h2></div><div class="cb">
       <p style="margin-bottom:10px"><b>Di MikroTik</b> — hanya pengaturan bertanda "${esc(BRAND)}" yang dihapus:</p>
       <div class="codebox"><pre class="code">${esc(rm)}</pre><button class="btn sm" data-copy="${esc(rm)}" data-msg="Script hapus tersalin">${ic("copy")}Salin</button></div>
-      <p style="margin-top:14px"><b>Di VPS</b> — jalankan <code>bash bersihkan.sh</code> dari folder <code>suwazed-panel</code> untuk menghapus port forwarding, panel dan akun VPN, patch GenieACS, atau mengembalikan parameter.</p>
+      <p style="margin-top:14px"><b>Di VPS</b> — jalankan <code>bash bersihkan.sh</code> dari folder <code>acs-netmap-panel</code> untuk menghapus port forwarding, panel dan akun VPN, patch GenieACS, atau mengembalikan parameter.</p>
     </div></div>
     <div class="card faq"><div class="ch"><h2>Pertanyaan umum</h2></div>
       <details><summary>Status tetap "Terputus" setelah script dipasang</summary><p>Jalankan Tes koneksi untuk melihat langkah yang gagal. Biasanya: MikroTik belum punya internet, alamat VPS salah, atau port UDP 1701 di VPS tertutup.</p></details>
@@ -4387,7 +4387,7 @@ async function setZerotier(b) {
       <div class="note info">${ic("hub")}<div><b>ZeroTier belum terpasang di VPS</b>${esc(z.error || "")}</div></div>
       <div class="card"><div class="ch"><h2>Pasang ZTNET + ZeroTier</h2></div><div class="cb">
         <p style="color:var(--text-2)">ZTNET adalah web pengelola ZeroTier. Jalankan di VPS (sebagai root). Web ZTNET berjalan di port <b>3300</b>, tanpa Docker:</p>
-        <div class="codebox" style="margin-top:12px"><pre class="code">cd /root/suwazed-panel && git pull && bash pasang-ztnet.sh</pre><button class="btn sm" data-copy="cd /root/suwazed-panel && git pull && bash pasang-ztnet.sh" data-msg="Perintah tersalin">${ic("copy")}Salin</button></div>
+        <div class="codebox" style="margin-top:12px"><pre class="code">cd /root/acs-netmap-panel && git pull && bash pasang-ztnet.sh</pre><button class="btn sm" data-copy="cd /root/acs-netmap-panel && git pull && bash pasang-ztnet.sh" data-msg="Perintah tersalin">${ic("copy")}Salin</button></div>
         <p class="help">Setelah selesai, buka ZTNET, buat jaringan dengan rentang IP misalnya <code>172.27.0.0/24</code>, lalu kembali ke halaman ini.</p>
         <div class="form-actions"><button class="btn" id="ztRe">${ic("refresh")}Periksa lagi</button></div>
       </div></div>`;

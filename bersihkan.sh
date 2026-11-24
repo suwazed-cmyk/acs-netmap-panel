@@ -1,8 +1,8 @@
 #!/bin/bash
 # =====================================================================
-#  Bersihkan pengaturan suwazed-panel dari VPS
+#  Bersihkan pengaturan acs-netmap-panel dari VPS
 #
-#  Pemakaian (sebagai root, dari folder suwazed-panel):
+#  Pemakaian (sebagai root, dari folder acs-netmap-panel):
 #    bash bersihkan.sh                -> menu pilihan
 #    bash bersihkan.sh portforward    -> hapus semua port forwarding saja
 #    bash bersihkan.sh panel          -> hapus Panel VPN ACS + akun VPN router + aturan firewall
@@ -204,7 +204,7 @@ mode_parameter() {
 }
 
 mode_semua() {
-  konfirmasi "SEMUA yang dipasang suwazed-panel akan dihapus: Panel VPN ACS, akun VPN router, port forwarding, aturan firewall, dan patch GenieACS."
+  konfirmasi "SEMUA yang dipasang acs-netmap-panel akan dihapus: Panel VPN ACS, akun VPN router, port forwarding, aturan firewall, dan patch GenieACS."
   hapus_route_virtual
   hapus_layanan_panel
   hapus_firewall_panel
@@ -218,7 +218,7 @@ mode_semua() {
 }
 
 menu() {
-  echo -e "${GREEN}== Bersihkan suwazed-panel ==${NC}"
+  echo -e "${GREEN}== Bersihkan acs-netmap-panel ==${NC}"
   echo "  1) Hapus semua port forwarding saja (VPN & router tetap)"
   echo "  2) Hapus Panel VPN ACS + akun VPN router + aturan firewall"
   echo "  3) Kembalikan GenieACS asli (hapus patch IP virtual)"

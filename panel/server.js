@@ -1714,7 +1714,7 @@ async function cfRunStep(job, key) {
   }
   if (key === "cert") {
     const v = await run("certbot", ["--version"]);
-    if (v.code === -2) return { ok: false, detail: "certbot belum terpasang di VPS", hint: "Jalankan ulang: cd /root/suwazed-panel && git pull && bash install-vpn-acs.sh" };
+    if (v.code === -2) return { ok: false, detail: "certbot belum terpasang di VPS", hint: "Jalankan ulang: cd /root/acs-netmap-panel && git pull && bash install-vpn-acs.sh" };
     try {
       c.prevIni = fs.existsSync(CF_INI) ? fs.readFileSync(CF_INI, "utf8") : null;
       fs.mkdirSync(path.dirname(CF_INI), { recursive: true });

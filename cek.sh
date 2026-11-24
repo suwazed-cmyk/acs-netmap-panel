@@ -1,6 +1,6 @@
 #!/bin/bash
 # =====================================================================
-#  Tes semua layanan Suwazed Panel
+#  Tes semua layanan ACS NETMAP Panel
 #  Memeriksa layanan yang tampil di ringkasan.sh benar-benar berjalan:
 #  status service, port terbuka, web menjawab, patch aktif, dan lainnya.
 #
@@ -89,7 +89,7 @@ echo "$VPS_IP" | grep -qE '^[0-9]+(\.[0-9]+){3}$' || VPS_IP="$(hostname -I 2>/de
 
 echo
 echo -e "${BOLD}=====================================================================${NC}"
-echo -e "${BOLD}  TES LAYANAN SUWAZED PANEL${NC}"
+echo -e "${BOLD}  TES LAYANAN ACS NETMAP PANEL${NC}"
 echo -e "${BOLD}=====================================================================${NC}"
 
 # ---------- Sistem ----------

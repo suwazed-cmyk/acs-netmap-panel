@@ -1,4 +1,4 @@
-# Suwazed Panel: GenieACS + VPN MikroTik
+# ACS NETMAP Panel: GenieACS + VPN MikroTik
 
 Paket untuk menjalankan **GenieACS di VPS** yang bisa mengelola dan memberi perintah (Summon) ke ONT di **banyak router MikroTik**, walaupun semua router memakai **subnet lokal yang sama** (misalnya semua `10.0.0.0/24`).
 
@@ -85,8 +85,8 @@ Ganti `Asia/Makassar` dengan zona waktu Anda (`Asia/Jakarta` untuk WIB, `Asia/Ja
 ### 2. Ambil repo ini
 ```bash
 cd /root
-git clone https://github.com/suwazed-cmyk/suwazed-panel.git
-cd suwazed-panel
+git clone https://github.com/suwazed-cmyk/acs-netmap-panel.git
+cd acs-netmap-panel
 ```
 
 ### 3. Server VPN L2TP
@@ -119,12 +119,12 @@ systemctl restart genieacs-cwmp genieacs-nbi genieacs-fs genieacs-ui
 ### 5. Patch IP virtual GenieACS
 Jika IP virtual memakai pilihan otomatis panel (`10.100.x.x`):
 ```bash
-cd /root/suwazed-panel
+cd /root/acs-netmap-panel
 bash genieacs-virtualip.sh
 ```
 Jika juga memakai IP virtual sendiri (misalnya `10.20.x.x`), tambahkan rentangnya dulu:
 ```bash
-cd /root/suwazed-panel
+cd /root/acs-netmap-panel
 sed -i 's#^VIRTUAL_CIDR=.*#VIRTUAL_CIDR="10.100.0.0/14,10.20.0.0/16"#' genieacs-virtualip.sh
 bash genieacs-virtualip.sh
 ```
@@ -132,7 +132,7 @@ Di akhir muncul ringkasan. Cek patch: `bash genieacs-virtualip.sh status`
 
 ### 6. Panel VPN ACS
 ```bash
-cd /root/suwazed-panel
+cd /root/acs-netmap-panel
 bash install-vpn-acs.sh
 ```
 Saat ditanya password admin, tekan **Enter** untuk memakai password bawaan **`Admin123`**, atau ketik password sendiri (minimal 8 karakter).
@@ -244,7 +244,7 @@ Router **ARM/ARM64 dengan RouterOS v7** bisa tersambung ke VPS lewat ZeroTier, b
 1. Jika memakai domain, buat dulu subdomain `zt` di [Fitur opsional B](#b-domain-cloudflare--https) agar alamat ZTNET langsung benar.
 2. Pasang ZeroTier + ZTNET (web pengelola ZeroTier, port **3300**, tanpa Docker):
    ```bash
-   cd /root/suwazed-panel
+   cd /root/acs-netmap-panel
    bash pasang-ztnet.sh
    ```
    Script ini memeriksa Node.js dan RAM (menawarkan swap 2 GB bila perlu), memindahkan port ZTNET ke 3300 agar tidak bentrok dengan GenieACS (3000), lalu menjalankan installer resmi ZTNET. Saat ditanya alamat, isi subdomain Anda, misalnya `zt.domainanda.com`. Saat ditanya kirim laporan error, jawab `No`.
@@ -311,8 +311,17 @@ journalctl -u ztnet -n 50 --no-pager
 ---
 
 ## Update dari GitHub
+Repo ini dulu bernama `suwazed-panel`. Jika VPS Anda masih memakai folder lama `/root/suwazed-panel`, pindahkan sekali saja:
 ```bash
-cd /root/suwazed-panel
+mv /root/suwazed-panel /root/acs-netmap-panel
+cd /root/acs-netmap-panel
+git remote set-url origin https://github.com/suwazed-cmyk/acs-netmap-panel.git
+```
+Panel, GenieACS, dan data router tidak terpengaruh karena terpasang di `/opt`.
+
+Update rutin:
+```bash
+cd /root/acs-netmap-panel
 git pull
 bash install-vpn-acs.sh          # data router & password admin tetap tersimpan
 bash cek.sh
@@ -345,7 +354,7 @@ File-file ini berisi password VPN dan token: **jangan** di-commit ke GitHub.
 
 ### Di VPS
 ```bash
-cd /root/suwazed-panel
+cd /root/acs-netmap-panel
 bash bersihkan.sh
 ```
 Pilihan menu:

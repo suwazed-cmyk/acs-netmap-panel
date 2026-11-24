@@ -1,6 +1,6 @@
 #!/bin/bash
 # =====================================================================
-#  Ringkasan instalasi Suwazed Panel
+#  Ringkasan instalasi ACS NETMAP Panel
 #  Menampilkan semua layanan yang terpasang di VPS ini beserta alamat web,
 #  port, status, dan port yang harus dibuka di firewall provider.
 #
@@ -82,7 +82,7 @@ MISSING=()
 
 echo
 echo -e "${BOLD}=====================================================================${NC}"
-echo -e "${BOLD}  RINGKASAN INSTALASI SUWAZED PANEL${NC}"
+echo -e "${BOLD}  RINGKASAN INSTALASI ACS NETMAP PANEL${NC}"
 echo -e "${BOLD}=====================================================================${NC}"
 line "Alamat VPS" "${BOLD}${VPS_ADDR}${NC}"
 line "Sistem" "$(. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-Linux}")"
