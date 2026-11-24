@@ -954,7 +954,7 @@ function tabRemote(b, x) {
         ${x.forwards.map((f) => {
           const url = fwdLink(f);
           const addr = url
-            ? `<a class="ext" href="${esc(url)}" target="_blank" rel="noopener" title="Buka di tab baru">${esc(f.remote)}${ic("ext", "")}</a> ${copyBtn(url, "Alamat tersalin")}`
+            ? `<a class="ext" href="${esc(url)}" target="_blank" rel="noopener" title="Buka di tab baru">${esc(f.remote)}${ic("ext", "")}</a> ${copyBtn(f.remote, "Alamat tersalin (tanpa http://)")}`
             : `<span class="mono">${esc(f.remote)}</span> ${copyBtn(f.remote, "Alamat tersalin")}`;
           return `<tr><td><b style="font-weight:550">${esc(f.label)}</b></td><td>${addr}</td>
           <td class="hide-sm muted mono">${f.target === "router" ? "MikroTik" : esc(f.lanIp)}:${f.targetPort}</td>
