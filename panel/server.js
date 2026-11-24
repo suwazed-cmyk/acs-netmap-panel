@@ -52,7 +52,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.6.0";
+const VERSION = "2.7.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -1070,16 +1070,60 @@ function crHost(doc) {
   return m ? m[1] : "";
 }
 let GENIE_CACHE = { t: 0, data: null };
+// Provision "inform berkala": ONT melapor ke GenieACS tiap N detik, supaya status online akurat
+const INFORM_PROV = "vpnacs-inform";
+const INFORM_SCRIPT = [
+  "// Dibuat ACS NETMAP Panel: aktifkan inform berkala ONT (interval dari argumen preset)",
+  "const iv = parseInt(args[0], 10) || 240;",
+  "const day = Date.now() - 86400000;",
+  "let done = false;",
+  'for (const root of ["InternetGatewayDevice", "Device"]) {',
+  "  if (done) break;",
+  '  const p = declare(root + ".ManagementServer.PeriodicInformInterval", { value: day });',
+  "  if (!p.size) continue;",
+  '  declare(root + ".ManagementServer.PeriodicInformEnable", { value: day }, { value: true });',
+  '  declare(root + ".ManagementServer.PeriodicInformInterval", { value: day }, { value: iv });',
+  "  done = true;",
+  "}",
+].join("\n");
+async function genieInformPreset() {
+  const r = await httpJson("GET", `${nbiBase()}/presets/?query=${encodeURIComponent(JSON.stringify({ _id: INFORM_PROV }))}`, null, null, 8000);
+  if (r.status !== 200 || !Array.isArray(r.json)) return { error: true };
+  const p = r.json[0];
+  if (!p) return { installed: false };
+  const c = (p.configurations || []).find((x) => x.name === INFORM_PROV) || {};
+  return { installed: true, interval: parseInt((c.args || [])[0], 10) || 0 };
+}
+async function genieInformInstall(iv) {
+  const a = await httpJson("PUT", `${nbiBase()}/provisions/${INFORM_PROV}`, INFORM_SCRIPT, null, 10000);
+  if (a.status !== 200) return { error: `GenieACS menolak provision (HTTP ${a.status || a.error})` };
+  const preset = { weight: 0, channel: "vpnacs", events: {}, precondition: "", configurations: [{ type: "provision", name: INFORM_PROV, args: [iv] }] };
+  const b = await httpJson("PUT", `${nbiBase()}/presets/${INFORM_PROV}`, preset, null, 10000);
+  if (b.status !== 200) return { error: `GenieACS menolak preset (HTTP ${b.status || b.error})` };
+  return { ok: true };
+}
+async function genieInformRemove() {
+  await httpJson("DELETE", `${nbiBase()}/presets/${INFORM_PROV}`, null, null, 10000);
+  await httpJson("DELETE", `${nbiBase()}/provisions/${INFORM_PROV}`, null, null, 10000);
+  return { ok: true };
+}
 async function genieDevices() {
   if (GENIE_CACHE.data && Date.now() - GENIE_CACHE.t < 60000) return GENIE_CACHE.data;
   const port = readGenieEnv("GENIEACS_NBI_PORT") || "7557";
   const base = NBI_URL || `http://127.0.0.1:${port}`;
-  const proj = ["_id", "_lastInform", "InternetGatewayDevice.ManagementServer.ConnectionRequestURL", "Device.ManagementServer.ConnectionRequestURL"].join(",");
+  const proj = ["_id", "_lastInform", "_lastBoot", ...["InternetGatewayDevice", "Device"].flatMap((r) => ["ConnectionRequestURL", "PeriodicInformInterval", "PeriodicInformEnable"].map((k) => `${r}.ManagementServer.${k}`))].join(",");
   const r = await httpJson("GET", `${base}/devices/?projection=${encodeURIComponent(proj)}`, null, null, 20000);
   if (r.status !== 200 || !Array.isArray(r.json)) {
     return { error: r.status === 0 ? `GenieACS NBI tidak menjawab (${r.error})` : `GenieACS NBI menolak (HTTP ${r.status})` };
   }
-  const data = { devices: r.json.map((d) => ({ id: d._id, last: d._lastInform ? Date.parse(d._lastInform) : 0, ip: crHost(d) })) };
+  const mv = (doc, k) => { const a = (((doc.InternetGatewayDevice || {}).ManagementServer || {})[k] || ((doc.Device || {}).ManagementServer || {})[k] || {})._value; return a === undefined ? null : a; };
+  const data = {
+    devices: r.json.map((d) => {
+      const iv = parseInt(mv(d, "PeriodicInformInterval"), 10);
+      const en = mv(d, "PeriodicInformEnable");
+      return { id: d._id, last: d._lastInform ? Date.parse(d._lastInform) : 0, ip: crHost(d), iv: iv > 0 ? iv : 0, en: en === null ? null : en === true || en === "true" || en === 1 || en === "1" };
+    }),
+  };
   GENIE_CACHE = { t: Date.now(), data };
   return data;
 }
@@ -1111,8 +1155,25 @@ async function genieStatus(d) {
       if (x.last > row.last) row.last = x.last;
     }
   }
+  // Kesehatan inform: ONT yang lama tidak melapor biasanya karena interval inform berkala panjang/mati
+  const inform = { total: 0, fast: 0, slow: 0, off: 0, unknown: 0, recent: 0, stale: 0, intervals: {} };
+  if (!dev.error) {
+    for (const x of dev.devices) {
+      inform.total++;
+      if (x.en === false) inform.off++;
+      else if (!x.iv) inform.unknown++;
+      else if (x.iv <= 300) inform.fast++;
+      else inform.slow++;
+      if (x.iv) inform.intervals[x.iv] = (inform.intervals[x.iv] || 0) + 1;
+      if (x.last && now - x.last < 5 * 60e3) inform.recent++;
+      const lim = x.en !== false && x.iv ? x.iv * 2000 + 120e3 : 3600e3;
+      if (!x.last || now - x.last > lim) inform.stale++;
+    }
+  }
+  inform.provision = await genieInformPreset();
   const cidr = st.genieCidr;
   return {
+    inform,
     installed: cidr !== null || services.some((x) => x.active),
     version: genieVersion(),
     services,
@@ -1984,10 +2045,11 @@ function httpJson(method, urlStr, body, headers, timeoutMs) {
       return resolve({ status: 0, error: "URL tidak valid" });
     }
     const mod = u.protocol === "http:" ? http : https;
-    const data = body == null ? null : Buffer.from(JSON.stringify(body));
+    const raw = typeof body === "string";
+    const data = body == null ? null : Buffer.from(raw ? body : JSON.stringify(body));
     const h = Object.assign({ Accept: "application/json", "User-Agent": "vpn-acs-panel" }, headers || {});
     if (data) {
-      h["Content-Type"] = "application/json";
+      h["Content-Type"] = raw ? "text/plain" : "application/json";
       h["Content-Length"] = data.length;
     }
     const req = mod.request(u, { method, family: 4, headers: h, timeout: timeoutMs || 15000 }, (res) => {
@@ -2920,6 +2982,9 @@ function certReloadCheck() {
 function frontHandler(sock) {
   sock.on("error", () => {});
   if (!HTTPS_ON) return httpServer.emit("connection", sock);
+  // Permintaan dari dalam VPS sendiri (add-on, script cek) tidak dialihkan ke https
+  const ra = String(sock.remoteAddress || "").replace(/^::ffff:/, "");
+  if (ra === "127.0.0.1" || ra === "::1") return peekLocal(sock);
   sock.setTimeout(20000, () => sock.destroy());
   sock.once("data", (buf) => {
     sock.setTimeout(0);
@@ -2937,6 +3002,15 @@ function frontHandler(sock) {
       return;
     }
     pipeTls(sock, buf);
+  });
+}
+
+// Koneksi lokal: TLS tetap diteruskan ke https, http biasa dilayani langsung
+function peekLocal(sock) {
+  sock.once("data", (buf) => {
+    if (buf[0] === 0x16) return pipeTls(sock, buf);
+    sock.unshift(buf);
+    httpServer.emit("connection", sock);
   });
 }
 
@@ -4989,6 +5063,20 @@ async function handleApi(req, res, url) {
     const s2 = await genieSync(d, req);
     if (s2.error) return send(res, 500, { error: s2.error });
     return send(res, 200, { ok: true, value: genieRanges(d).value, changed: !!s2.changed, restarted: !!s2.restarted, skipped: !!s2.skipped });
+  }
+  if (p === "/api/genie/inform" && method === "POST") {
+    if (body.remove) {
+      await genieInformRemove();
+      logActivity(req, "Inform berkala ONT dihapus", "preset " + INFORM_PROV);
+      return send(res, 200, { ok: true });
+    }
+    const iv = parseInt(body.interval, 10);
+    if (![120, 240, 300, 600].includes(iv)) return send(res, 400, { error: "Pilih interval 120, 240, 300, atau 600 detik." });
+    const r = await genieInformInstall(iv);
+    if (r.error) return send(res, 400, { error: r.error });
+    GENIE_CACHE.t = 0;
+    logActivity(req, "Inform berkala ONT dipasang", `tiap ${iv} detik (provision ${INFORM_PROV})`);
+    return send(res, 200, { ok: true });
   }
   if (p === "/api/genie" && method === "GET") {
     if (url.searchParams.get("refresh") === "1") GENIE_CACHE.t = 0;

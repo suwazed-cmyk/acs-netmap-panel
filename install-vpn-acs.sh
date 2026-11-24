@@ -195,7 +195,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.6.0";
+const VERSION = "2.7.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -1213,16 +1213,60 @@ function crHost(doc) {
   return m ? m[1] : "";
 }
 let GENIE_CACHE = { t: 0, data: null };
+// Provision "inform berkala": ONT melapor ke GenieACS tiap N detik, supaya status online akurat
+const INFORM_PROV = "vpnacs-inform";
+const INFORM_SCRIPT = [
+  "// Dibuat ACS NETMAP Panel: aktifkan inform berkala ONT (interval dari argumen preset)",
+  "const iv = parseInt(args[0], 10) || 240;",
+  "const day = Date.now() - 86400000;",
+  "let done = false;",
+  'for (const root of ["InternetGatewayDevice", "Device"]) {',
+  "  if (done) break;",
+  '  const p = declare(root + ".ManagementServer.PeriodicInformInterval", { value: day });',
+  "  if (!p.size) continue;",
+  '  declare(root + ".ManagementServer.PeriodicInformEnable", { value: day }, { value: true });',
+  '  declare(root + ".ManagementServer.PeriodicInformInterval", { value: day }, { value: iv });',
+  "  done = true;",
+  "}",
+].join("\n");
+async function genieInformPreset() {
+  const r = await httpJson("GET", `${nbiBase()}/presets/?query=${encodeURIComponent(JSON.stringify({ _id: INFORM_PROV }))}`, null, null, 8000);
+  if (r.status !== 200 || !Array.isArray(r.json)) return { error: true };
+  const p = r.json[0];
+  if (!p) return { installed: false };
+  const c = (p.configurations || []).find((x) => x.name === INFORM_PROV) || {};
+  return { installed: true, interval: parseInt((c.args || [])[0], 10) || 0 };
+}
+async function genieInformInstall(iv) {
+  const a = await httpJson("PUT", `${nbiBase()}/provisions/${INFORM_PROV}`, INFORM_SCRIPT, null, 10000);
+  if (a.status !== 200) return { error: `GenieACS menolak provision (HTTP ${a.status || a.error})` };
+  const preset = { weight: 0, channel: "vpnacs", events: {}, precondition: "", configurations: [{ type: "provision", name: INFORM_PROV, args: [iv] }] };
+  const b = await httpJson("PUT", `${nbiBase()}/presets/${INFORM_PROV}`, preset, null, 10000);
+  if (b.status !== 200) return { error: `GenieACS menolak preset (HTTP ${b.status || b.error})` };
+  return { ok: true };
+}
+async function genieInformRemove() {
+  await httpJson("DELETE", `${nbiBase()}/presets/${INFORM_PROV}`, null, null, 10000);
+  await httpJson("DELETE", `${nbiBase()}/provisions/${INFORM_PROV}`, null, null, 10000);
+  return { ok: true };
+}
 async function genieDevices() {
   if (GENIE_CACHE.data && Date.now() - GENIE_CACHE.t < 60000) return GENIE_CACHE.data;
   const port = readGenieEnv("GENIEACS_NBI_PORT") || "7557";
   const base = NBI_URL || `http://127.0.0.1:${port}`;
-  const proj = ["_id", "_lastInform", "InternetGatewayDevice.ManagementServer.ConnectionRequestURL", "Device.ManagementServer.ConnectionRequestURL"].join(",");
+  const proj = ["_id", "_lastInform", "_lastBoot", ...["InternetGatewayDevice", "Device"].flatMap((r) => ["ConnectionRequestURL", "PeriodicInformInterval", "PeriodicInformEnable"].map((k) => `${r}.ManagementServer.${k}`))].join(",");
   const r = await httpJson("GET", `${base}/devices/?projection=${encodeURIComponent(proj)}`, null, null, 20000);
   if (r.status !== 200 || !Array.isArray(r.json)) {
     return { error: r.status === 0 ? `GenieACS NBI tidak menjawab (${r.error})` : `GenieACS NBI menolak (HTTP ${r.status})` };
   }
-  const data = { devices: r.json.map((d) => ({ id: d._id, last: d._lastInform ? Date.parse(d._lastInform) : 0, ip: crHost(d) })) };
+  const mv = (doc, k) => { const a = (((doc.InternetGatewayDevice || {}).ManagementServer || {})[k] || ((doc.Device || {}).ManagementServer || {})[k] || {})._value; return a === undefined ? null : a; };
+  const data = {
+    devices: r.json.map((d) => {
+      const iv = parseInt(mv(d, "PeriodicInformInterval"), 10);
+      const en = mv(d, "PeriodicInformEnable");
+      return { id: d._id, last: d._lastInform ? Date.parse(d._lastInform) : 0, ip: crHost(d), iv: iv > 0 ? iv : 0, en: en === null ? null : en === true || en === "true" || en === 1 || en === "1" };
+    }),
+  };
   GENIE_CACHE = { t: Date.now(), data };
   return data;
 }
@@ -1254,8 +1298,25 @@ async function genieStatus(d) {
       if (x.last > row.last) row.last = x.last;
     }
   }
+  // Kesehatan inform: ONT yang lama tidak melapor biasanya karena interval inform berkala panjang/mati
+  const inform = { total: 0, fast: 0, slow: 0, off: 0, unknown: 0, recent: 0, stale: 0, intervals: {} };
+  if (!dev.error) {
+    for (const x of dev.devices) {
+      inform.total++;
+      if (x.en === false) inform.off++;
+      else if (!x.iv) inform.unknown++;
+      else if (x.iv <= 300) inform.fast++;
+      else inform.slow++;
+      if (x.iv) inform.intervals[x.iv] = (inform.intervals[x.iv] || 0) + 1;
+      if (x.last && now - x.last < 5 * 60e3) inform.recent++;
+      const lim = x.en !== false && x.iv ? x.iv * 2000 + 120e3 : 3600e3;
+      if (!x.last || now - x.last > lim) inform.stale++;
+    }
+  }
+  inform.provision = await genieInformPreset();
   const cidr = st.genieCidr;
   return {
+    inform,
     installed: cidr !== null || services.some((x) => x.active),
     version: genieVersion(),
     services,
@@ -2127,10 +2188,11 @@ function httpJson(method, urlStr, body, headers, timeoutMs) {
       return resolve({ status: 0, error: "URL tidak valid" });
     }
     const mod = u.protocol === "http:" ? http : https;
-    const data = body == null ? null : Buffer.from(JSON.stringify(body));
+    const raw = typeof body === "string";
+    const data = body == null ? null : Buffer.from(raw ? body : JSON.stringify(body));
     const h = Object.assign({ Accept: "application/json", "User-Agent": "vpn-acs-panel" }, headers || {});
     if (data) {
-      h["Content-Type"] = "application/json";
+      h["Content-Type"] = raw ? "text/plain" : "application/json";
       h["Content-Length"] = data.length;
     }
     const req = mod.request(u, { method, family: 4, headers: h, timeout: timeoutMs || 15000 }, (res) => {
@@ -3063,6 +3125,9 @@ function certReloadCheck() {
 function frontHandler(sock) {
   sock.on("error", () => {});
   if (!HTTPS_ON) return httpServer.emit("connection", sock);
+  // Permintaan dari dalam VPS sendiri (add-on, script cek) tidak dialihkan ke https
+  const ra = String(sock.remoteAddress || "").replace(/^::ffff:/, "");
+  if (ra === "127.0.0.1" || ra === "::1") return peekLocal(sock);
   sock.setTimeout(20000, () => sock.destroy());
   sock.once("data", (buf) => {
     sock.setTimeout(0);
@@ -3080,6 +3145,15 @@ function frontHandler(sock) {
       return;
     }
     pipeTls(sock, buf);
+  });
+}
+
+// Koneksi lokal: TLS tetap diteruskan ke https, http biasa dilayani langsung
+function peekLocal(sock) {
+  sock.once("data", (buf) => {
+    if (buf[0] === 0x16) return pipeTls(sock, buf);
+    sock.unshift(buf);
+    httpServer.emit("connection", sock);
   });
 }
 
@@ -5133,6 +5207,20 @@ async function handleApi(req, res, url) {
     if (s2.error) return send(res, 500, { error: s2.error });
     return send(res, 200, { ok: true, value: genieRanges(d).value, changed: !!s2.changed, restarted: !!s2.restarted, skipped: !!s2.skipped });
   }
+  if (p === "/api/genie/inform" && method === "POST") {
+    if (body.remove) {
+      await genieInformRemove();
+      logActivity(req, "Inform berkala ONT dihapus", "preset " + INFORM_PROV);
+      return send(res, 200, { ok: true });
+    }
+    const iv = parseInt(body.interval, 10);
+    if (![120, 240, 300, 600].includes(iv)) return send(res, 400, { error: "Pilih interval 120, 240, 300, atau 600 detik." });
+    const r = await genieInformInstall(iv);
+    if (r.error) return send(res, 400, { error: r.error });
+    GENIE_CACHE.t = 0;
+    logActivity(req, "Inform berkala ONT dipasang", `tiap ${iv} detik (provision ${INFORM_PROV})`);
+    return send(res, 200, { ok: true });
+  }
   if (p === "/api/genie" && method === "GET") {
     if (url.searchParams.get("refresh") === "1") GENIE_CACHE.t = 0;
     return send(res, 200, await genieStatus(loadData()));
@@ -6327,6 +6415,22 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   @media (max-width:720px){.sec-steps{grid-template-columns:1fr}}
   .wg-key{font-size:12.5px;word-break:break-all;color:var(--text-2)}
   .wg-port{display:flex;align-items:center;gap:8px;margin-top:10px;padding:10px 12px;border-radius:var(--r-sm);background:var(--subtle);border:1px solid var(--line);font-weight:600}
+  .tr-opts{display:grid;gap:10px;margin-top:10px}
+  .tr-opt{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:var(--r-sm);cursor:pointer;margin:0;font-weight:400}
+  .tr-opt:has(input:checked){border-color:var(--primary);background:var(--primary-soft)}
+  .tr-opt.dis{opacity:.55;cursor:not-allowed}
+  .tr-ic{width:34px;height:34px;flex:none;display:grid;place-items:center;border-radius:9px;background:var(--subtle);color:var(--text-2)}.tr-ic svg{width:17px;height:17px}
+  .tr-tx{display:grid;gap:2px}.tr-tx b{font-size:14px}.tr-tx small{color:var(--muted);font-size:12.5px}
+  .tr-steps{margin:10px 0 14px;padding-left:20px;display:grid;gap:14px}.tr-steps li{min-width:0}.tr-steps .codebox{max-width:100%}.tr-steps pre{overflow:auto}.tr-steps li b{display:block;margin-bottom:6px}
+  .inf-card{margin-bottom:16px}
+  .inf-lead{font-size:13.5px;line-height:1.6;color:var(--text-2);margin:0 0 12px}
+  .inf-bar{display:flex;height:10px;border-radius:99px;overflow:hidden;background:var(--subtle);border:1px solid var(--line)}
+  .inf-bar i{display:block;height:100%}
+  .inf-bar .ok,.inf-leg .ok{background:var(--ok)}.inf-bar .warn,.inf-leg .warn{background:var(--warn)}.inf-bar .bad,.inf-leg .bad{background:var(--bad)}.inf-bar .unk,.inf-leg .unk{background:var(--line-2)}
+  .inf-leg{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:8px;font-size:12.5px;color:var(--muted)}
+  .inf-leg i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+  .inf-top{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:12px}
+  .inf-act{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:14px}
   .det-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px;align-items:start}
   .det-main{min-width:0}.det-side{display:grid;gap:16px;min-width:0}.det-side>.card{margin:0}
   .det-main>.card:first-child,.det-main>.note:first-child{margin-top:0}
@@ -6963,6 +7067,7 @@ function modal(title, body, footer, opts = {}) {
 // Halaman yang perlu dimuat ulang setelah proses selesai, ditunda sampai jendela ditutup
 let ROUTE_AFTER_CLOSE = false;
 function closeModal() {
+  if (typeof CF !== "undefined" && CF && CF.running && $("#cfSteps")) return; // proses domain sedang berjalan
   $("#modalRoot").innerHTML = ""; if (TEST && !TEST.keep) TEST = null;
   if (ROUTE_AFTER_CLOSE) { ROUTE_AFTER_CLOSE = false; setTimeout(route, 0); }
 }
@@ -7323,6 +7428,7 @@ function viewDetail(v, id, tab) {
         <div class="menu"><button class="btn icon" data-act="menu" aria-label="Lainnya">${ic("dots")}</button>
           <div class="menu-list hidden" id="menuList">
             <button data-act="edit" data-id="${x.id}">${ic("edit")}Ubah router</button>
+            <button data-act="transport" data-id="${x.id}">${ic("share")}Ubah jalur VPN</button>
             ${x.transport === "zt" ? `<button data-act="ztpick" data-id="${x.id}">${ic("hub")}Pilih router ZeroTier</button>` : x.transport === "wg" ? `<button data-act="wgrekey" data-id="${x.id}">${ic("key")}Buat kunci WireGuard baru</button>` : `<button data-act="resetpw" data-id="${x.id}">${ic("key")}Buat password VPN baru</button>`}
             <hr><button class="d" data-act="del" data-id="${x.id}">${ic("trash")}Hapus router</button>
           </div></div>
@@ -7379,6 +7485,58 @@ function tabSummary(b, x) {
         <div><dt>IPsec</dt><dd>${STATE.settings.useIpsec ? "Aktif" : "Tidak dipakai"}</dd></div>
       </dl>
     </div>`}</div>${detSide(x)}</div>`;
+}
+// ---------- Ubah jalur VPN (L2TP / WireGuard / ZeroTier) ----------
+const TR_DESC = {
+  l2tp: ["L2TP", "Semua versi RouterOS (v6 dan v7). Paling umum.", "lock"],
+  wg: ["WireGuard", "RouterOS v7, semua jenis router. Ringan dan cepat (UDP).", "bolt"],
+  zt: ["ZeroTier", "RouterOS v7 ARM/ARM64 dengan paket zerotier.", "hub"],
+};
+// Baris MikroTik untuk menghapus jalur lama saja (route, NAT, dan firewall diganti oleh script jalur baru)
+function trRemoveScript(tr) {
+  if (tr === "zt") return `# Hapus jalur ZeroTier lama\n:do { /zerotier interface remove [find where name="zt-acs"] } on-error={}\n:put "Jalur ZeroTier lama dihapus."`;
+  if (tr === "wg") return `# Hapus jalur WireGuard lama\n:do { /ip address remove [find where interface="wg-acs"] } on-error={}\n:do { /interface wireguard peers remove [find where interface="wg-acs"] } on-error={}\n:do { /interface wireguard remove [find where name="wg-acs"] } on-error={}\n:put "Jalur WireGuard lama dihapus."`;
+  return `# Hapus jalur L2TP lama\n:do { /interface l2tp-client remove [find where name="l2tp-acs"] } on-error={}\n:put "Jalur L2TP lama dihapus."`;
+}
+function openTransport(id) {
+  const x = site(id); if (!x) return;
+  const cur = x.transport || "l2tp";
+  const avail = { l2tp: true, wg: !!STATE.settings.wg, zt: !!STATE.settings.zt };
+  const why = { wg: wgOn() ? "WireGuard belum siap di VPS" : "Pasang add-on WireGuard dulu", zt: ztOn() ? "Hubungkan VPS ke jaringan di menu ZeroTier dulu" : "Pasang add-on ZeroTier dulu" };
+  const opts = ["l2tp", "wg", "zt"].filter((k) => k !== cur);
+  modal(`Ubah jalur VPN · ${esc(x.name)}`, `
+    <p class="muted" style="margin-top:0">Jalur sekarang: <b style="color:var(--text)">${esc(TR_DESC[cur][0])}</b>. Pilih jalur baru:</p>
+    <div class="tr-opts">${opts.map((k, i) => `<label class="tr-opt${avail[k] ? "" : " dis"}"><input type="radio" name="trNew" value="${k}" ${avail[k] && !opts.slice(0, i).some((o) => avail[o]) ? "checked" : ""} ${avail[k] ? "" : "disabled"}>
+      <span class="tr-ic">${ic(TR_DESC[k][2])}</span><span class="tr-tx"><b>${TR_DESC[k][0]}</b><small>${avail[k] ? TR_DESC[k][1] : esc(why[k])}</small></span></label>`).join("")}</div>
+    <div class="note info" style="margin-top:14px">${ic("info")}<div><b>Yang terjadi</b>Akses jalur lama di VPS langsung dicabut. IP virtual, port forwarding, dan URL ACS tetap sama. Setelah ini panel menampilkan script untuk <strong>menghapus jalur lama</strong> di MikroTik dan script <strong>jalur baru</strong>.</div></div>
+    <div class="err" id="trErr"></div>`,
+    `<button class="btn" data-act="closemodal">Batal</button><button class="btn pri" id="trOk" ${opts.some((k) => avail[k]) ? "" : "disabled"}>Ubah jalur</button>`, { size: "md" });
+  $("#trOk").onclick = async () => {
+    const to = (document.querySelector("input[name=trNew]:checked") || {}).value;
+    if (!to) return;
+    $("#trErr").textContent = ""; busyBtn($("#trOk"), true);
+    try {
+      await api(`/api/sites/${x.id}`, { method: "PUT", body: { name: x.name, realSubnet: x.realSubnet, virtualSubnet: x.virtualSubnet, note: x.note || "", transport: to } });
+      await load();
+      trDoneDialog(site(x.id), cur, to);
+    } catch (e) { $("#trErr").textContent = e.message; busyBtn($("#trOk"), false); }
+  };
+}
+function trDoneDialog(x, from, to) {
+  const rm = trRemoveScript(from);
+  modal(`Jalur diubah ke ${esc(TR_DESC[to][0])}`, `
+    <p style="margin-top:0">Pasang di MikroTik <b>${esc(x.name)}</b> lewat Winbox → New Terminal, berurutan:</p>
+    <ol class="tr-steps">
+      <li><b>Pasang jalur baru ${esc(TR_DESC[to][0])}</b>
+        <div class="codebox"><pre class="code" style="max-height:170px;padding-top:46px">${esc(x.script)}</pre><button class="btn sm" data-copy="${esc(x.script)}" data-msg="Script jalur baru tersalin">${ic("copy")}Salin</button></div></li>
+      <li><b>Hapus jalur lama ${esc(TR_DESC[from][0])}</b>
+        <div class="codebox"><pre class="code" style="padding-top:46px">${esc(rm)}</pre><button class="btn sm" data-copy="${esc(rm)}" data-msg="Script hapus jalur lama tersalin">${ic("copy")}Salin</button></div></li>
+    </ol>
+    <div class="note warn">${ic("alert")}<div><b>Jangan lewat remote panel</b>Bila Winbox tersambung lewat port forwarding panel (jalur lama), koneksi akan terputus saat jalur diganti. Pakai Winbox lokal atau IP publik MikroTik.</div></div>
+    ${to === "zt" ? `<p class="help">ZeroTier: setelah script dipasang, router melapor Node ID ke panel dan dipilih otomatis.</p>` : ""}`,
+    `<button class="btn" id="trScript">${ic("code")}Buka tab Script</button><button class="btn pri" data-act="closemodal">Selesai</button>`, { size: "lg" });
+  ROUTE_AFTER_CLOSE = true;
+  $("#trScript").onclick = () => { ROUTE_AFTER_CLOSE = false; closeModal(); location.hash = `#/router/${x.id}/script`; };
 }
 function wgStaleNote(x, style) {
   return x.wgStale ? `<div class="note warn"${style ? ` style="${style}"` : ""}>${ic("alert")}<div><b>Pasang ulang script WireGuard</b>Port, rentang IP, atau kunci WireGuard berubah. Salin script terbaru dari tab <a href="#/router/${x.id}/script">Script MikroTik</a> ke MikroTik, lalu klik <a href="#" data-act="wgdone" data-id="${x.id}">Sudah dipasang</a>.</div></div>` : "";
@@ -8282,6 +8440,43 @@ async function fillUpdate(refresh) {
 }
 
 /* ================= GenieACS ================= */
+// ---------- Inform berkala ONT: penyebab umum ONT terlihat offline padahal hidup ----------
+function informCard(g) {
+  const I = g.inform; if (!I || !I.total || g.devicesError) return "";
+  const P = I.provision || {};
+  const bad = I.slow + I.off + I.unknown;
+  const top = Object.entries(I.intervals).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([iv, n]) => `<span class="pill ${iv <= 300 ? "ok" : "bad"}">${iv >= 3600 ? iv / 3600 + " jam" : iv >= 60 ? Math.round(iv / 60) + " menit" : iv + " dtk"} · ${n} ONT</span>`).join("");
+  const seg = (n, cls) => (n ? `<i class="${cls}" style="width:${(n / I.total) * 100}%"></i>` : "");
+  return `<div class="card inf-card">
+    <div class="ch"><h2>Inform berkala ONT</h2>${P.installed ? `<span class="pill ok">Provision aktif${P.interval ? ` · tiap ${P.interval} detik` : ""}</span>` : bad ? `<span class="pill bad">Perlu diperbaiki</span>` : `<span class="pill ok">Normal</span>`}</div>
+    <div class="cb" style="padding-top:12px">
+      <p class="inf-lead">${P.installed ? `Semua ONT diatur melapor ke GenieACS ${P.interval ? `tiap <b>${P.interval} detik</b>` : "secara berkala"}. ONT yang belum ikut berubah setelah inform berikutnya.`
+        : bad ? `<b>${bad} dari ${I.total} ONT</b> melapor jarang (lebih dari 5 menit), inform berkalanya mati, atau intervalnya belum diketahui. ONT seperti ini terlihat <b>offline</b> di GenieACS beberapa menit setelah tersambung, padahal di lokasi tetap hidup. Penyebabnya bukan VPN (L2TP, WireGuard, maupun ZeroTier sama saja).`
+        : "Semua ONT melapor tiap 5 menit atau lebih cepat."}</p>
+      <div class="inf-bar">${seg(I.fast, "ok")}${seg(I.slow, "warn")}${seg(I.off, "bad")}${seg(I.unknown, "unk")}</div>
+      <div class="inf-leg"><span><i class="ok"></i>≤ 5 menit: ${I.fast}</span><span><i class="warn"></i>lebih jarang: ${I.slow}</span><span><i class="bad"></i>inform berkala mati: ${I.off}</span><span><i class="unk"></i>belum diketahui: ${I.unknown}</span></div>
+      ${top ? `<div class="inf-top"><span class="muted zt-small">Interval terbanyak</span>${top}</div>` : ""}
+      <div class="inf-act">
+        <label for="infIv" class="muted zt-small" style="margin:0">Laporkan tiap</label>
+        <select id="infIv" style="width:auto">${[120, 240, 300, 600].map((v) => `<option value="${v}" ${(P.interval || 240) === v ? "selected" : ""}>${v / 60} menit${v === 240 ? " (disarankan)" : ""}</option>`).join("")}</select>
+        <button class="btn pri" id="infGo">${ic("check")}${P.installed ? "Simpan interval" : "Perbaiki semua ONT"}</button>
+        ${P.installed ? `<button class="btn ghost danger" id="infRm">Hapus provision</button>` : ""}
+      </div>
+      <p class="help">Panel memasang provision <code>vpnacs-inform</code> + preset di GenieACS yang menyalakan inform berkala di setiap ONT. Berlaku saat ONT melapor berikutnya (biasanya setelah reboot ONT atau inform berkala lama). Tidak mengubah pengaturan lain.</p>
+    </div></div>`;
+}
+function bindInform(g) {
+  const go = $("#infGo"); if (!go) return;
+  go.onclick = async () => {
+    busyBtn(go, true);
+    try { await api("/api/genie/inform", { method: "POST", body: { interval: parseInt($("#infIv").value, 10) } }); toast("Provision inform berkala dipasang"); fillGenie(true); }
+    catch (e) { toast(e.message); busyBtn(go, false); }
+  };
+  const rm = $("#infRm");
+  if (rm) rm.onclick = () => confirmDialog({ title: "Hapus provision inform berkala?", danger: true, ok: "Hapus",
+    text: "<p>Preset dan provision <code>vpnacs-inform</code> dihapus dari GenieACS. Interval di ONT tidak dikembalikan; ONT tetap memakai nilai terakhir.</p>",
+    onOk: async () => { await api("/api/genie/inform", { method: "POST", body: { remove: true } }); closeModal(); toast("Provision dihapus"); fillGenie(true); } });
+}
 function viewGenie(v) {
   crumb([["GenieACS"]]);
   const s = STATE.settings;
@@ -8311,6 +8506,7 @@ async function fillGenie(refresh) {
       <div class="kpi"><span><i class="dot bad"></i>Tidak melapor</span><b>${g.devicesError ? "—" : T.idle}</b><small>lebih dari 1 jam</small></div>
       <div class="kpi"><span>Tanpa router</span><b>${g.devicesError ? "—" : T.other}</b><small>IP tidak cocok dengan router panel</small></div>
     </div>
+    ${informCard(g)}
     <div class="grid-dash">
       <div class="card">
         <div class="ch"><h2>ONT per router</h2><button class="btn sm ghost" id="gRefresh" title="Baca ulang dari GenieACS">${ic("refresh")}Perbarui</button></div>
@@ -8358,6 +8554,7 @@ async function fillGenie(refresh) {
       </div>
     </div>`;
   paintIcons(b);
+  bindInform(g);
   $("#gRefresh") && ($("#gRefresh").onclick = async () => { busyBtn($("#gRefresh"), true); await fillGenie(true); });
   $("#gExtraForm") && ($("#gExtraForm").onsubmit = async (e) => {
     e.preventDefault(); $("#gExtraErr").textContent = "";
@@ -9164,12 +9361,7 @@ function setDomain(b) {
       <div class="err" id="cfErr"></div>
       <div class="form-actions"><button class="btn pri" id="cfGo">${ic("play")}Verifikasi &amp; terapkan</button></div>
     </form></div>
-    <div class="card hidden" id="cfRun">
-      <div class="tst-head"><div><h2 id="cfTitle">Memverifikasi</h2><p id="cfSub"></p></div></div>
-      <div class="prog"><i id="cfProg"></i></div>
-      <ol class="steps" id="cfSteps"></ol>
-      <div id="cfSum"></div>
-    </div>`;
+`;
   $("#cfForm").onsubmit = (e) => { e.preventDefault(); runCf($("#cfDom").value.trim(), $("#cfTok").value.trim(), $("#cfHttps").checked); };
   const sf = $("#subForm");
   if (sf) {
@@ -9201,8 +9393,8 @@ function setDomain(b) {
   if (CF && CF.plan) drawCf();
 }
 function drawCf() {
-  const card = $("#cfRun"); if (!card || !CF) return;
-  card.classList.remove("hidden");
+  if (!$("#cfSteps") || !CF) return;
+  const cl = $("#cfClose"); if (cl) cl.disabled = !!CF.running;
   $("#cfSteps").innerHTML = stepsHtml(CF.plan, CF.res, CF.current);
   const n = Object.keys(CF.res).length;
   $("#cfProg").style.width = (CF.plan.length ? (n / CF.plan.length) * 100 : 0) + "%";
@@ -9227,7 +9419,13 @@ async function runCf(domain, token, withHttps, alt) {
   catch (e) { $(errEl).textContent = e.message; return; }
   CF = { domain: alt ? "Subdomain layanan" : domain, sub: !!alt, plan: r.steps, jobId: r.jobId, res: {}, running: true, ok: false };
   $("#cfGo").disabled = true; const again = $("#cfAgain"); if (again) again.disabled = true; const sg = $("#subGo"); if (sg) sg.disabled = true;
-  drawCf(); $("#cfRun").scrollIntoView({ behavior: "smooth", block: "start" });
+  // Proses tampil di jendela progres, sama seperti pemasangan add-on dan tes koneksi
+  modal(`<span id="cfTitle">Memverifikasi</span>`, `
+    <div class="tst-top" id="cfSub"></div>
+    <div class="prog"><i id="cfProg"></i></div>
+    <ol class="steps" id="cfSteps"></ol>
+    <div id="cfSum"></div>`, `<button class="btn" data-act="closemodal" id="cfClose" disabled>Tutup</button>`, { size: "lg", flush: true });
+  drawCf();
   for (const s of CF.plan) {
     CF.current = s.key; drawCf();
     const t0 = performance.now();
@@ -9243,7 +9441,7 @@ async function runCf(domain, token, withHttps, alt) {
   CF.running = false; drawCf();
   const go = $("#cfGo"); if (go) go.disabled = false; const ag = $("#cfAgain"); if (ag) ag.disabled = false; const sg2 = $("#subGo"); if (sg2) sg2.disabled = false;
   // Setelah HTTPS aktif, akses http dialihkan, jadi data tidak dimuat ulang di halaman ini
-  if (CF.ok && !CF.url) { await load(); const keep = CF; route(); CF = keep; drawCf(); }
+  if (CF.ok && !CF.url) { await load(); ROUTE_AFTER_CLOSE = true; }
 }
 
 /* ================= Log aktivitas ================= */
@@ -9311,6 +9509,7 @@ document.addEventListener("click", async (e) => {
     const id = a.dataset.id || cur;
     try { await api(`/api/sites/${id}/zt-script-done`, { method: "POST", body: {} }); await load(); route(); toast("Ditandai sudah dipasang"); } catch (err) { toast(err.message, true); }
   }
+  else if (act === "transport") { const m = $("#menuList"); if (m) m.classList.add("hidden"); openTransport(a.dataset.id || cur); }
   else if (act === "wgdone") {
     const id = a.dataset.id || cur;
     try { await api(`/api/sites/${id}/wg-script-done`, { method: "POST", body: {} }); await load(); route(); toast("Ditandai sudah dipasang"); } catch (err) { toast(err.message, true); }

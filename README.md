@@ -314,7 +314,12 @@ Jalur VPN UDP yang ringan dan cepat untuk **semua router RouterOS v7** (ARM, MIP
 Menu **WireGuard** menampilkan endpoint, public key VPS, rentang IP, serta setiap router dengan **handshake terakhir**, endpoint, dan data masuk/keluar. Router dianggap tersambung bila handshake kurang dari 3 menit (script memakai keepalive 25 detik).
 - **Pengaturan WireGuard:** ganti **port UDP** atau **rentang IP**. Router WireGuard diberi tanda **Pasang ulang script WireGuard** karena script lama tidak lagi cocok.
 - **Buat kunci WireGuard baru** (menu ⋯ di detail router) bila kunci router mungkin bocor.
-- Router yang sudah ada bisa dipindah jalurnya (L2TP ↔ WireGuard ↔ ZeroTier) lewat **Ubah router**, lalu pasang script baru.
+- **Ubah jalur VPN** (menu ⋯ di detail router): pindah L2TP ↔ WireGuard ↔ ZeroTier. Akses jalur lama di VPS langsung dicabut, lalu panel menampilkan script jalur baru dan script untuk menghapus jalur lama di MikroTik.
+
+### H. ONT terlihat offline padahal hidup
+Penyebab paling umum: **inform berkala ONT** terlalu jarang (misalnya 1 jam atau 1 hari) atau mati. ONT hanya melapor saat menyala/tersambung, sehingga GenieACS menandainya offline beberapa menit kemudian, walaupun ONT tetap hidup. Ini tidak terkait jalur VPN.
+
+Menu **GenieACS → Inform berkala ONT** menampilkan sebaran interval semua ONT. Klik **Perbaiki semua ONT** (bawaan tiap 4 menit): panel memasang provision `vpnacs-inform` + preset di GenieACS yang menyalakan inform berkala di setiap ONT. Berlaku saat ONT melapor berikutnya.
 
 ### G. Keamanan login & laporan kesehatan VPS
 **Pengaturan → Keamanan:**
