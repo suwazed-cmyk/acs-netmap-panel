@@ -194,7 +194,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.4.1";
+const VERSION = "2.4.2";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -1244,8 +1244,20 @@ function ztConflict(d, sub) {
   }
   return null;
 }
-// Status ZeroTier untuk halaman Pengaturan
-async function ztStatus(d) {
+// Jaringan yang sedang dikelola: jaringan panel (aktif) atau jaringan lain di controller
+async function ztTarget(d, nwid) {
+  const a = ztCfg(d);
+  nwid = String(nwid || "").trim().toLowerCase();
+  if (!nwid || (a && a.nwid === nwid)) return a ? Object.assign({}, a, { active: true }) : null;
+  if (!/^[0-9a-f]{16}$/.test(nwid)) return null;
+  const cn = await ztApi("GET", `/controller/network/${nwid}`);
+  if (!cn.ok) return null;
+  const st = await ztApi("GET", "/status");
+  const sub = ztSubnetOf(cn.json);
+  return { active: false, nwid, name: cn.json.name || "", subnet: sub ? sub.text : "", vpsNode: st.ok ? st.json.address : "", vpsIp: "", managedRoutes: [] };
+}
+// Status ZeroTier untuk halaman ZeroTier (view: Network ID yang sedang dibuka)
+async function ztStatus(d, view) {
   const st = await ztApi("GET", "/status");
   if (!st.ok) return { installed: false, error: st.error, missing: !!st.missing };
   const out = { installed: true, node: st.json.address, version: st.json.version, online: !!st.json.online, networks: [], current: null, ztnet: fs.existsSync(ZTNET_DIR + "/server.js") || fs.existsSync(ZTNET_DIR + "/.env") };
@@ -1274,9 +1286,13 @@ async function ztStatus(d) {
     const c = parseCidr(`172.27.${i}.0/24`);
     if (!ztConflict(d, c) && !taken.some((t) => overlap(t, c))) out.suggest = c.text;
   }
-  const z = ztCfg(d);
+  const act = ztCfg(d);
+  out.activeNwid = act ? act.nwid : "";
+  let z = view ? await ztTarget(d, view) : null;
+  if (!z && act) z = Object.assign({}, act, { active: true });
   if (z) {
-    const j = await ztApi("GET", `/network/${z.nwid}`);
+    for (const n of out.networks) n.viewing = n.nwid === z.nwid;
+    const j = z.active ? await ztApi("GET", `/network/${z.nwid}`) : { ok: false };
     const cn = await ztApi("GET", `/controller/network/${z.nwid}`);
     const pool = cn.ok ? (cn.json.ipAssignmentPools || [])[0] : null;
     out.current = Object.assign({}, z, {
@@ -1287,10 +1303,12 @@ async function ztStatus(d) {
       routes: cn.ok ? (cn.json.routes || []).map((r) => ({ target: r.target, via: r.via || "", panel: !!(r.via && (z.managedRoutes || []).includes(r.target)) })) : [],
       dns: cn.ok && cn.json.dns ? { domain: cn.json.dns.domain || "", servers: cn.json.dns.servers || [] } : { domain: "", servers: [] },
       created: cn.ok ? cn.json.creationTime || null : null,
-      desc: ((d.ztNets || {})[z.nwid] || {}).desc || "",
-      status: j.ok ? j.json.status : "TIDAK TERGABUNG",
-      iface: j.ok ? j.json.portDeviceName || z.iface : "",
-      sites: d.sites.filter(isZt).length,
+      active: z.active,
+      subnet: z.active ? z.subnet : (cn.ok && ztSubnetOf(cn.json) ? ztSubnetOf(cn.json).text : ""),
+      conflict: z.active ? null : ((out.networks.find((n) => n.nwid === z.nwid) || {}).conflict || null),
+      status: z.active ? (j.ok ? j.json.status : "TIDAK TERGABUNG") : "TIDAK DIPAKAI",
+      iface: z.active ? (j.ok ? j.json.portDeviceName || z.iface : "") : "",
+      sites: z.active ? d.sites.filter(isZt).length : 0,
     });
     // Semua anggota jaringan: VPS, router panel, dan perangkat lain
     const mi = await ztMemberIps(z.nwid);
@@ -1300,7 +1318,7 @@ async function ztStatus(d) {
     out.members = [];
     const now = Date.now();
     for (const [id, m] of Object.entries(mi.members || {})) {
-      const site = d.sites.find((s) => s.ztNode === id);
+      const site = z.active ? d.sites.find((s) => s.ztNode === id) : null;
       const p = pmap[id];
       const paths = (p && p.paths) || [];
       const path = paths.find((x) => x.preferred) || paths.find((x) => x.active) || paths[0];
@@ -1308,13 +1326,13 @@ async function ztStatus(d) {
       const meta = ztMetaOf(d, id);
       out.members.push({
         node: id,
-        role: id === z.vpsNode ? "vps" : site ? "router" : "other",
-        name: id === z.vpsNode ? "VPS (panel ini)" : site ? site.name : meta.name || "",
+        role: z.active && id === z.vpsNode ? "vps" : site ? "router" : "other",
+        name: z.active && id === z.vpsNode ? "VPS (panel ini)" : site ? site.name : id === z.vpsNode ? meta.name || "VPS (controller)" : meta.name || "",
         note: meta.note || "",
         siteId: site ? site.id : "",
         authorized: !!m.authorized,
         ips: m.ipAssignments || [],
-        online: id === z.vpsNode ? true : site ? !!ZT_ONLINE.get(site.id) : !!(last && now - last < 120000),
+        online: z.active && id === z.vpsNode ? true : site ? !!ZT_ONLINE.get(site.id) : !!(last && now - last < 120000),
         physical: path ? String(path.address).split("/")[0] : "",
         latency: p && p.latency >= 0 ? p.latency : null,
         version: p && p.version && p.version !== "-1.-1.-1" ? p.version : "",
@@ -4468,7 +4486,7 @@ async function handleApi(req, res, url) {
   // --- ZeroTier ---
   if (p === "/api/zt" && method === "GET") {
     await ztRefresh(req).catch((e) => console.error("Pemeriksaan ZeroTier gagal:", e.message));
-    return send(res, 200, await ztStatus(loadData()));
+    return send(res, 200, await ztStatus(loadData(), url.searchParams.get("nwid")));
   }
   // --- Add-on ---
   if (p === "/api/addons" && method === "GET") {
@@ -4628,11 +4646,11 @@ async function handleApi(req, res, url) {
     logActivity(req, "Jaringan ZeroTier dihapus", `${(c.ok && c.json.name) || nwid} (${nwid})`);
     return send(res, 200, { ok: true });
   }
-  // Ubah jaringan aktif: nama, akses, rentang IP, pool, DNS
+  // Ubah jaringan (jaringan panel atau jaringan lain di controller): nama, akses, rentang IP, pool, DNS
   if (p === "/api/zt/network" && method === "PUT") {
     const d = loadData();
-    const z = ztCfg(d);
-    if (!z) return send(res, 400, { error: "ZeroTier belum dihubungkan." });
+    const z = await ztTarget(d, body.nwid);
+    if (!z) return send(res, 400, { error: body.nwid ? "Jaringan tidak ditemukan di controller." : "ZeroTier belum dihubungkan." });
     const cur = await ztApi("GET", `/controller/network/${z.nwid}`);
     if (!cur.ok) return send(res, 500, { error: "Tidak bisa membaca jaringan: " + cur.error });
     const C = cur.json;
@@ -4642,17 +4660,6 @@ async function handleApi(req, res, url) {
       const name = String(body.name || "").trim();
       if (!/^[\w .-]{1,64}$/.test(name)) return send(res, 400, { error: "Nama jaringan 1-64 karakter: huruf, angka, spasi, titik, minus, atau garis bawah." });
       if ((C.name || "") !== name) { upd.name = name; changes.push(`nama ${C.name || "-"} → ${name}`); }
-    }
-    // Deskripsi disimpan di panel (controller ZeroTier tidak menyimpan deskripsi)
-    if (body.description !== undefined) {
-      const desc = String(body.description || "").trim().slice(0, 200);
-      const N = (d.ztNets = d.ztNets || {});
-      if (((N[z.nwid] || {}).desc || "") !== desc) {
-        N[z.nwid] = Object.assign({}, N[z.nwid] || {}, { desc });
-        if (!desc) delete N[z.nwid].desc;
-        saveData(d);
-        changes.push(desc ? "deskripsi diubah" : "deskripsi dihapus");
-      }
     }
     if (body.private !== undefined) {
       const priv = body.private !== false;
@@ -4665,9 +4672,10 @@ async function handleApi(req, res, url) {
       if (chk.error) return send(res, 400, { error: chk.error });
       sub = chk.sub;
       upd.routes = (C.routes || []).filter((r) => r.via).concat([{ target: sub.text, via: null }]);
-      changes.push(`rentang ${z.subnet} → ${sub.text}`);
+      changes.push(`rentang ${z.subnet || "-"} → ${sub.text}`);
     }
-    if (body.poolStart !== undefined || body.poolEnd !== undefined || upd.routes) {
+    if (!sub && (body.poolStart || body.poolEnd)) return send(res, 400, { error: "Isi rentang IP jaringan dulu." });
+    if (sub && (body.poolStart !== undefined || body.poolEnd !== undefined || upd.routes)) {
       const pool = ztPoolOf(sub, body.poolStart, body.poolEnd);
       if (pool.error) return send(res, 400, { error: pool.error });
       const old = (C.ipAssignmentPools || [])[0] || {};
@@ -4689,18 +4697,15 @@ async function handleApi(req, res, url) {
         changes.push(dom ? `DNS ${dom} (${servers.join(", ") || "-"})` : "DNS dikosongkan");
       }
     }
-    if (!Object.keys(upd).length) {
-      if (changes.length) logActivity(req, "Jaringan ZeroTier diubah", changes.join(" · "));
-      return send(res, 200, { ok: true, changed: !!changes.length });
-    }
+    if (!Object.keys(upd).length) return send(res, 200, { ok: true, changed: false });
     const r = await ztApi("POST", `/controller/network/${z.nwid}`, upd);
     if (!r.ok) return send(res, 500, { error: "Gagal menyimpan ke controller ZeroTier: " + r.error });
     const d2 = loadData();
-    if (upd.name && d2.settings && d2.settings.zt) { d2.settings.zt.name = upd.name; saveData(d2); }
-    logActivity(req, "Jaringan ZeroTier diubah", changes.join(" · "));
-    // Rentang/pool berubah: IP VPS, router, perangkat lain, dan route disesuaikan otomatis
+    if (z.active && upd.name && d2.settings && d2.settings.zt) { d2.settings.zt.name = upd.name; saveData(d2); }
+    logActivity(req, "Jaringan ZeroTier diubah", `${C.name || z.nwid} · ${changes.join(" · ")}`);
+    // Rentang/pool jaringan panel berubah: IP VPS, router, perangkat lain, dan route disesuaikan otomatis
     let adj = null;
-    if (upd.routes || upd.ipAssignmentPools) adj = await ztRefresh(req).catch((e) => ({ error: e.message }));
+    if (z.active && (upd.routes || upd.ipAssignmentPools)) adj = await ztRefresh(req).catch((e) => ({ error: e.message }));
     return send(res, 200, { ok: true, changed: true, notes: (adj && adj.notes) || [], error: (adj && adj.error) || "" });
   }
   // Pindahan dari ZTNET: salin nama, lalu lepas ZTNET (proses berjalan di latar belakang)
@@ -4718,10 +4723,10 @@ async function handleApi(req, res, url) {
   if (zm && method === "DELETE") {
     const node = zm[1];
     const d = loadData();
-    const z = ztCfg(d);
-    if (!z) return send(res, 400, { error: "ZeroTier belum dihubungkan." });
-    if (node === z.vpsNode) return send(res, 400, { error: "VPS tidak bisa dihapus dari jaringan." });
-    const site = d.sites.find((x) => x.ztNode === node);
+    const z = await ztTarget(d, url.searchParams.get("nwid"));
+    if (!z) return send(res, 400, { error: "Jaringan ZeroTier tidak ditemukan." });
+    if (z.active && node === z.vpsNode) return send(res, 400, { error: "VPS tidak bisa dihapus dari jaringan." });
+    const site = z.active ? d.sites.find((x) => x.ztNode === node) : null;
     if (site) return send(res, 400, { error: `Perangkat ini dipakai router "${site.name}". Lepas dulu dari router itu.` });
     const r = await ztApi("DELETE", `/controller/network/${z.nwid}/member/${node}`);
     if (!r.ok && r.status !== 404) return send(res, 500, { error: "Controller ZeroTier menolak: " + r.error });
@@ -4734,10 +4739,10 @@ async function handleApi(req, res, url) {
   if (zm && method === "POST") {
     const node = zm[1];
     const d = loadData();
-    const z = ztCfg(d);
-    if (!z) return send(res, 400, { error: "ZeroTier belum dihubungkan." });
-    if (node === z.vpsNode) return send(res, 400, { error: "Izin dan IP VPS diatur otomatis oleh panel." });
-    const site = d.sites.find((x) => isZt(x) && x.ztNode === node);
+    const z = await ztTarget(d, url.searchParams.get("nwid") || body.nwid);
+    if (!z) return send(res, 400, { error: "Jaringan ZeroTier tidak ditemukan." });
+    if (z.active && node === z.vpsNode) return send(res, 400, { error: "Izin dan IP VPS diatur otomatis oleh panel." });
+    const site = z.active ? d.sites.find((x) => isZt(x) && x.ztNode === node) : null;
     const mi = await ztMemberIps(z.nwid);
     if (mi.error) return send(res, 500, { error: mi.error });
     const m = mi.members[node];
@@ -4777,6 +4782,7 @@ async function handleApi(req, res, url) {
     if (body.ip !== undefined) {
       const ip = String(body.ip || "").trim();
       const sub = parseCidr(z.subnet);
+      if (!sub) return send(res, 400, { error: "Jaringan ini belum punya rentang IP. Atur di Pengaturan jaringan dulu." });
       const n = ipToInt(ip);
       if (n === null || !inSubnet(ip, sub)) return send(res, 400, { error: `IP harus di dalam rentang ${z.subnet}.` });
       if (n === sub.net || n === sub.net + sub.size - 1) return send(res, 400, { error: "IP itu alamat jaringan/broadcast, pilih yang lain." });
@@ -5483,6 +5489,11 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .zt-empty .big svg{width:24px;height:24px}
   .zt-empty p{max-width:460px;margin:6px auto 0;line-height:1.55}
   .zt-hero{overflow:hidden}
+  .zt-sw{display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid var(--line);background:var(--subtle)}
+  .zt-sw label{margin:0;font-size:13px;font-weight:500;color:var(--muted)}
+  .zt-selw{flex:0 1 380px;min-width:0}
+  .zt-selw select{width:100%;height:34px;font-size:13.5px;font-weight:550}
+  .zt-sw .zt-small{margin-left:auto}
   .zt-hb{display:flex;gap:20px;align-items:center;padding:16px 20px}
   .zt-hinfo{flex:1;min-width:0}
   .zt-hrow{display:grid;grid-template-columns:120px minmax(0,1fr);align-items:center;gap:10px;min-height:32px}
@@ -5491,8 +5502,8 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .zt-nwid{font-size:17px;font-weight:600;letter-spacing:.02em;color:var(--text);line-height:1.2;word-break:break-all}
   .zt-nname{font-size:14.5px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .zt-nin{max-width:280px;height:32px!important;font-size:14px!important}
-  .zt-ib{width:28px;height:28px;flex:none;display:grid;place-items:center;border:1px solid transparent;border-radius:8px;background:none;color:var(--primary);cursor:pointer;transition:background .12s,border-color .12s}
-  .zt-ib:hover{background:var(--primary-soft);border-color:color-mix(in srgb,var(--primary) 25%,transparent)}
+  .zt-ib{width:28px;height:28px;flex:none;display:grid;place-items:center;border:1px solid transparent;border-radius:8px;background:none;color:var(--muted);cursor:pointer;transition:background .12s,color .12s}
+  .zt-ib:hover{background:var(--hover);color:var(--text)}
   .zt-ib svg{width:15px;height:15px}
   .zt-ib.ok{color:var(--ok)}
   .zt-hmeta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;font-size:12.5px}
@@ -5579,7 +5590,7 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   @media (max-width:1024px){.zt-g2{grid-template-columns:1fr}}
   @media (max-width:720px){
     .stats.zt-stats{grid-template-columns:1fr 1fr}.zt-stats .stat:nth-child(2){border-right:0}.zt-stats .stat:nth-child(-n+2){border-bottom:1px solid var(--line)}
-    .zt-hb{align-items:flex-start;gap:12px;padding:14px 16px}.zt-qrmini{width:76px;height:76px;padding:5px}.zt-qrcap{font-size:9.5px}
+    .zt-sw{flex-wrap:wrap;gap:6px 10px;padding:12px 16px}.zt-selw{flex:1 1 100%;order:3}.zt-hb{align-items:flex-start;gap:12px;padding:14px 16px}.zt-qrmini{width:76px;height:76px;padding:5px}.zt-qrcap{font-size:9.5px}
     .zt-hrow{grid-template-columns:1fr;gap:2px;min-height:0;margin-bottom:10px}.zt-nwid{font-size:16px}
     .zt-hbar{flex-wrap:wrap;padding:12px 16px}.zt-hbar .muted{flex-basis:100%}.zt-hbar .btn{flex:1;justify-content:center}
     .zt-2col{grid-template-columns:1fr}
@@ -7330,7 +7341,13 @@ function viewZerotier(v) {
     <div id="ztBody"></div>`;
   setZerotier($("#ztBody"));
 }
-const ZTV = { q: "", f: "all" }; // pencarian & filter anggota
+const ZTV = { q: "", f: "all", net: (() => { try { return localStorage.getItem("vpnacs-ztnet") || ""; } catch (e) { return ""; } })() }; // pencarian, filter anggota, jaringan yang dibuka
+const ztApiUrl = () => "/api/zt" + (ZTV.net ? "?nwid=" + ZTV.net : "");
+function ztOpenNet(nwid, b) {
+  ZTV.net = nwid || ""; ZTV.q = ""; ZTV.f = "all";
+  try { ZTV.net ? localStorage.setItem("vpnacs-ztnet", ZTV.net) : localStorage.removeItem("vpnacs-ztnet"); } catch (e) {}
+  return setZerotier(b).then(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+}
 function ztAgo(t) {
   if (!t) return "";
   const s = Math.max(0, Math.round((Date.now() - t) / 1000));
@@ -7342,7 +7359,7 @@ function ztAgo(t) {
 async function setZerotier(b) {
   if (!b.innerHTML) b.innerHTML = `<div class="card"><div class="empty"><span class="spin"></span><p style="margin-top:10px">Membaca controller ZeroTier…</p></div></div>`;
   let z;
-  try { z = await api("/api/zt"); } catch (e) { b.innerHTML = `<div class="note bad">${ic("alert")}<div><b>Gagal membaca ZeroTier</b>${esc(e.message)}</div></div>`; return; }
+  try { z = await api(ztApiUrl()); } catch (e) { b.innerHTML = `<div class="note bad">${ic("alert")}<div><b>Gagal membaca ZeroTier</b>${esc(e.message)}</div></div>`; return; }
   if (!location.hash.startsWith("#/zerotier")) return;
   const s = STATE.settings;
   const acts = $("#ztActs");
@@ -7362,10 +7379,13 @@ async function setZerotier(b) {
     $("#ztNew").onclick = () => ztCreateDialog(z, b);
   }
   const cur = z.current;
+  // Jaringan yang diminta sudah tidak ada: kembali ke jaringan panel
+  if (ZTV.net && (!cur || cur.nwid !== ZTV.net)) { ZTV.net = ""; try { localStorage.removeItem("vpnacs-ztnet"); } catch (e) {} }
+  if (cur && cur.active && ZTV.net) { ZTV.net = ""; try { localStorage.removeItem("vpnacs-ztnet"); } catch (e) {} }
   const members = z.members || [];
   const pending = members.filter((m) => !m.authorized && m.role !== "vps");
   const onlineN = members.filter((m) => m.authorized && m.online).length;
-  const others = (z.networks || []).filter((n) => !n.current);
+  const nets = z.networks || [];
   const nameOf = (m) => m.name || "";
   const ipOwner = (ip) => { const m = members.find((x) => (x.ips || []).includes(ip)); return m ? nameOf(m) || m.node : ""; };
 
@@ -7378,7 +7398,7 @@ async function setZerotier(b) {
     b.innerHTML = `${ztnetNote}
       ${list.length ? `<div class="card"><div class="ch"><h2>Pilih jaringan untuk panel</h2><span class="muted" style="font-size:12.5px">${list.length} jaringan di controller</span></div>
         <p class="help" style="margin:2px 20px 6px">VPS bergabung ke jaringan ini dan mendapat IP ZeroTier. Router yang memilih jalur ZeroTier memakai jaringan yang sama. URL ACS untuk ONT tetap <b>${esc(s.acsUrl || "")}</b>.</p>
-        <ul class="zt-nets">${list.map((n) => ztNetRow(n, { canUse: true })).join("")}</ul></div>`
+        <ul class="zt-nets">${list.map((n) => ztNetRow(n, { canUse: true, open: true })).join("")}</ul></div>`
       : `<div class="card"><div class="empty zt-empty"><div class="big">${ic("hub")}</div><h3>Belum ada jaringan ZeroTier</h3>
           <p>Buat jaringan untuk router yang tersambung ke GenieACS lewat ZeroTier. Rentang IP, pool, dan perangkat semuanya diatur dari panel ini.</p>
           <div class="form-actions" style="justify-content:center"><button class="btn pri" id="ztNew2">${ic("plus")}Buat jaringan</button></div></div></div>`}`;
@@ -7391,28 +7411,35 @@ async function setZerotier(b) {
 
   // ---------- jaringan aktif ----------
   const okNet = cur.status === "OK";
+  const act = cur.active;
+  const actNet = nets.find((n) => n.current);
   b.innerHTML = `${ztnetNote}
     ${cur.checkError ? `<div class="note bad">${ic("alert")}<div><b>Jaringan ZeroTier bermasalah</b>${esc(cur.checkError)}</div></div>` : ""}
-    ${!okNet ? `<div class="note warn">${ic("alert")}<div><b>VPS belum tersambung ke jaringan</b>Status: ${esc(cur.status || "-")}. Biasanya selesai dalam beberapa detik; muat ulang halaman ini.</div></div>` : ""}
+    ${act && !okNet ? `<div class="note warn">${ic("alert")}<div><b>VPS belum tersambung ke jaringan</b>Status: ${esc(cur.status || "-")}. Biasanya selesai dalam beberapa detik; muat ulang halaman ini.</div></div>` : ""}
     ${pending.length ? `<div class="note warn zt-pend">${ic("clock")}<div><b>${pending.length} perangkat menunggu persetujuan</b>${pending.slice(0, 3).map((m) => `<span class="mono">${esc(m.node)}</span>${m.name ? ` (${esc(m.name)})` : ""}`).join(", ")}${pending.length > 3 ? " dan lainnya" : ""}. Router yang dipasang dari panel disetujui otomatis.
       <div style="margin-top:10px"><button class="btn sm" id="ztShowPend">Lihat &amp; setujui</button></div></div></div>` : ""}
     <div class="card zt-hero">
+      <div class="zt-sw">
+        <label for="ztNetSel">Jaringan</label>
+        <div class="zt-selw"><select id="ztNetSel">${nets.map((n) => `<option value="${esc(n.current ? "" : n.nwid)}" ${n.nwid === cur.nwid ? "selected" : ""}>${esc(n.name || "(tanpa nama)")} · ${esc(n.nwid)}${n.current ? " · dipakai panel" : ""}</option>`).join("")}</select></div>
+        <span class="muted zt-small">${nets.length} jaringan di controller</span>
+      </div>
       <div class="zt-hb">
         <div class="zt-hinfo">
           <div class="zt-hrow"><span class="zt-hl">Network ID</span><span class="zt-hv"><span class="zt-nwid mono">${esc(cur.nwid)}</span><button class="zt-ib" data-copy="${esc(cur.nwid)}" data-msg="Network ID tersalin" title="Salin Network ID" aria-label="Salin Network ID">${ic("copy")}</button></span></div>
           <div class="zt-hrow"><span class="zt-hl">Nama jaringan</span><span class="zt-hv" id="ztNameBox"><span class="zt-nname">${esc(cur.name || "(tanpa nama)")}</span><button class="zt-ib" id="ztNameEdit" title="Ganti nama" aria-label="Ganti nama">${ic("edit")}</button></span></div>
-          <div class="zt-hmeta">${cur.private ? `<span class="pill ok">${ic("lock", "")}Private</span>` : `<span class="pill bad">Public</span>`}${okNet ? `<span class="pill info">Dipakai panel</span>` : ""}<span class="muted">interface <span class="mono">${esc(cur.iface || "—")}</span></span></div>
+          <div class="zt-hmeta">${cur.private ? `<span class="pill ok">${ic("lock", "")}Private</span>` : `<span class="pill bad">Public</span>`}${act ? `${okNet ? `<span class="pill info">Dipakai panel</span>` : ""}<span class="muted">interface <span class="mono">${esc(cur.iface || "—")}</span></span>` : `<span class="pill wait">Tidak dipakai panel</span>`}</div>
         </div>
         <div class="zt-hside">
           <button class="zt-qrmini" id="ztQr" title="Perbesar QR Network ID" aria-label="QR Network ID">${(() => { try { const q = qrcode(0, "M"); q.addData(cur.nwid); q.make(); return q.createSvgTag({ cellSize: 4, margin: 0, scalable: true }); } catch (e) { return ic("qr"); } })()}</button>
           <span class="zt-qrcap">QR Network ID</span>
         </div>
       </div>
-      <div class="zt-hbar"><span class="muted zt-small">Pindai QR dengan HP untuk menyalin Network ID ke aplikasi ZeroTier One.</span><span class="sp"></span><button class="btn" id="ztSet">${ic("sliders")}Pengaturan</button></div>
+      <div class="zt-hbar"><span class="muted zt-small">${act ? "Pindai QR dengan HP untuk menyalin Network ID ke aplikasi ZeroTier One." : cur.conflict ? esc(cur.conflict) : `VPS tidak bergabung ke jaringan ini; perangkatnya tetap bisa dikelola dari sini.${actNet ? ` Jaringan panel: <b>${esc(actNet.name || actNet.nwid)}</b>.` : ""}`}</span><span class="sp"></span>${!act ? `<button class="btn" data-zuse="${esc(cur.nwid)}" ${cur.conflict || !cur.subnet ? "disabled" : ""}>${ic("hub")}Jadikan jaringan panel</button>` : ""}<button class="btn" id="ztSet">${ic("sliders")}Pengaturan</button></div>
       <div class="stats zt-stats">
-        <div class="stat"><span>Rentang IP</span><b class="mono">${esc(cur.subnet)}</b><small>${cur.poolStart && cur.poolEnd ? `Pool ${esc(cur.poolStart)} – .${esc(cur.poolEnd.split(".").pop())}` : "Pool otomatis (seluruh rentang)"}</small></div>
-        <div class="stat"><span>IP VPS</span><b class="mono">${esc(cur.vpsIp)}</b><small>gateway router ZeroTier</small></div>
-        <div class="stat"><span>Perangkat online</span><b>${onlineN}<em>/${members.filter((m) => m.authorized).length}</em></b><small>${cur.sites || 0} router panel</small></div>
+        <div class="stat"><span>Rentang IP</span><b class="mono">${esc(cur.subnet || "—")}</b><small>${cur.poolStart && cur.poolEnd ? `Pool ${esc(cur.poolStart)} – .${esc(cur.poolEnd.split(".").pop())}` : "Pool otomatis (seluruh rentang)"}</small></div>
+        <div class="stat"><span>IP VPS</span><b class="mono">${esc(act ? cur.vpsIp : "—")}</b><small>${act ? "gateway router ZeroTier" : "VPS tidak bergabung"}</small></div>
+        <div class="stat"><span>Perangkat online</span><b>${onlineN}<em>/${members.filter((m) => m.authorized).length}</em></b><small>${act ? `${cur.sites || 0} router panel` : "perangkat disetujui"}</small></div>
         <div class="stat"><span>Menunggu persetujuan</span><b class="${pending.length ? "warn" : ""}">${pending.length}</b><small>${cur.private ? "perangkat baru perlu disetujui" : "jaringan public: tanpa persetujuan"}</small></div>
       </div>
     </div>
@@ -7439,11 +7466,11 @@ async function setZerotier(b) {
         <p class="help" style="margin:0 20px 16px">Rute IP virtual tiap router dan URL ACS dibuat otomatis oleh panel. Rentang jaringan diatur di Pengaturan.</p>
       </div>
       <div class="card"><div class="ch"><h2>Jaringan di controller</h2><span class="muted" style="font-size:12.5px">${(z.networks || []).length}</span></div>
-        <ul class="zt-nets">${(z.networks || []).map((n) => ztNetRow(n, { canUse: false })).join("")}</ul>
-        <div class="cb card-actions"><button class="btn ghost danger" id="ztLeave">${ic("trash")}Lepas VPS dari jaringan ini</button></div>
+        <ul class="zt-nets">${nets.map((n) => ztNetRow(n, { canUse: false, open: true })).join("")}</ul>
+        ${act ? `<div class="cb card-actions"><button class="btn ghost danger" id="ztLeave">${ic("trash")}Lepas VPS dari jaringan ini</button></div>` : ""}
       </div>
     </div>
-    <p class="help" style="margin-top:12px">Rentang IP ZeroTier tidak boleh bentrok dengan ${esc(s.tunnelNet || "")} (L2TP), ${esc(s.virtualPool || "")} (IP virtual), subnet ONT, dan 172.17.0.0/16 (Docker). URL ACS untuk ONT tetap ${esc(s.acsUrl || "")}.</p>`;
+    <p class="help" style="margin-top:12px">${act ? "" : "Rute IP virtual router dan URL ACS hanya dibuat otomatis di jaringan panel. "}Rentang IP ZeroTier tidak boleh bentrok dengan ${esc(s.tunnelNet || "")} (L2TP), ${esc(s.virtualPool || "")} (IP virtual), subnet ONT, dan 172.17.0.0/16 (Docker). URL ACS untuk ONT tetap ${esc(s.acsUrl || "")}.</p>`;
 
   // ---------- tabel perangkat ----------
   const fill = () => {
@@ -7489,7 +7516,8 @@ async function setZerotier(b) {
   $("#ztSet").onclick = () => ztSettingsDialog(cur, b);
   $("#ztQr").onclick = () => ztQrDialog(cur);
   ztInlineEdit(cur, b);
-  $("#ztLeave").onclick = () => confirmDialog({
+  $("#ztNetSel").onchange = (e) => ztOpenNet(e.target.value, b);
+  if ($("#ztLeave")) $("#ztLeave").onclick = () => confirmDialog({
     title: "Lepas VPS dari jaringan ini?", danger: true, icon: "hub", ok: "Lepas",
     text: `<p>VPS keluar dari jaringan <b>${esc(cur.name || cur.nwid)}</b>. Jaringan dan perangkatnya tetap tersimpan di controller dan bisa dihubungkan lagi. Router yang memakai ZeroTier harus dipindah ke L2TP atau dihapus dulu.</p>`,
     onOk: async () => { await api("/api/zt/leave", { method: "POST" }); await load(); closeModal(); setZerotier(b); toast("VPS dilepas dari jaringan ZeroTier"); },
@@ -7510,13 +7538,13 @@ function ztAutoRefresh(b, members) {
     if (!location.hash.startsWith("#/zerotier") || !document.body.contains(b)) { clearInterval(ZTPOLL); return; }
     if ($("#modalRoot").innerHTML || document.activeElement === $("#ztQ") || $("#ztNameIn") || document.hidden) return;
     let z;
-    try { z = await api("/api/zt"); } catch (e) { return; }
+    try { z = await api(ztApiUrl()); } catch (e) { return; }
     if (ztSig(z.members) !== sig) setZerotier(b);
   }, 10000);
 }
 // Ganti nama & deskripsi jaringan langsung di kartu
 function ztInlineEdit(cur, b) {
-  const save = async (bodyData, msg) => { await api("/api/zt/network", { method: "PUT", body: bodyData }); await load(); setZerotier(b); toast(msg); };
+  const save = async (bodyData, msg) => { await api("/api/zt/network", { method: "PUT", body: Object.assign({ nwid: cur.nwid }, bodyData) }); await load(); setZerotier(b); toast(msg); };
   $("#ztNameEdit").onclick = () => {
     const box = $("#ztNameBox");
     box.innerHTML = `<input id="ztNameIn" type="text" maxlength="64" value="${esc(cur.name || "")}" class="zt-nin"><button class="zt-ib ok" id="ztNameOk" title="Simpan">${ic("check")}</button><button class="zt-ib" id="ztNameNo" title="Batal">${ic("x")}</button>`;
@@ -7552,20 +7580,21 @@ function ztQrDialog(cur) {
     </div>`, `<button class="btn pri" data-act="closemodal">Selesai</button>`, { size: "md" });
 }
 function ztNetRow(n, o) {
-  return `<li class="zt-net${n.current ? " cur" : ""}">
+  return `<li class="zt-net${n.viewing ? " cur" : ""}">
     <span class="zt-nic">${ic("hub")}</span>
-    <div class="zt-nb"><b>${esc(n.name || "(tanpa nama)")}</b> ${n.current ? `<span class="pill info">Dipakai panel</span>` : ""}
+    <div class="zt-nb"><b>${esc(n.name || "(tanpa nama)")}</b> ${n.current ? `<span class="pill info">Dipakai panel</span>` : ""}${n.viewing ? ` <span class="tag gray">sedang dibuka</span>` : ""}
       <div class="muted zt-small"><span class="mono">${esc(n.nwid)}</span> · ${n.subnet ? `<span class="mono">${esc(n.subnet)}</span>` : "tanpa rentang"} · ${n.members} perangkat · ${n.private ? "private" : "public"}</div>
       ${n.conflict ? `<div class="zt-small" style="color:var(--bad);margin-top:2px">${esc(n.conflict)}</div>` : ""}</div>
-    <div class="zt-na">${!n.current && o.canUse ? `<button class="btn sm pri" data-zuse="${esc(n.nwid)}" ${n.conflict ? "disabled" : ""}>Hubungkan VPS</button>` : ""}
+    <div class="zt-na">${o.open && !n.viewing ? `<button class="btn sm" data-zopen="${esc(n.current ? "" : n.nwid)}">Buka</button>` : ""}${!n.current && o.canUse ? `<button class="btn sm pri" data-zuse="${esc(n.nwid)}" ${n.conflict ? "disabled" : ""}>Hubungkan VPS</button>` : ""}
       ${!n.current ? `<button class="btn sm ghost icon danger" title="Hapus jaringan" data-zdel="${esc(n.nwid)}" data-name="${esc(n.name || n.nwid)}" data-n="${n.members}">${ic("trash")}</button>` : ""}</div></li>`;
 }
 function ztBindNets(b, z) {
+  b.querySelectorAll("[data-zopen]").forEach((btn) => (btn.onclick = () => ztOpenNet(btn.dataset.zopen, b)));
   b.querySelectorAll("[data-zuse]").forEach((btn) => (btn.onclick = async () => {
     busyBtn(btn, true);
     try {
       const r = await api("/api/zt/use", { method: "POST", body: { nwid: btn.dataset.zuse } });
-      await load(); setZerotier(b);
+      await load(); ZTV.net = ""; try { localStorage.removeItem("vpnacs-ztnet"); } catch (e) {} setZerotier(b);
       doneDialog("VPS tersambung ke ZeroTier", `<p>IP ZeroTier VPS: <b class="mono">${esc(r.vpsIp)}</b> (rentang ${esc(r.subnet)}).</p>${r.ready ? "" : "<p>Interface ZeroTier di VPS belum siap. Tunggu sebentar, lalu muat ulang.</p>"}<p>Sekarang jalur <b>ZeroTier</b> bisa dipilih saat menambah router.</p>`, "ok", false);
     } catch (e) { busyBtn(btn, false); toast(e.message); }
   }));
@@ -7573,7 +7602,7 @@ function ztBindNets(b, z) {
     title: `Hapus jaringan ${esc(btn.dataset.name)}?`, danger: true, ok: "Hapus jaringan", wide: true,
     text: `<p>Jaringan <b class="mono">${esc(btn.dataset.zdel)}</b> dihapus dari controller beserta ${esc(btn.dataset.n)} perangkatnya. Perangkat yang masih memakai Network ID ini akan terputus.</p>`,
     check: "Saya mengerti jaringan ini tidak bisa dikembalikan",
-    onOk: async () => { await api(`/api/zt/networks/${btn.dataset.zdel}`, { method: "DELETE" }); closeModal(); await load(); setZerotier(b); toast("Jaringan dihapus"); },
+    onOk: async () => { await api(`/api/zt/networks/${btn.dataset.zdel}`, { method: "DELETE" }); closeModal(); await load(); if (ZTV.net === btn.dataset.zdel) { ZTV.net = ""; try { localStorage.removeItem("vpnacs-ztnet"); } catch (e) {} } setZerotier(b); toast("Jaringan dihapus"); },
   })));
 }
 function ztBindZtnet(b) {
@@ -7605,7 +7634,9 @@ function ztCreateDialog(z, b) {
     $("#zcErr").textContent = ""; busyBtn($("#zcOk"), true);
     try {
       const r = await api("/api/zt/networks", { method: "POST", body: { name: $("#zcName").value, subnet: $("#zcSub").value.trim(), private: document.querySelector("input[name=zcPriv]:checked").value === "1", connect: !!($("#zcConn") && $("#zcConn").checked) } });
-      await load(); setZerotier(b);
+      await load();
+      ZTV.net = r.connected ? "" : r.nwid; try { ZTV.net ? localStorage.setItem("vpnacs-ztnet", ZTV.net) : localStorage.removeItem("vpnacs-ztnet"); } catch (e) {}
+      setZerotier(b);
       if (r.connected) doneDialog("Jaringan dibuat & VPS tersambung", `<p>Network ID <b class="mono">${esc(r.nwid)}</b>, IP VPS <b class="mono">${esc(r.vpsIp)}</b>.</p><p>Sekarang jalur <b>ZeroTier</b> bisa dipilih saat menambah router.</p>`, "ok", false);
       else if (r.connectError) doneDialog("Jaringan dibuat", `<p>Network ID <b class="mono">${esc(r.nwid)}</b>. VPS belum bisa dihubungkan: ${esc(r.connectError)}</p>`, "info", false);
       else doneDialog("Jaringan dibuat", `<p>Network ID <b class="mono">${esc(r.nwid)}</b>.</p>`);
@@ -7624,7 +7655,7 @@ function ztSettingsDialog(cur, b) {
     <div class="zt-sec"><h3>Alamat IP</h3>
       <label for="zsSub">Rentang IP</label>
       <input id="zsSub" type="text" class="mono" value="${esc(cur.subnet)}">
-      <div class="note warn zt-subwarn hidden" id="zsSubWarn">${ic("alert")}<div><b>Semua IP ZeroTier akan dipindah</b>VPS, router, dan perangkat lain otomatis mendapat IP di rentang baru, dan rute ikut diperbarui. Bila IP VPS berubah, router ZeroTier ditandai untuk memasang ulang script MikroTik.</div></div>
+      <div class="note warn zt-subwarn hidden" id="zsSubWarn">${ic("alert")}<div>${cur.active ? "<b>Semua IP ZeroTier akan dipindah</b>VPS, router, dan perangkat lain otomatis mendapat IP di rentang baru, dan rute ikut diperbarui. Bila IP VPS berubah, router ZeroTier ditandai untuk memasang ulang script MikroTik." : "<b>Rentang jaringan diganti</b>Perangkat baru mendapat IP di rentang baru. IP perangkat yang sudah ada tidak dipindah otomatis; ubah per perangkat bila perlu."}</div></div>
       <div class="zt-2col">
         <div><label for="zsPs">Pool awal</label><input id="zsPs" type="text" class="mono" value="${esc(cur.poolStart || "")}"></div>
         <div><label for="zsPe">Pool akhir</label><input id="zsPe" type="text" class="mono" value="${esc(cur.poolEnd || "")}"></div>
@@ -7652,7 +7683,7 @@ function ztSettingsDialog(cur, b) {
     $("#zsErr").textContent = ""; busyBtn($("#zsOk"), true);
     try {
       const r = await api("/api/zt/network", { method: "PUT", body: {
-        name: $("#zsName").value, private: document.querySelector("input[name=zsPriv]:checked").value === "1",
+        nwid: cur.nwid, name: $("#zsName").value, private: document.querySelector("input[name=zsPriv]:checked").value === "1",
         subnet: $("#zsSub").value.trim(), poolStart: $("#zsPs").value.trim(), poolEnd: $("#zsPe").value.trim(),
         dns: { domain: $("#zsDd").value.trim(), servers: $("#zsDs").value.trim() } } });
       await load(); setZerotier(b);
@@ -7665,7 +7696,7 @@ function ztSettingsDialog(cur, b) {
 async function ztMemberAct(btn, m, cur, b) {
   if (!m) return;
   const label = m.name || m.node;
-  const save = async (bodyData, msg) => { await api(`/api/zt/member/${m.node}`, { method: "POST", body: bodyData }); await load(); setZerotier(b); toast(msg); };
+  const save = async (bodyData, msg) => { await api(`/api/zt/member/${m.node}?nwid=${cur.nwid}`, { method: "POST", body: bodyData }); await load(); setZerotier(b); toast(msg); };
   if (btn.dataset.zm === "auth") {
     busyBtn(btn, true);
     try { await save({ authorized: true }, `${label} disetujui`); } catch (e) { busyBtn(btn, false); toast(e.message); }
@@ -7706,7 +7737,7 @@ async function ztMemberAct(btn, m, cur, b) {
   if (del) del.onclick = () => confirmDialog({
     title: `Hapus ${esc(label)} dari jaringan?`, danger: true, ok: "Hapus",
     text: `<p>Perangkat <span class="mono">${esc(m.node)}</span> dihapus dari controller beserta IP-nya. Bila perangkat itu masih mencoba bergabung, ia muncul lagi sebagai <b>menunggu persetujuan</b>${cur.private ? "" : " (atau langsung masuk, karena jaringan ini public)"}.</p>`,
-    onOk: async () => { await api(`/api/zt/member/${m.node}`, { method: "DELETE" }); closeModal(); await load(); setZerotier(b); toast("Perangkat dihapus"); },
+    onOk: async () => { await api(`/api/zt/member/${m.node}?nwid=${cur.nwid}`, { method: "DELETE" }); closeModal(); await load(); setZerotier(b); toast("Perangkat dihapus"); },
   });
 }
 
