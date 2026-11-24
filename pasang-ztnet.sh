@@ -31,6 +31,27 @@ fail() { echo -e "${RED}[GAGAL]${NC} $*" >&2; exit 1; }
 AUTO="${ZTNET_AUTO:-0}"
 # Jangan biarkan apt (needrestart) me-restart panel di tengah pemasangan
 export NEEDRESTART_SUSPEND=1 NEEDRESTART_MODE=l DEBIAN_FRONTEND=noninteractive
+# Installer resmi memanggil apt lewat sudo (variabel di atas hilang), jadi atur needrestart lewat berkas:
+# tanpa dialog "Pending kernel upgrade" (menahan pemasangan dari panel) dan tanpa restart layanan otomatis
+if [ -d /etc/needrestart ]; then
+  mkdir -p /etc/needrestart/conf.d
+  cat > /etc/needrestart/conf.d/vpn-acs.conf <<'NREOF'
+# Ditulis ACS NETMAP Panel: needrestart (apt) tidak memunculkan dialog dan tidak me-restart layanan otomatis,
+# supaya pemasangan dari panel tidak tertahan dialog "Pending kernel upgrade" atau mematikan panel/VPN.
+$nrconf{restart} = 'l';
+$nrconf{kernelhints} = 0;
+$nrconf{ucodehint} = 0;
+$nrconf{override_rc}->{qr(^vpn-acs\.service$)} = 0;
+$nrconf{override_rc}->{qr(^xl2tpd\.service$)} = 0;
+$nrconf{override_rc}->{qr(^(strongswan|ipsec)[^.]*\.service$)} = 0;
+$nrconf{override_rc}->{qr(^genieacs-[^.]*\.service$)} = 0;
+$nrconf{override_rc}->{qr(^addon-[^.]*\.service$)} = 0;
+$nrconf{override_rc}->{qr(^vpnacs-job-[^.]*\.service$)} = 0;
+$nrconf{override_rc}->{qr(^ztnet\.service$)} = 0;
+$nrconf{override_rc}->{qr(^zerotier-one\.service$)} = 0;
+$nrconf{override_rc}->{qr(^postgresql[^.]*\.service$)} = 0;
+NREOF
+fi
 progress() { [ "$AUTO" = "1" ] && echo "@@PROGRESS $*"; return 0; }
 ask() { # ask "pertanyaan" "bawaan" -> isi variabel REPLY
   if [ "$AUTO" = "1" ]; then REPLY="$2"; echo "$1 $2 (otomatis)"; else read -r -p "$1" REPLY; REPLY="${REPLY:-$2}"; fi

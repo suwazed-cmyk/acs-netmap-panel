@@ -187,7 +187,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.0.3";
+const VERSION = "2.0.4";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -2610,8 +2610,10 @@ function jobRestore() {
 }
 function jobLog(line) {
   if (!ADDON_JOB) return;
-  const t = String(line).replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").replace(/\r/g, "").trimEnd();
+  const t = String(line).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/[\r\b]/g, "").trimEnd();
   if (!t) return;
+  // animasi putar installer ("[\]" "[|]" ...) tidak dicatat
+  if (/^\s*\[[-|\\/]\]\s*$/.test(t)) return;
   ADDON_JOB.log.push(t);
   ADDON_JOB.lastOut = Date.now();
   if (ADDON_JOB.log.length > 400) ADDON_JOB.log.splice(0, ADDON_JOB.log.length - 400);
@@ -2657,7 +2659,12 @@ function needrestartGuard() {
   try {
     if (!fs.existsSync(path.dirname(path.dirname(NEEDRESTART_CONF)))) return;
     const re = ["vpn-acs", "xl2tpd", "(strongswan|ipsec)[^.]*", "genieacs-[^.]*", "addon-[^.]*", "vpnacs-job-[^.]*", "ztnet", "zerotier-one", "postgresql[^.]*"];
-    const text = "# Ditulis ACS NETMAP Panel: layanan ini tidak di-restart otomatis oleh needrestart (apt)\n" + re.map((x) => `$nrconf{override_rc}->{qr(^${x}\\.service$)} = 0;`).join("\n") + "\n";
+    const text =
+      "# Ditulis ACS NETMAP Panel: needrestart (apt) tidak memunculkan dialog dan tidak me-restart layanan otomatis,\n" +
+      "# supaya pemasangan dari panel tidak tertahan dialog \"Pending kernel upgrade\" atau mematikan panel/VPN.\n" +
+      "$nrconf{restart} = 'l';\n$nrconf{kernelhints} = 0;\n$nrconf{ucodehint} = 0;\n" +
+      re.map((x) => `$nrconf{override_rc}->{qr(^${x}\\.service$)} = 0;`).join("\n") +
+      "\n";
     writeIfChanged(NEEDRESTART_CONF, text);
   } catch (e) {
     console.error("needrestart:", e.message);
@@ -2666,6 +2673,37 @@ function needrestartGuard() {
 // Jalankan perintah panjang sebagai layanan systemd terpisah: tetap berjalan walau panel di-restart,
 // dan panel bisa menyambung lagi ke prosesnya. Keluaran ditulis ke berkas log lalu dibaca bertahap.
 const JOB_DIR = path.dirname(DATA_FILE) + "/jobs";
+// Dialog terminal (whiptail/dialog) yang muncul di dalam proses pemasangan tidak bisa dijawab dari panel.
+// Pemberitahuan (msgbox, mis. "Pending kernel upgrade") ditutup otomatis; dialog lain dicatat di log.
+const DIALOG_SEEN = new Set();
+async function closeDialogs(unit) {
+  const r = await run("pgrep", ["-x", "whiptail|dialog"]);
+  for (const pid of r.out.split(/\s+/).filter(Boolean)) {
+    let cg = "";
+    let args = [];
+    try {
+      cg = fs.readFileSync(`/proc/${pid}/cgroup`, "utf8");
+      args = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
+    } catch (e) {
+      continue;
+    }
+    if (!cg.includes(unit)) continue;
+    const ti = args.indexOf("--title");
+    const title = ti >= 0 ? args[ti + 1] : args.slice(1, 4).join(" ");
+    if (args.includes("--msgbox")) {
+      try {
+        process.kill(parseInt(pid, 10), "SIGTERM");
+        jobLog(`Pemberitahuan sistem "${title}" ditutup otomatis (seperti menekan OK).`);
+      } catch (e) {
+        // sudah selesai
+      }
+    } else if (!DIALOG_SEEN.has(pid)) {
+      DIALOG_SEEN.add(pid);
+      jobLog(`PERHATIAN: installer menunggu jawaban di dialog "${title}". Jawab lewat SSH atau hentikan dengan: pkill ${args[0].split("/").pop()}`);
+      if (ADDON_JOB) ADDON_JOB.detail = `Menunggu jawaban dialog "${title}"`;
+    }
+  }
+}
 function runDetached(job, key, command, opts) {
   opts = opts || {};
   if (!process.env.VPNACS_FORCE_DETACH && (DRY_RUN || !fs.existsSync("/run/systemd/system"))) return runStream("bash", ["-c", command], opts);
@@ -2724,9 +2762,21 @@ function runDetached(job, key, command, opts) {
             else if (m && ADDON_JOB) {
               ADDON_JOB.sub = Math.min(100, parseInt(m[1], 10)) / 100;
               if (m[2]) ADDON_JOB.detail = m[2].trim();
-            } else jobLog(l);
+            } else {
+              jobLog(l);
+              // pesan installer -> progres (hanya maju, tidak mundur)
+              for (const [re, pct, text] of opts.map || []) {
+                const mm = l.match(re);
+                if (mm && ADDON_JOB) {
+                  if (pct / 100 >= (ADDON_JOB.sub || 0)) ADDON_JOB.sub = pct / 100;
+                  ADDON_JOB.detail = typeof text === "function" ? text(mm) : text;
+                  break;
+                }
+              }
+            }
           }
         }
+        if (idle % 10 === 9) await closeDialogs(cur.unit);
         if (exit !== null) break;
         // proses sudah berhenti tanpa penanda keluar: anggap gagal
         if (++idle % 5 === 0 && !(await unitActive(cur.unit))) {
@@ -3158,7 +3208,21 @@ function ztInstallSteps() {
         // Enter dikirim pelan (1 per detik): "yes" mengirim tanpa henti dan "script" menimbunnya di memori sampai RAM habis.
         const cmd = `while sleep 1; do echo; done | ZTNET_AUTO=1 ZTNET_HOST='${String(host).replace(/[^\w.-]/g, "")}' script -qefc "bash ${SCRIPTS_DIR}/pasang-ztnet.sh" /dev/null`;
         needrestartGuard();
-        const r = await runDetached(job, "ztnet", cmd, { timeoutMs: 60 * 60 * 1000 });
+        const map = [
+          [/Updating apt/, 27, "Memperbarui daftar paket"],
+          [/Checking PostgreSQL/, 45, "Menyiapkan database PostgreSQL"],
+          [/Installing Node\.js/, 48, "Memasang Node.js 20"],
+          [/Installing ZeroTier|ZeroTier is already installed|ZeroTier installed/, 52, "Memasang ZeroTier"],
+          [/Initializing repository|Cloned Ztnet|Fetching tags|Checking out/, 56, "Mengunduh kode ZTNET"],
+          [/Installing dependencies/, 60, "Mengunduh dependensi ZTNET (npm, beberapa menit)"],
+          [/Installing (\S+)\.\.\./, 30, (m) => `Memasang ${m[1]}`],
+          [/Database migrations/, 68, "Menyiapkan tabel database"],
+          [/Seed Database/, 70, "Mengisi data awal"],
+          [/Building Ztnet artifacts/, 72, "Build ZTNET (langkah paling lama, 3–10 menit)"],
+          [/Copying files/, 82, "Menyalin hasil build"],
+          [/Creating systemd service/, 84, "Membuat layanan ztnet"],
+        ];
+        const r = await runDetached(job, "ztnet", cmd, { timeoutMs: 60 * 60 * 1000, map });
         if (r.code !== 0 || !fs.existsSync(ZTNET_DIR + "/.env")) return { error: "Pemasangan ZTNET gagal (lihat log di bawah). Penyebab umum: memori kurang saat build, atau koneksi internet VPS terputus. Klik Install lagi, atau pasang lewat SSH: bash pasang-ztnet.sh" };
         return { detail: "ZTNET terpasang" };
       },
@@ -5906,7 +5970,7 @@ function openJob(after) {
       lv.className = "jlive" + (r.done ? (r.ok ? " ok" : " bad") : "");
       $("#jLiveTx").innerHTML = r.done
         ? `${r.ok ? "Selesai" : r.interrupted ? "Terputus" : "Berhenti"} dalam ${dur(r.elapsed)}`
-        : `Sedang bekerja <span class="sep">·</span> berjalan ${dur(r.elapsed)}${r.quiet >= 20 ? ` <span class="sep">·</span> ${r.quiet >= 90 ? "langkah ini memang lama (mis. mengunduh paket), tidak macet" : `menunggu keluaran ${dur(r.quiet)}`}` : ""}`;
+        : `Sedang bekerja <span class="sep">·</span> berjalan ${dur(r.elapsed)}${r.quiet >= 20 ? ` <span class="sep">·</span> ${r.quiet >= 900 ? `<b style="color:var(--warn)">tidak ada kemajuan ${dur(r.quiet)}, mungkin tertahan — lihat log</b>` : r.quiet >= 90 ? `tidak ada keluaran baru ${dur(r.quiet)} (langkah ini bisa lama)` : `menunggu keluaran ${dur(r.quiet)}`}` : ""}`;
     }
     $("#jTitle").textContent = r.done ? r.title : r.title.replace(/ (dipasang|diperbarui|dilepas|diaktifkan|dimatikan)$/, "") + " sedang diproses";
     $("#jPct").textContent = r.pct + "%";
@@ -6965,11 +7029,15 @@ OOMScoreAdjust=-600
 [Install]
 WantedBy=multi-user.target
 EOF
-# needrestart (apt) tidak boleh me-restart panel/VPN/GenieACS/add-on di tengah pemasangan
+# needrestart (apt) tanpa dialog dan tanpa restart otomatis: pemasangan dari panel tidak tertahan/terputus
 if [ -d /etc/needrestart ]; then
   mkdir -p /etc/needrestart/conf.d
   cat > /etc/needrestart/conf.d/vpn-acs.conf <<'NREOF'
-# Ditulis ACS NETMAP Panel: layanan ini tidak di-restart otomatis oleh needrestart (apt)
+# Ditulis ACS NETMAP Panel: needrestart (apt) tidak memunculkan dialog dan tidak me-restart layanan otomatis,
+# supaya pemasangan dari panel tidak tertahan dialog "Pending kernel upgrade" atau mematikan panel/VPN.
+$nrconf{restart} = 'l';
+$nrconf{kernelhints} = 0;
+$nrconf{ucodehint} = 0;
 $nrconf{override_rc}->{qr(^vpn-acs\.service$)} = 0;
 $nrconf{override_rc}->{qr(^xl2tpd\.service$)} = 0;
 $nrconf{override_rc}->{qr(^(strongswan|ipsec)[^.]*\.service$)} = 0;

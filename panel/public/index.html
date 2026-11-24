@@ -1264,7 +1264,7 @@ function openJob(after) {
       lv.className = "jlive" + (r.done ? (r.ok ? " ok" : " bad") : "");
       $("#jLiveTx").innerHTML = r.done
         ? `${r.ok ? "Selesai" : r.interrupted ? "Terputus" : "Berhenti"} dalam ${dur(r.elapsed)}`
-        : `Sedang bekerja <span class="sep">·</span> berjalan ${dur(r.elapsed)}${r.quiet >= 20 ? ` <span class="sep">·</span> ${r.quiet >= 90 ? "langkah ini memang lama (mis. mengunduh paket), tidak macet" : `menunggu keluaran ${dur(r.quiet)}`}` : ""}`;
+        : `Sedang bekerja <span class="sep">·</span> berjalan ${dur(r.elapsed)}${r.quiet >= 20 ? ` <span class="sep">·</span> ${r.quiet >= 900 ? `<b style="color:var(--warn)">tidak ada kemajuan ${dur(r.quiet)}, mungkin tertahan — lihat log</b>` : r.quiet >= 90 ? `tidak ada keluaran baru ${dur(r.quiet)} (langkah ini bisa lama)` : `menunggu keluaran ${dur(r.quiet)}`}` : ""}`;
     }
     $("#jTitle").textContent = r.done ? r.title : r.title.replace(/ (dipasang|diperbarui|dilepas|diaktifkan|dimatikan)$/, "") + " sedang diproses";
     $("#jPct").textContent = r.pct + "%";
