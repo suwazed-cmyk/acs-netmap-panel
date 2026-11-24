@@ -194,7 +194,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.1.1";
+const VERSION = "2.1.2";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -3243,7 +3243,6 @@ function phpRemoveSteps(id, purge) {
     },
   ];
 }
-const ZEROTIER_VERSION = "1.14.2";
 function ztInstallSteps() {
   return [
     {
@@ -3266,28 +3265,38 @@ function ztInstallSteps() {
       run: async (job) => {
         if (job.ztHave) return { skip: true, detail: "Sudah terpasang" };
         needrestartGuard();
-        // Paket resmi dari download.zerotier.com (sama dengan installer resmi ZeroTier), tanpa repo apt tambahan
+        // Repo apt resmi ZeroTier (download.zerotier.com/debian/<codename>), sama seperti install.zerotier.com.
+        // Bila repo untuk versi sistem ini belum ada, dipakai repo versi terdekat; bila tetap gagal, installer resmi.
         const sh = [
           "set -e",
-          'ARCH="$(dpkg --print-architecture)"; . /etc/os-release; CODE="${VERSION_CODENAME:-jammy}"',
-          `V=${ZEROTIER_VERSION}; DEB="zerotier-one_\${V}_\${ARCH}.deb"; BASE="https://download.zerotier.com/RELEASES/\${V}/dist/debian"`,
-          'echo "@@PROGRESS 10 Memeriksa paket untuk $CODE"',
-          'if [ "$(curl -sSI -o /dev/null -w "%{http_code}" "$BASE/$CODE/$DEB")" = "404" ]; then if [ "$ID" = ubuntu ]; then CODE=noble; else CODE=bookworm; fi; echo "Memakai paket $CODE"; fi',
-          'echo "@@PROGRESS 30 Mengunduh $DEB"',
-          'curl -fsSL --retry 3 -o "/tmp/$DEB" "$BASE/$CODE/$DEB"',
-          'echo "@@PROGRESS 60 Memasang paket"',
+          '. /etc/os-release; CODE="${VERSION_CODENAME:-${UBUNTU_CODENAME:-jammy}}"',
+          'REPO="http://download.zerotier.com/debian"',
+          'echo "@@PROGRESS 5 Memeriksa repo ZeroTier untuk $CODE"',
+          'ok_repo() { [ "$(curl -s -o /dev/null -m 15 -w "%{http_code}" "$REPO/$1/dists/$1/InRelease")" = "200" ]; }',
+          'if ! ok_repo "$CODE"; then for c in noble jammy bookworm bullseye focal; do if ok_repo "$c"; then echo "Repo $CODE belum ada, memakai $c"; CODE="$c"; break; fi; done; fi',
+          'echo "@@PROGRESS 15 Memasang kunci repo"',
+          "mkdir -p /usr/share/keyrings",
           "dpkg --configure -a || true",
-          'dpkg -i "/tmp/$DEB" || apt-get -o DPkg::Lock::Timeout=300 install -f -y -q',
-          'rm -f "/tmp/$DEB"',
+          "command -v gpg >/dev/null || apt-get -o DPkg::Lock::Timeout=300 install -y -q gnupg",
+          'curl -fsSL --retry 3 "https://raw.githubusercontent.com/zerotier/ZeroTierOne/main/doc/contact%40zerotier.com.gpg" | gpg --dearmor --yes -o /usr/share/keyrings/zerotier.gpg',
+          'echo "deb [signed-by=/usr/share/keyrings/zerotier.gpg] $REPO/$CODE $CODE main" > /etc/apt/sources.list.d/zerotier.list',
+          'echo "@@PROGRESS 35 apt-get update"',
+          'if ! apt-get -o DPkg::Lock::Timeout=300 update -q || ! { echo "@@PROGRESS 60 Memasang zerotier-one"; apt-get -o DPkg::Lock::Timeout=300 install -y -q zerotier-one; }; then',
+          '  echo "Repo apt gagal, mencoba installer resmi install.zerotier.com"',
+          "  rm -f /etc/apt/sources.list.d/zerotier.list",
+          '  echo "@@PROGRESS 60 Installer resmi ZeroTier"',
+          "  curl -fsSL --retry 3 https://install.zerotier.com | bash",
+          "fi",
           'echo "@@PROGRESS 85 Menyalakan layanan"',
           "systemctl enable --now zerotier-one",
           "for i in $(seq 1 30); do [ -f /var/lib/zerotier-one/identity.secret ] && break; sleep 1; done",
           "[ -f /var/lib/zerotier-one/identity.secret ]",
-          'echo "@@PROGRESS 100 ZeroTier terpasang"',
+          'echo "@@PROGRESS 100 ZeroTier terpasang: $(zerotier-cli -v 2>/dev/null)"',
         ].join("\n");
         const r = await runDetached(job, "zerotier", sh, { timeoutMs: 15 * 60 * 1000 });
-        if (r.code !== 0) return { error: "Gagal memasang ZeroTier (lihat log). Cek koneksi VPS ke download.zerotier.com, lalu coba lagi." };
-        return { detail: `ZeroTier ${ZEROTIER_VERSION} terpasang` };
+        if (r.code !== 0) return { error: "Gagal memasang ZeroTier (lihat log). Cek koneksi VPS ke download.zerotier.com dan raw.githubusercontent.com, lalu coba lagi." };
+        const v = await run("zerotier-cli", ["-v"]);
+        return { detail: `ZeroTier ${v.out.trim() || ""} terpasang` };
       },
     },
     {
@@ -3421,7 +3430,7 @@ function ztRemoveSteps(purge) {
           await run("systemctl", ["disable", "--now", "ztnet"]);
           fs.rmSync(ZTNET_DIR, { recursive: true, force: true });
         }
-        const r = await runDetached(job, "ztpurge", "systemctl disable --now zerotier-one || true\napt-get -o DPkg::Lock::Timeout=300 purge -y -q zerotier-one\nrm -rf /var/lib/zerotier-one", { timeoutMs: 10 * 60 * 1000 });
+        const r = await runDetached(job, "ztpurge", "systemctl disable --now zerotier-one || true\napt-get -o DPkg::Lock::Timeout=300 purge -y -q zerotier-one\nrm -rf /var/lib/zerotier-one /etc/apt/sources.list.d/zerotier.list /usr/share/keyrings/zerotier.gpg", { timeoutMs: 10 * 60 * 1000 });
         if (r.code !== 0) return { error: "Gagal menghapus ZeroTier (lihat log)" };
         return { detail: "ZeroTier dan semua jaringannya dihapus dari VPS" };
       },
