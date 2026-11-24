@@ -187,7 +187,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.0.4";
+const VERSION = "2.0.5";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -2487,7 +2487,7 @@ const ADDONS = {
     name: "ZeroTier",
     icon: "hub",
     desc: "Router RouterOS v7 (ARM/ARM64) tersambung lewat ZeroTier selain L2TP. Memasang ZeroTier + ZTNET (web pengelola, port 3300) di VPS dan menambah menu ZeroTier di panel.",
-    note: "Pemasangan ZTNET butuh 5–15 menit dan RAM + swap minimal 3,5 GB.",
+    note: "ZTNET dipasang dari paket siap pakai (tanpa build): 1–3 menit, hemat RAM.",
   },
   "panel-acs": {
     kind: "aplikasi",
@@ -3186,7 +3186,8 @@ function ztInstallSteps() {
       label: "Periksa ZTNET",
       weight: 1,
       run: async (job) => {
-        if (fs.existsSync(ZTNET_DIR + "/.env")) {
+        // .env saja belum cukup: installer resmi yang terhenti di tengah jalan sudah membuat .env
+        if (fs.existsSync(ZTNET_DIR + "/.env") && fs.existsSync(ZTNET_DIR + "/server.js")) {
           job.ztExists = true;
           return { detail: "ZTNET sudah terpasang, cukup diaktifkan" };
         }
@@ -3198,32 +3199,20 @@ function ztInstallSteps() {
     },
     {
       label: "Pasang ZeroTier + ZTNET",
-      weight: 12,
+      weight: 10,
       run: async (job) => {
         if (job.ztExists) return { skip: true, detail: "Dilewati" };
         const d = loadData();
         const sub = d.settings.subdomains && d.settings.subdomains.zt && d.settings.subdomains.zt.host;
         const host = sub || settings(d).publicIp;
-        // Installer resmi ZTNET bertanya lewat terminal: dijalankan lewat "script" dan dijawab Enter (pilihan bawaan).
-        // Enter dikirim pelan (1 per detik): "yes" mengirim tanpa henti dan "script" menimbunnya di memori sampai RAM habis.
-        const cmd = `while sleep 1; do echo; done | ZTNET_AUTO=1 ZTNET_HOST='${String(host).replace(/[^\w.-]/g, "")}' script -qefc "bash ${SCRIPTS_DIR}/pasang-ztnet.sh" /dev/null`;
+        // pasang-ztnet.sh mengunduh paket ZTNET siap pakai (tanpa build, tanpa pertanyaan/dialog)
+        const cmd = `ZTNET_AUTO=1 ZTNET_HOST='${String(host).replace(/[^\w.-]/g, "")}' bash ${SCRIPTS_DIR}/pasang-ztnet.sh`;
         needrestartGuard();
-        const map = [
-          [/Updating apt/, 27, "Memperbarui daftar paket"],
-          [/Checking PostgreSQL/, 45, "Menyiapkan database PostgreSQL"],
-          [/Installing Node\.js/, 48, "Memasang Node.js 20"],
-          [/Installing ZeroTier|ZeroTier is already installed|ZeroTier installed/, 52, "Memasang ZeroTier"],
-          [/Initializing repository|Cloned Ztnet|Fetching tags|Checking out/, 56, "Mengunduh kode ZTNET"],
-          [/Installing dependencies/, 60, "Mengunduh dependensi ZTNET (npm, beberapa menit)"],
-          [/Installing (\S+)\.\.\./, 30, (m) => `Memasang ${m[1]}`],
-          [/Database migrations/, 68, "Menyiapkan tabel database"],
-          [/Seed Database/, 70, "Mengisi data awal"],
-          [/Building Ztnet artifacts/, 72, "Build ZTNET (langkah paling lama, 3–10 menit)"],
-          [/Copying files/, 82, "Menyalin hasil build"],
-          [/Creating systemd service/, 84, "Membuat layanan ztnet"],
-        ];
-        const r = await runDetached(job, "ztnet", cmd, { timeoutMs: 60 * 60 * 1000, map });
-        if (r.code !== 0 || !fs.existsSync(ZTNET_DIR + "/.env")) return { error: "Pemasangan ZTNET gagal (lihat log di bawah). Penyebab umum: memori kurang saat build, atau koneksi internet VPS terputus. Klik Install lagi, atau pasang lewat SSH: bash pasang-ztnet.sh" };
+        const r = await runDetached(job, "ztnet", cmd, { timeoutMs: 30 * 60 * 1000 });
+        if (r.code !== 0 || !fs.existsSync(ZTNET_DIR + "/server.js")) {
+          const last = (job.log || []).filter((l) => /\[GAGAL\]/.test(l)).pop();
+          return { error: last ? last.replace(/^.*\[GAGAL\]\s*/, "") : "Pemasangan ZTNET gagal (lihat log). Klik Install lagi, atau pasang lewat SSH: bash pasang-ztnet.sh" };
+        }
         return { detail: "ZTNET terpasang" };
       },
     },
@@ -5919,7 +5908,7 @@ async function fillAddons() {
     if (act === "install" && a.kind === "sistem" && !a.ztnet) {
       return confirmDialog({
         title: "Pasang ZeroTier + ZTNET?", icon: "hub", ok: "Install", wide: true,
-        text: `<p>Panel akan menjalankan installer ZTNET di VPS: memasang ZeroTier, PostgreSQL, dan web ZTNET (port 3300). Proses ini butuh <b>5–15 menit</b>; jika RAM + swap kurang dari 3,5 GB, swap 2 GB ditambahkan otomatis.</p><p>Jangan me-restart VPS selama proses berjalan. Panel tetap bisa dipakai.</p>`,
+        text: `<p>Panel akan memasang ZeroTier, PostgreSQL, dan web ZTNET (port 3300) dari paket siap pakai, tanpa build. Biasanya selesai dalam <b>1–3 menit</b> dan hemat RAM. Node.js yang dipakai GenieACS tidak diubah.</p><p>Butuh Ubuntu 22.04 / Debian 12 atau lebih baru dan Node.js 20+. Panel tetap bisa dipakai selama proses berjalan.</p>`,
         onOk: async () => { await api(`/api/addons/${a.id}/install`, { method: "POST", body: {} }); openJob(); },
       });
     }

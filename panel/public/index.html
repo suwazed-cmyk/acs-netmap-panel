@@ -1213,7 +1213,7 @@ async function fillAddons() {
     if (act === "install" && a.kind === "sistem" && !a.ztnet) {
       return confirmDialog({
         title: "Pasang ZeroTier + ZTNET?", icon: "hub", ok: "Install", wide: true,
-        text: `<p>Panel akan menjalankan installer ZTNET di VPS: memasang ZeroTier, PostgreSQL, dan web ZTNET (port 3300). Proses ini butuh <b>5–15 menit</b>; jika RAM + swap kurang dari 3,5 GB, swap 2 GB ditambahkan otomatis.</p><p>Jangan me-restart VPS selama proses berjalan. Panel tetap bisa dipakai.</p>`,
+        text: `<p>Panel akan memasang ZeroTier, PostgreSQL, dan web ZTNET (port 3300) dari paket siap pakai, tanpa build. Biasanya selesai dalam <b>1–3 menit</b> dan hemat RAM. Node.js yang dipakai GenieACS tidak diubah.</p><p>Butuh Ubuntu 22.04 / Debian 12 atau lebih baru dan Node.js 20+. Panel tetap bisa dipakai selama proses berjalan.</p>`,
         onOk: async () => { await api(`/api/addons/${a.id}/install`, { method: "POST", body: {} }); openJob(); },
       });
     }

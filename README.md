@@ -275,7 +275,7 @@ Router **ARM/ARM64 dengan RouterOS v7** bisa tersambung ke VPS lewat ZeroTier, b
    cd /root/acs-netmap-panel
    bash pasang-ztnet.sh
    ```
-   Script ini memeriksa Node.js dan RAM (menawarkan swap 2 GB bila perlu), memindahkan port ZTNET ke 3300 agar tidak bentrok dengan GenieACS (3000), lalu menjalankan installer resmi ZTNET. Saat ditanya alamat, isi subdomain Anda, misalnya `zt.domainanda.com`. Saat ditanya kirim laporan error, jawab `No`.
+   Script ini **tidak mem-build ZTNET di VPS**: paket siap pakai diunduh dari rilis repo ini (dibangun otomatis oleh GitHub Actions dari kode resmi ZTNET, lihat folder `ztnet-build/`). Pemasangan biasanya **1–3 menit**, tanpa pertanyaan atau dialog, hemat RAM, dan Node.js tidak diubah. Butuh Ubuntu 22.04 / Debian 12 atau lebih baru dan Node.js 20+. Port ZTNET otomatis 3300 agar tidak bentrok dengan GenieACS (3000). ZTNET yang pernah dipasang dengan installer resmi tetap dipakai (database dan `.env` lama dipertahankan).
 3. Buka web ZTNET (alamatnya ada di ringkasan) dan **segera daftar**: akun pertama menjadi admin.
 4. Di ZTNET: **Networks → Create Network**, lalu atur rentang IPv4, misalnya `172.27.0.0/24`. Rentang ini tidak boleh bentrok dengan `192.168.42.0/24`, `10.100.0.0/14`, subnet ONT, atau `172.17.0.0/16`.
 5. Panel → menu **ZeroTier** → pilih jaringan → **Hubungkan VPS**. Halaman ini juga menampilkan semua anggota jaringan beserta statusnya.
