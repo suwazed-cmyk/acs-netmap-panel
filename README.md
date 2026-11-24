@@ -20,6 +20,7 @@ ONT ─ OLT ─ MikroTik router ═══ VPN L2TP ═══ VPS (GenieACS + Pan
 | `install-vpn-acs.sh` | Installer Panel VPN ACS (sudah berisi seluruh panel) |
 | `genieacs-virtualip.sh` | Patch IP virtual untuk GenieACS v1.2.13 |
 | `bersihkan.sh` | Menghapus aturan/pengaturan yang dipasang repo ini dari VPS |
+| `pasang-ztnet.sh` | Memasang ZTNET + ZeroTier controller tanpa Docker, web di port 3300 (opsional) |
 | `panel/server.js`, `panel/public/index.html` | Kode sumber panel (untuk dibaca/diubah) |
 
 ## Rekomendasi VPS
@@ -117,6 +118,8 @@ Jangan menyalakan `ufw` (bentrok dengan aturan VPN). Buka di firewall provider j
 | 3000 | TCP | Web GenieACS |
 | 8088 | TCP | Panel VPN ACS |
 | 20001-20999 | TCP | Port forwarding / remote MikroTik |
+| 3300 | TCP | Web ZTNET (jika memakai ZeroTier) |
+| 9993 | UDP | ZeroTier (jika memakai ZeroTier) |
 | 500, 4500 | UDP | Hanya jika IPsec dinyalakan |
 
 Port 7547 dan 7557 **tidak perlu** dibuka ke publik. HTTPS panel memakai port yang sama (8088) dan tidak butuh port 80/443. VPS hanya perlu bisa keluar ke internet (Telegram, Cloudflare, Let's Encrypt).
@@ -151,6 +154,21 @@ Setelah berhasil:
 - Alamat VPS di script MikroTik otomatis memakai domain. MikroTik lama tidak wajib diubah karena domain dan IP mengarah ke router yang sama.
 - Jika HTTPS dipilih, panel dibuka lewat `https://domain:8088`, dan alamat http/IP dialihkan otomatis. Sertifikat diperpanjang otomatis oleh certbot.
 - Record harus **DNS only** (awan abu-abu). Proxy Cloudflare (awan oranye) tidak bisa meneruskan L2TP dan Winbox; panel mengaturnya otomatis.
+
+### 8d. Router lewat ZeroTier (opsional)
+Router **ARM/ARM64 dengan RouterOS v7** (paket `zerotier`) bisa tersambung ke VPS lewat ZeroTier, bukan L2TP. Router MIPS (hAP lite, hEX, RB951) tetap memakai L2TP. Keduanya bisa dipakai bersamaan.
+
+1. Pasang ZTNET (web pengelola ZeroTier, port **3300**, tanpa Docker):
+   ```bash
+   cd /root/suwazed-panel
+   bash pasang-ztnet.sh
+   ```
+   Script ini memeriksa Node.js dan RAM (menawarkan swap 2 GB bila perlu), memindahkan port ZTNET ke 3300 agar tidak bentrok dengan GenieACS (3000), lalu menjalankan installer resmi ZTNET. Saat ditanya alamat, isi subdomain sendiri, misalnya `zt.inetwifi.xyz`. Saat ditanya kirim laporan error, jawab `No`.
+2. Buka `http://zt.domain-anda:3300` dan **segera daftar** (akun pertama menjadi admin). Buat jaringan di **Networks → Create Network**, lalu atur rentang IPv4, misalnya `172.27.0.0/24`. Rentang ini tidak boleh bentrok dengan `192.168.42.0/24`, `10.100.0.0/14`, subnet ONT, atau `172.17.0.0/16`.
+3. Panel → **Pengaturan → ZeroTier** → pilih jaringan → **Hubungkan VPS**.
+4. **Tambah router** → jalur **ZeroTier** → pasang script di MikroTik → tab **Ringkasan** → **Pilih router yang bergabung**. Panel otomatis menyetujui router, memberi IP ZeroTier, dan memasang route ke IP virtual.
+
+URL ACS di ONT tetap `http://192.168.42.1:7547`, baik lewat L2TP maupun ZeroTier. Status, riwayat uptime, notifikasi Telegram, tes koneksi, dan port forwarding berlaku untuk kedua jalur.
 
 ### 9. GenieACS UI
 Buka `http://IP_VPS:3000`. Jika muncul *initialization wizard*, buat akun admin dan centang **Users saja** agar config dari repo beryindo tidak tertimpa.

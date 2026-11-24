@@ -101,7 +101,9 @@ hapus_layanan_panel() {
   systemctl disable --now vpn-acs >/dev/null 2>&1 || true
   rm -f "$SERVICE"
   systemctl daemon-reload 2>/dev/null || true
+  LO_IP=""
   if [ -f "$DATA" ]; then
+    LO_IP="$(node -e 'try{const d=require(process.argv[1]);if(!(d.settings&&d.settings.zt))process.exit();const n=((d.settings&&d.settings.tunnelNet)||"192.168.42.0/24").split("/")[0].split(".").map(Number);n[3]+=1;console.log(n.join("."))}catch(e){}' "$DATA" 2>/dev/null)"
     cp "$DATA" "/root/backup-vpnacs-$STAMP.json"
     chmod 600 "/root/backup-vpnacs-$STAMP.json"
     ok "Data panel dibackup ke /root/backup-vpnacs-$STAMP.json"
@@ -115,6 +117,10 @@ hapus_layanan_panel() {
   fi
   rm -rf "$APP_DIR"
   rm -f "$SYSCTL_FILE"
+  # Alamat URL ACS di loopback (dipasang panel hanya jika ZeroTier dipakai)
+  if [ -n "$LO_IP" ] && ip -4 addr show dev lo | grep -q "inet ${LO_IP}/32"; then
+    ip addr del "${LO_IP}/32" dev lo 2>/dev/null && ok "Alamat ${LO_IP} dilepas dari loopback"
+  fi
   ok "Layanan dan file Panel VPN ACS dihapus"
 }
 

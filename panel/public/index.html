@@ -365,6 +365,16 @@
   a.ext svg{width:13px;height:13px}
   a.ext:hover{text-decoration:underline}
   .btn.del-ic{color:var(--bad)}
+  .tag{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:5px;font-size:11px;font-weight:600;letter-spacing:.02em;background:var(--primary-soft);color:var(--primary);white-space:nowrap;vertical-align:middle}
+  .tag.gray{background:var(--subtle);color:var(--muted);border:1px solid var(--line)}
+  .pick{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:var(--r-sm);margin-top:8px}
+  .pick b{font-family:var(--mono);font-size:14px}
+  .pick small{display:block;color:var(--muted);font-size:12px}
+  .pick .grow{flex:1;min-width:0}
+  .netopt{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line-2);border-radius:var(--r-sm);margin-top:8px;cursor:pointer}
+  .netopt:has(input:checked){border-color:var(--primary);background:var(--primary-soft)}
+  .netopt.dis{opacity:.6;cursor:not-allowed}
+  .netopt small{display:block;color:var(--muted);font-size:12px}
   .btn.del-ic:hover{background:var(--bad-soft);color:var(--bad)}
 
   [data-act=refresh].spinning svg{animation:spin .8s linear infinite}
@@ -488,6 +498,7 @@ const ICONS = {
   play: '<path d="M7 5l12 7-12 7z"/>',
   wifi_off: '<path d="M2 2l20 20M8.5 16.5a5 5 0 0 1 7 0M5 12.9a10 10 0 0 1 5.2-2.8M19 12.9a10 10 0 0 0-2-1.4M12 20h.01"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  hub: '<circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M12 7.2v4.3M12 11.5l-5.5 4.6M12 11.5l5.5 4.6"/>',
   bolt: '<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',
   share: '<path d="M4 12h11M11 8l4 4-4 4"/><rect x="15" y="5" width="6" height="14" rx="2"/>',
   code: '<path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/>',
@@ -535,6 +546,7 @@ const copyBtn = (text, msg) => `<button class="copy" title="Salin" data-copy="${
 const site = (id) => STATE.sites.find((s) => s.id === id);
 const ST = { up: ["ok", "Tersambung"], down: ["bad", "Terputus"], pending: ["wait", "Menunggu pemasangan"] };
 const stOf = (x) => ST[x.state] || ST.down;
+const ztTag = (x) => (x.transport === "zt" ? ` <span class="tag" title="Tersambung lewat ZeroTier">ZT</span>` : "");
 function tzId() { return STATE.settings.timezone || "Asia/Makassar"; }
 function tzLabel() { const z = (STATE.settings.timezones || []).find((t) => t.id === tzId()); return z ? z.label : ""; }
 function fmtT(t, full) {
@@ -688,6 +700,7 @@ function issues() {
     if (x.inGenie === false) list.push({ t: `${x.name}: IP virtual di luar patch GenieACS`, d: `${x.virtualSubnet} tidak dikenali GenieACS, Summon akan gagal.`, go: `#/router/${x.id}` });
   }
   const pend = STATE.sites.filter((x) => x.state === "pending");
+  for (const x of STATE.sites.filter((y) => y.transport === "zt" && !y.ztNode)) list.push({ k: "info", t: `${x.name}: router ZeroTier belum dipilih`, d: "Pasang script, lalu pilih router dari daftar yang bergabung.", go: `#/router/${x.id}` });
   if (pend.length === 1) list.push({ k: "info", t: `${pend[0].name} menunggu pemasangan`, d: "Script MikroTik belum dipasang atau belum pernah tersambung.", go: `#/router/${pend[0].id}/script` });
   else if (pend.length > 1) list.push({ k: "info", t: `${pend.length} router menunggu pemasangan`, d: pend.map((x) => x.name).slice(0, 4).join(", ") + (pend.length > 4 ? ` dan ${pend.length - 4} lainnya` : ""), go: "#/router/menunggu" });
   return list;
@@ -733,7 +746,7 @@ function uptimeTable(S) {
     ${rows.map((x) => {
       const [c] = stOf(x);
       const sub = x.state === "down" ? `Terputus${x.downSince ? " · " + fmtDur(Date.now() - x.downSince) : ""}` : x.state === "pending" ? "Menunggu pemasangan" : x.incidents30 ? `${x.incidents30}× putus (30 hari)` : "Stabil";
-      const name = `<td><div class="srv"><span class="dot ${c}"></span><span style="min-width:0"><b>${esc(x.name)}</b><small${x.state === "down" ? ' style="color:var(--warn)"' : ""}>${esc(sub)}</small></span></div></td>`;
+      const name = `<td><div class="srv"><span class="dot ${c}"></span><span style="min-width:0"><b>${esc(x.name)}${ztTag(x)}</b><small${x.state === "down" ? ' style="color:var(--warn)"' : ""}>${esc(sub)}</small></span></div></td>`;
       if (!x.uptime) return `<tr class="click" data-go="#/router/${x.id}/script">${name}<td class="hide-md"><div class="mini">${"<i class=nodata></i>".repeat(30)}</div></td><td class="r muted">—</td><td class="r muted">—</td><td class="r muted hide-sm">—</td></tr>`;
       const U = x.uptime;
       return `<tr class="click" data-go="#/router/${x.id}/riwayat">${name}
@@ -751,14 +764,16 @@ function serverKv() {
   const genie = s.genieUrl
     ? `<div class="kv"><span>GenieACS</span><b><a class="ext" href="${esc(s.genieUrl)}" target="_blank" rel="noopener" title="Buka GenieACS di tab baru">${esc(s.genieUrl.replace(/^https?:\/\//, ""))}${ic("ext", "")}</a></b></div>`
     : `<div class="kv"><span>GenieACS</span><b><a href="#/pengaturan/umum">Atur alamat</a></b></div>`;
-  return genie + [["Alamat VPS", s.publicIp || "—"], ["URL ACS ONT", s.acsUrl || "—"], ["Jaringan VPN", s.tunnelNet || "—"], ["Patch GenieACS", g], ["Notifikasi Telegram", tgs], ["HTTPS panel", https]]
+  const ztnet = s.ztnetUrl ? `<div class="kv"><span>ZTNET</span><b><a class="ext" href="${esc(s.ztnetUrl)}" target="_blank" rel="noopener" title="Buka ZTNET di tab baru">${esc(s.ztnetUrl.replace(/^https?:\/\//, ""))}${ic("ext", "")}</a></b></div>` : "";
+  const zt = s.zt ? `${s.zt.name || s.zt.nwid} · ${s.zt.vpsIp}` : "Tidak dipakai";
+  return genie + ztnet + [["Alamat VPS", s.publicIp || "—"], ["URL ACS ONT", s.acsUrl || "—"], ["Jaringan VPN", s.tunnelNet || "—"], ["ZeroTier", zt], ["Patch GenieACS", g], ["Notifikasi Telegram", tgs], ["HTTPS panel", https]]
     .map(([k, val]) => `<div class="kv"><span>${k}</span><b>${esc(val)}</b></div>`).join("");
 }
 function rowHtml(x) {
   const [c, t] = stOf(x);
   return `<li><a class="row" href="#/router/${x.id}">
     <span class="dot ${c}"></span>
-    <span class="grow"><span class="nm">${esc(x.name)}</span>${x.note ? `<span class="sb" style="display:block">${esc(x.note)}</span>` : ""}</span>
+    <span class="grow"><span class="nm">${esc(x.name)}</span>${ztTag(x)}${x.note ? `<span class="sb" style="display:block">${esc(x.note)}</span>` : ""}</span>
     <span class="meta">${esc(x.virtualSubnet)}</span>
     <span class="up ${pctCls(x.uptime7)}" title="${x.uptime7 == null ? "" : "Uptime 7 hari"}">${x.uptime7 == null ? "" : pct(x.uptime7)}</span>
     <span class="pill ${c}">${t}</span>
@@ -810,14 +825,14 @@ function viewDetail(v, id, tab) {
   crumb([["Router", "#/router"], [x.name]]);
   v.innerHTML = `
     <div class="dh">
-      <div><h1>${esc(x.name)} <span class="pill ${stOf(x)[0]}">${stOf(x)[1]}</span></h1>
+      <div><h1>${esc(x.name)} <span class="pill ${stOf(x)[0]}">${stOf(x)[1]}</span> <span class="tag ${x.transport === "zt" ? "" : "gray"}">${x.transport === "zt" ? "ZeroTier" : "L2TP"}</span></h1>
         ${x.note ? `<p>${esc(x.note)}</p>` : ""}</div>
       <div class="acts" style="display:flex;gap:8px">
         <button class="btn" data-act="test" data-id="${x.id}">${ic("play")}Tes koneksi</button>
         <div class="menu"><button class="btn icon" data-act="menu" aria-label="Lainnya">${ic("dots")}</button>
           <div class="menu-list hidden" id="menuList">
             <button data-act="edit" data-id="${x.id}">${ic("edit")}Ubah router</button>
-            <button data-act="resetpw" data-id="${x.id}">${ic("key")}Buat password VPN baru</button>
+            ${x.transport === "zt" ? `<button data-act="ztpick" data-id="${x.id}">${ic("hub")}Pilih router ZeroTier</button>` : `<button data-act="resetpw" data-id="${x.id}">${ic("key")}Buat password VPN baru</button>`}
             <hr><button class="d" data-act="del" data-id="${x.id}">${ic("trash")}Hapus router</button>
           </div></div>
       </div>
@@ -833,7 +848,7 @@ function viewDetail(v, id, tab) {
 function tabSummary(b, x) {
   b.innerHTML = `
     ${x.inGenie === false ? `<div class="note warn">${ic("alert")}<div><b>IP virtual di luar rentang patch GenieACS</b>Summon ke ONT di router ini akan gagal. Jalankan ulang <code>genieacs-virtualip.sh</code> dengan rentang yang mencakup ${esc(x.virtualSubnet)}.</div></div>` : ""}
-    ${x.state === "pending" ? `<div class="note info">${ic("clock")}<div><b>Menunggu pemasangan</b>Router ini belum pernah tersambung. Pasang script lewat tab <a href="#/router/${x.id}/script">Script MikroTik</a>. Riwayat dan notifikasi Telegram mulai berjalan setelah MikroTik tersambung pertama kali.</div></div>` : ""}
+    ${x.state === "pending" && !(x.transport === "zt" && !x.ztNode) ? `<div class="note info">${ic("clock")}<div><b>Menunggu pemasangan</b>Router ini belum pernah tersambung. Pasang script lewat tab <a href="#/router/${x.id}/script">Script MikroTik</a>. Riwayat dan notifikasi Telegram mulai berjalan setelah MikroTik tersambung pertama kali.</div></div>` : ""}
     ${x.state === "down" ? `<div class="note warn">${ic("alert")}<div><b>Terputus${x.downSince ? ` sejak ${esc(fmtT(x.downSince, true))} (${fmtDur(Date.now() - x.downSince)})` : ""}</b>Jalankan <a href="#" data-act="test" data-id="${x.id}">tes koneksi</a> untuk melihat penyebabnya.</div></div>` : ""}
     <div class="card">
       <div class="ch"><h2>Jaringan</h2></div>
@@ -841,10 +856,10 @@ function tabSummary(b, x) {
         <div><dt>Subnet ONT (asli)</dt><dd>${esc(x.realSubnet)}</dd></div>
         <div><dt>IP virtual di GenieACS</dt><dd>${esc(x.virtualSubnet)}</dd></div>
         <div><dt>URL ACS untuk ONT</dt><dd>${esc(x.acsUrl)} ${copyBtn(x.acsUrl, "URL ACS tersalin")}</dd></div>
-        <div><dt>IP VPN MikroTik</dt><dd>${esc(x.tunnelIp)}</dd></div>
+        <div><dt>${x.transport === "zt" ? "IP ZeroTier MikroTik" : "IP VPN MikroTik"}</dt><dd>${x.transport === "zt" ? (x.ztIp ? esc(x.ztIp) : '<span class="muted">Belum dipilih</span>') : esc(x.tunnelIp)}</dd></div>
       </dl>
     </div>
-    <div class="card">
+    ${x.transport === "zt" ? ztCard(x) : `<div class="card">
       <div class="ch"><h2>Akun VPN</h2></div>
       <dl class="dl" style="margin:0">
         <div><dt>Alamat VPS (connect-to)</dt><dd>${esc(STATE.settings.publicIp || "—")}</dd></div>
@@ -852,7 +867,54 @@ function tabSummary(b, x) {
         <div><dt>Password</dt><dd><span id="pwv">••••••••••••</span><button class="copy" data-act="showpw" title="Lihat">${ic("eye", "")}</button>${copyBtn(x.password, "Password tersalin")}</dd></div>
         <div><dt>IPsec</dt><dd>${STATE.settings.useIpsec ? "Aktif" : "Tidak dipakai"}</dd></div>
       </dl>
+    </div>`}`;
+}
+function ztCard(x) {
+  const z = STATE.settings.zt;
+  return `${!x.ztNode ? `<div class="note info">${ic("hub")}<div><b>Router ZeroTier belum dipilih</b>Pasang script dari tab <a href="#/router/${x.id}/script">Script MikroTik</a>, lalu klik <a href="#" data-act="ztpick" data-id="${x.id}">Pilih router yang bergabung</a>.</div></div>` : ""}
+    <div class="card">
+      <div class="ch"><h2>ZeroTier</h2><button class="btn sm" data-act="ztpick" data-id="${x.id}">${ic("hub")}${x.ztNode ? "Ganti router" : "Pilih router yang bergabung"}</button></div>
+      <dl class="dl" style="margin:0">
+        <div><dt>Jaringan</dt><dd>${z ? `${esc(z.name || "—")} · ${esc(z.nwid)} ${copyBtn(z.nwid, "Network ID tersalin")}` : '<span class="muted">Belum diatur</span>'}</dd></div>
+        <div><dt>Node ID router</dt><dd>${x.ztNode ? esc(x.ztNode) : '<span class="muted">—</span>'}</dd></div>
+        <div><dt>IP ZeroTier VPS</dt><dd>${z ? esc(z.vpsIp) : "—"}</dd></div>
+        <div><dt>Rentang jaringan</dt><dd>${z ? esc(z.subnet) : "—"}</dd></div>
+      </dl>
     </div>`;
+}
+// Pilih anggota ZeroTier yang bergabung untuk router ini
+async function openZtPick(id) {
+  const x = site(id); if (!x) return;
+  modal(`Pilih router ZeroTier · ${esc(x.name)}`, `<p class="muted" style="margin-bottom:6px">Perangkat yang sudah bergabung ke jaringan tetapi belum dipakai router mana pun. Pilih MikroTik <b>${esc(x.name)}</b>.</p>
+    <div id="zpList"><div class="empty"><p>Memuat…</p></div></div>
+    <label for="zpNode">Atau isi Node ID manual</label>
+    <div style="display:flex;gap:8px"><input id="zpNode" type="text" maxlength="10" placeholder="contoh: 1a2b3c4d5e"><button class="btn" id="zpManual">Pakai</button></div>
+    <div class="help">Node ID ada di Winbox → ZeroTier → kolom Identity (10 karakter pertama).</div>
+    <div class="err" id="zpErr"></div>`,
+    `<button class="btn" id="zpRefresh">${ic("refresh")}Muat ulang</button><button class="btn" data-act="closemodal">Tutup</button>`);
+  const bind = async (node, btn) => {
+    $("#zpErr").textContent = ""; busyBtn(btn, true);
+    try {
+      const r = await api(`/api/sites/${id}/zt-bind`, { method: "POST", body: { node } });
+      await load(); route();
+      doneDialog("Router ZeroTier disetujui", `<p>Node <b class="mono">${esc(node)}</b> mendapat IP <b class="mono">${esc(r.ip)}</b>.</p><p>Status tersambung muncul dalam 1 menit. Setelah itu jalankan tes koneksi.</p>`, "ok", false);
+    } catch (e) { if ($("#zpErr")) { $("#zpErr").textContent = e.message; busyBtn(btn, false); } }
+  };
+  const fill = async () => {
+    const el = $("#zpList"); if (!el) return;
+    el.innerHTML = `<div class="empty"><p>Memuat…</p></div>`;
+    let r;
+    try { r = await api(`/api/sites/${id}/zt-pending`); } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+    if (!$("#zpList")) return;
+    el.innerHTML = r.list.length ? r.list.map((m) => `<div class="pick"><span class="dot ${m.seen ? "ok" : "wait"}"></span><span class="grow"><b>${esc(m.node)}</b>
+        <small>${m.seen ? `Terlihat online${m.physical ? " dari " + esc(m.physical) : ""}${m.latency >= 0 && m.latency != null ? ` · ${m.latency} ms` : ""}` : "Belum terlihat online"}${m.authorized ? " · sudah disetujui (mungkin perangkat lain)" : " · menunggu persetujuan"}</small></span>
+        <button class="btn sm pri" data-node="${esc(m.node)}">Pilih</button></div>`).join("")
+      : `<div class="empty" style="padding:22px 10px"><p>Belum ada perangkat yang bergabung.<br>Pasang script di MikroTik, tunggu sekitar 30 detik, lalu klik Muat ulang.</p></div>`;
+    el.querySelectorAll("button[data-node]").forEach((btn) => (btn.onclick = () => bind(btn.dataset.node, btn)));
+  };
+  $("#zpRefresh").onclick = fill;
+  $("#zpManual").onclick = () => { const v = $("#zpNode").value.trim().toLowerCase(); if (!/^[0-9a-f]{10}$/.test(v)) { $("#zpErr").textContent = "Node ID harus 10 karakter (0-9, a-f)."; return; } bind(v, $("#zpManual")); };
+  fill();
 }
 const NON_WEB_PORTS = [21, 22, 23, 8291, 8728, 8729];
 function fwdLink(f) {
@@ -914,6 +976,7 @@ function fwdForm(x) {
 }
 function tabScript(b, x) {
   b.innerHTML = `
+    ${x.transport === "zt" ? `<div class="note info">${ic("hub")}<div><b>Jalur ZeroTier</b>Butuh RouterOS v7 dengan paket <code>zerotier</code> (router ARM/ARM64). Setelah script dipasang, buka tab Ringkasan lalu klik <a href="#" data-act="ztpick" data-id="${x.id}">Pilih router yang bergabung</a>.</div></div>` : ""}
     ${x.state !== "pending" ? "" : `<ol class="howto">
       <li><b><i>1</i>Salin script</b>Klik tombol Salin di kotak script.</li>
       <li><b><i>2</i>Tempel di MikroTik</b>Winbox → New Terminal → klik kanan → Paste → Enter.</li>
@@ -1015,7 +1078,13 @@ async function runTest() {
 
 /* ================= Tambah / ubah / hapus router ================= */
 function siteForm(x) {
+  const z = STATE.settings.zt, cur = x ? x.transport : "l2tp";
   return `
+    <label>Jalur ke VPS</label>
+    <div class="seg"><label><input type="radio" name="fTr" value="l2tp" ${cur !== "zt" ? "checked" : ""}>L2TP</label><label ${z ? "" : 'class="netopt dis" style="margin:0;padding:8px 12px" title="Atur ZeroTier di Pengaturan dulu"'}><input type="radio" name="fTr" value="zt" ${cur === "zt" ? "checked" : ""} ${z ? "" : "disabled"}>ZeroTier</label></div>
+    <div class="help">${z ? "ZeroTier butuh RouterOS v7 dengan paket zerotier (router ARM/ARM64). Router lain pakai L2TP." : 'ZeroTier belum diatur. Buka <a href="#/pengaturan/zerotier">Pengaturan → ZeroTier</a> untuk mengaktifkan.'}</div>
+    <div id="fZtBox" class="${cur === "zt" ? "" : "hidden"}"><label for="fZtNode">Node ID ZeroTier router <span class="muted" style="font-weight:400">(opsional)</span></label>
+      <input id="fZtNode" type="text" maxlength="10" placeholder="Bisa dipilih nanti setelah script dipasang" value="${esc(x?.ztNode || "")}"></div>
     <label for="fName">Nama router</label>
     <input id="fName" type="text" maxlength="40" placeholder="contoh: Nangahale" value="${esc(x?.name || "")}">
     <label for="fSub">Subnet ONT di MikroTik</label>
@@ -1028,29 +1097,35 @@ function siteForm(x) {
     <input id="fNote" type="text" maxlength="120" placeholder="contoh: OLT C-Data 8 port" value="${esc(x?.note || "")}">
     <div class="err" id="fErr"></div>`;
 }
-const readForm = () => ({ name: $("#fName").value, realSubnet: $("#fSub").value, virtualSubnet: $("#fVirt").value, note: $("#fNote").value });
+const readForm = () => ({ name: $("#fName").value, realSubnet: $("#fSub").value, virtualSubnet: $("#fVirt").value, note: $("#fNote").value, transport: (document.querySelector("input[name=fTr]:checked") || {}).value || "l2tp", ztNode: $("#fZtNode") ? $("#fZtNode").value.trim() : "" });
+function bindTrForm() { document.querySelectorAll("input[name=fTr]").forEach((r) => (r.onchange = () => $("#fZtBox").classList.toggle("hidden", r.value !== "zt" || !r.checked))); }
 function openAdd() {
   modal("Tambah router", siteForm(null), `<button class="btn" data-act="closemodal">Batal</button><button class="btn pri" id="fSave">Simpan</button>`);
+  bindTrForm(); $("#fName").focus();
   $("#fSave").onclick = async () => {
     busyBtn($("#fSave"), true); $("#fErr").textContent = "";
     try {
       const r = await api("/api/sites", { method: "POST", body: readForm() });
       await load(); location.hash = `#/router/${r.site.id}/script`;
-      setTimeout(() => doneDialog("Router ditambahkan", `<p><b>${esc(r.site.name)}</b> siap dipasang.</p><p>Langkah berikutnya: salin script di bawah, lalu tempel di Winbox → New Terminal.</p>`, "ok", false), 60);
+      setTimeout(() => r.bindError
+        ? doneDialog("Router ditambahkan, ZeroTier belum disetujui", `<p>${esc(r.bindError)}</p><p>Pilih routernya nanti dari tab Ringkasan.</p>`, "warn", false)
+        : doneDialog("Router ditambahkan", `<p><b>${esc(r.site.name)}</b> siap dipasang.</p><p>Langkah berikutnya: salin script di bawah, lalu tempel di Winbox → New Terminal.${r.site.transport === "zt" && !r.site.ztNode ? " Setelah itu pilih router dari daftar yang bergabung." : ""}</p>`, "ok", false), 60);
     } catch (e) { $("#fErr").textContent = e.message; busyBtn($("#fSave"), false); }
   };
 }
 function openEdit(id) {
   const x = site(id);
   modal("Ubah router", siteForm(x), `<button class="btn" data-act="closemodal">Batal</button><button class="btn pri" id="fSave">Simpan</button>`);
+  bindTrForm();
   $("#fSave").onclick = async () => {
     busyBtn($("#fSave"), true); $("#fErr").textContent = "";
     const f = readForm();
     try {
-      await api("/api/sites/" + id, { method: "PUT", body: f });
-      const net = f.realSubnet.trim() !== x.realSubnet || (f.virtualSubnet.trim() && f.virtualSubnet.trim() !== x.virtualSubnet);
+      const r = await api("/api/sites/" + id, { method: "PUT", body: f });
+      const net = f.realSubnet.trim() !== x.realSubnet || (f.virtualSubnet.trim() && f.virtualSubnet.trim() !== x.virtualSubnet) || f.transport !== x.transport;
       await load(); route();
-      doneDialog("Perubahan disimpan", net ? "Subnet berubah. Pasang ulang script terbaru di MikroTik router ini." : "", "ok", !net);
+      if (r.bindError) doneDialog("Disimpan, ZeroTier belum disetujui", esc(r.bindError), "warn", false);
+      else doneDialog("Perubahan disimpan", net ? "Subnet atau jalur berubah. Pasang ulang script terbaru di MikroTik router ini." : "", "ok", !net);
     } catch (e) { $("#fErr").textContent = e.message; busyBtn($("#fSave"), false); }
   };
 }
@@ -1106,6 +1181,12 @@ function viewGuide(v) {
       <li><b>Jalankan tes koneksi</b>Klik tombol Tes koneksi di halaman router. Popup tes memeriksa VPN, jaringan ONT, GenieACS, dan akses remote satu per satu.</li>
       <li><b>Atur ONT</b>URL ACS di ONT atau profil TR-069 OLT: <code>${esc(s.acsUrl || "")}</code></li>
     </ol></div></div>
+    <div class="card"><div class="ch"><h2>Router lewat ZeroTier (opsional)</h2></div><div class="cb"><ol class="ol">
+      <li><b>Pasang ZTNET di VPS</b>Jalankan <code>bash pasang-ztnet.sh</code> dari folder <code>suwazed-panel</code>. Web ZTNET berjalan di port 3300.</li>
+      <li><b>Buat jaringan di ZTNET</b>Networks → Create Network, lalu atur rentang IPv4, misalnya <code>172.27.0.0/24</code>.</li>
+      <li><b>Hubungkan VPS</b>Pengaturan → ZeroTier → pilih jaringan → Hubungkan VPS.</li>
+      <li><b>Tambah router dengan jalur ZeroTier</b>Pasang script di MikroTik (RouterOS v7, router ARM/ARM64), lalu di tab Ringkasan klik <b>Pilih router yang bergabung</b>.</li>
+    </ol><p class="help">URL ACS di ONT tetap sama (<code>${esc(s.acsUrl || "")}</code>), baik lewat L2TP maupun ZeroTier. Router MIPS (hAP lite, hEX, RB951) tetap memakai L2TP.</p></div></div>
     <div class="card"><div class="ch"><h2>Remote MikroTik dari mana saja</h2></div><div class="cb"><ol class="ol">
       <li><b>Tambah akses remote</b>Buka router → tab Port Forwarding → Tambah → pilih Winbox atau WebFig.</li>
       <li><b>Hubungkan Winbox</b>Isi Connect To dengan alamat yang diberikan, misalnya <code>${esc(s.publicIp || "IP_VPS")}:20001</code>.</li>
@@ -1128,7 +1209,7 @@ function viewGuide(v) {
 }
 
 /* ================= Pengaturan ================= */
-const SET_TABS = [["umum", "Umum", "sliders"], ["telegram", "Notifikasi Telegram", "send"], ["domain", "Domain & HTTPS", "globe"]];
+const SET_TABS = [["umum", "Umum", "sliders"], ["zerotier", "ZeroTier", "hub"], ["telegram", "Notifikasi Telegram", "send"], ["domain", "Domain & HTTPS", "globe"]];
 function viewSettings(v, tab) {
   if (!SET_TABS.some(([k]) => k === tab)) tab = "umum";
   crumb([["Pengaturan", "#/pengaturan"], [SET_TABS.find(([k]) => k === tab)[1]]]);
@@ -1138,6 +1219,7 @@ function viewSettings(v, tab) {
     <div id="setBody"></div>`;
   const b = $("#setBody");
   if (tab === "telegram") setTelegram(b);
+  else if (tab === "zerotier") setZerotier(b);
   else if (tab === "domain") setDomain(b);
   else setGeneral(b);
 }
@@ -1154,6 +1236,9 @@ function setGeneral(b) {
       <label for="sGenie">Alamat GenieACS <span class="muted" style="font-weight:400">(opsional)</span></label>
       <input id="sGenie" type="text" placeholder="${esc(s.genieUrlManual ? "" : s.genieUrl || "http://acs.domain.com:3000")}" value="${esc(s.genieUrlManual || "")}">
       <div class="help">Ditampilkan sebagai link di dashboard. Kosongkan untuk otomatis (alamat VPS + port GenieACS).</div>
+      <label for="sZtnet">Alamat ZTNET <span class="muted" style="font-weight:400">(opsional)</span></label>
+      <input id="sZtnet" type="text" placeholder="${esc(s.ztnetUrlManual ? "" : s.ztnetUrl || "http://zt.domain.com:3300")}" value="${esc(s.ztnetUrlManual || "")}">
+      <div class="help">Web pengelola ZeroTier. Kosongkan untuk otomatis (alamat VPS + port 3300).</div>
       <label for="sTz">Zona waktu</label>
       <select id="sTz">${(s.timezones || []).map((z) => `<option value="${z.id}" ${z.id === tzId() ? "selected" : ""}>${z.label} (${z.id})</option>`).join("")}</select>
       <div class="help">Untuk jam di riwayat, log aktivitas, dan pesan Telegram.</div>
@@ -1190,7 +1275,7 @@ function setGeneral(b) {
     e.preventDefault(); $("#vpsErr").textContent = "";
     const changed = $("#sIpsec").checked !== !!s.useIpsec;
     const btn = e.submitter || $("#vpsForm button"); busyBtn(btn, true);
-    try { await api("/api/settings", { method: "PUT", body: { publicIp: $("#sIp").value, genieUrl: $("#sGenie").value, useIpsec: $("#sIpsec").checked, timezone: $("#sTz").value } }); await load(); route(); doneDialog("Pengaturan disimpan", changed ? "IPsec diubah. Pasang ulang script di semua MikroTik." : "", "ok", !changed); }
+    try { await api("/api/settings", { method: "PUT", body: { publicIp: $("#sIp").value, genieUrl: $("#sGenie").value, ztnetUrl: $("#sZtnet").value, useIpsec: $("#sIpsec").checked, timezone: $("#sTz").value } }); await load(); route(); doneDialog("Pengaturan disimpan", changed ? "IPsec diubah. Pasang ulang script di semua MikroTik." : "", "ok", !changed); }
     catch (err) { $("#vpsErr").textContent = err.message; busyBtn(btn, false); }
   };
   $("#tunForm").onsubmit = (e) => {
@@ -1210,6 +1295,80 @@ function setGeneral(b) {
     catch (err) { $("#pwErr").textContent = err.message; }
     busyBtn(btn, false);
   };
+}
+
+/* ---------- ZeroTier ---------- */
+let ZTPICK = false; // sedang memilih jaringan lain
+async function setZerotier(b) {
+  b.innerHTML = `<div class="card"><div class="empty"><p>Memeriksa ZeroTier di VPS…</p></div></div>`;
+  let z;
+  try { z = await api("/api/zt"); } catch (e) { b.innerHTML = `<div class="note bad">${ic("alert")}<div><b>Gagal memeriksa ZeroTier</b>${esc(e.message)}</div></div>`; return; }
+  if (!location.hash.startsWith("#/pengaturan/zerotier")) return;
+  const s = STATE.settings;
+  if (!z.installed) {
+    b.innerHTML = `
+      <div class="note info">${ic("hub")}<div><b>ZeroTier belum terpasang di VPS</b>${esc(z.error || "")}</div></div>
+      <div class="card"><div class="ch"><h2>Pasang ZTNET + ZeroTier</h2></div><div class="cb">
+        <p style="color:var(--text-2)">ZTNET adalah web pengelola ZeroTier. Jalankan di VPS (sebagai root). Web ZTNET berjalan di port <b>3300</b>, tanpa Docker:</p>
+        <div class="codebox" style="margin-top:12px"><pre class="code">cd /root/suwazed-panel && git pull && bash pasang-ztnet.sh</pre><button class="btn sm" data-copy="cd /root/suwazed-panel && git pull && bash pasang-ztnet.sh" data-msg="Perintah tersalin">${ic("copy")}Salin</button></div>
+        <p class="help">Setelah selesai, buka ZTNET, buat jaringan dengan rentang IP misalnya <code>172.27.0.0/24</code>, lalu kembali ke halaman ini.</p>
+        <div class="form-actions"><button class="btn" id="ztRe">${ic("refresh")}Periksa lagi</button></div>
+      </div></div>`;
+    $("#ztRe").onclick = () => setZerotier(b);
+    return;
+  }
+  const cur = z.current;
+  const showPick = !cur || ZTPICK;
+  b.innerHTML = `
+    ${cur ? `<div class="note ${cur.status === "OK" ? "ok" : "warn"}">${ic(cur.status === "OK" ? "check" : "alert")}<div><b>${cur.status === "OK" ? "ZeroTier aktif untuk GenieACS" : "VPS belum tersambung ke jaringan ZeroTier"}</b>Jaringan ${esc(cur.name || cur.nwid)} · status ${esc(cur.status || "-")}${cur.sites ? ` · ${cur.sites} router memakai ZeroTier` : ""}</div></div>` : ""}
+    <div class="card"><div class="ch"><h2>Controller ZeroTier di VPS</h2>${s.ztnetUrl ? `<a class="btn sm" href="${esc(s.ztnetUrl)}" target="_blank" rel="noopener">${ic("ext")}Buka ZTNET</a>` : ""}</div>
+      <div class="kv"><span>Node ID VPS</span><b>${esc(z.node || "—")}</b></div>
+      <div class="kv"><span>Versi</span><b>${esc(z.version || "—")}</b></div>
+      <div class="kv"><span>Status</span><b>${z.online ? "Online" : "Offline"}</b></div>
+    </div>
+    ${cur ? `<div class="card"><div class="ch"><h2>Jaringan untuk GenieACS</h2></div>
+      <div class="kv"><span>Nama</span><b>${esc(cur.name || "—")}</b></div>
+      <div class="kv"><span>Network ID</span><b>${esc(cur.nwid)} ${copyBtn(cur.nwid, "Network ID tersalin")}</b></div>
+      <div class="kv"><span>Rentang IP</span><b>${esc(cur.subnet)}</b></div>
+      <div class="kv"><span>IP ZeroTier VPS</span><b>${esc(cur.vpsIp)}</b></div>
+      <div class="kv"><span>Interface VPS</span><b>${esc(cur.iface || "—")}</b></div>
+      <div class="kv"><span>URL ACS untuk ONT</span><b>${esc(s.acsUrl || "")}</b></div>
+      <div class="cb" style="border-top:1px solid var(--line);display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" id="ztSwitch">${ic("refresh")}Ganti jaringan</button><span style="flex:1"></span>
+        <button class="btn ghost danger" id="ztLeave">Lepas ZeroTier</button>
+      </div></div>` : ""}
+    ${showPick ? `<div class="card"><div class="ch"><h2>${cur ? "Pilih jaringan lain" : "Pilih jaringan ZeroTier"}</h2></div><div class="cb" style="padding-top:6px">
+      <p class="help" style="margin-top:4px">VPS akan bergabung ke jaringan ini dan mendapat IP ZeroTier. Router yang memilih jalur ZeroTier memakai jaringan yang sama. URL ACS untuk ONT tetap <b>${esc(s.acsUrl || "")}</b>.</p>
+      ${z.networks.length ? z.networks.map((n) => `<label class="netopt ${n.conflict ? "dis" : ""}"><input type="radio" name="ztNet" value="${esc(n.nwid)}" ${n.conflict ? "disabled" : ""} ${cur && cur.nwid === n.nwid ? "checked" : ""}>
+          <span style="flex:1;min-width:0"><b>${esc(n.name || "(tanpa nama)")}</b> <span class="mono muted" style="font-size:12.5px">${esc(n.nwid)}</span>
+          <small>${n.subnet ? "Rentang " + esc(n.subnet) : ""}${n.conflict ? ` · <span style="color:var(--bad)">${esc(n.conflict)}</span>` : ""}</small></span></label>`).join("")
+        : `<div class="empty" style="padding:22px 10px"><p>Belum ada jaringan di controller VPS.<br>Buat di ZTNET: <b>Networks → Create Network</b>, lalu atur rentang IPv4 (contoh <code>172.27.0.0/24</code>).</p></div>`}
+      <div class="err" id="ztErr"></div>
+      <div class="form-actions"><button class="btn pri" id="ztUse" ${z.networks.length ? "" : "disabled"}>${ic("hub")}Hubungkan VPS</button>${cur ? `<button class="btn" id="ztCancel">Batal</button>` : ""}<button class="btn ghost" id="ztRe">${ic("refresh")}Muat ulang</button></div>
+    </div></div>` : ""}
+    <p class="help" style="margin-top:12px">Rentang IP jaringan ZeroTier tidak boleh bentrok dengan ${esc(s.tunnelNet || "")} (L2TP), ${esc(s.virtualPool || "")} (IP virtual), subnet ONT, dan 172.17.0.0/16 (Docker).</p>`;
+  const sw = $("#ztSwitch"); if (sw) sw.onclick = () => { ZTPICK = true; setZerotier(b); };
+  const cc = $("#ztCancel"); if (cc) cc.onclick = () => { ZTPICK = false; setZerotier(b); };
+  const re = $("#ztRe"); if (re) re.onclick = () => setZerotier(b);
+  const lv = $("#ztLeave");
+  if (lv) lv.onclick = () => confirmDialog({
+    title: "Lepas ZeroTier?", danger: true, icon: "hub", ok: "Lepas",
+    text: `<p>VPS keluar dari jaringan <b>${esc(cur.name || cur.nwid)}</b>. Router yang memakai ZeroTier harus dipindah ke L2TP atau dihapus dulu.</p>`,
+    onOk: async () => { await api("/api/zt/leave", { method: "POST" }); await load(); ZTPICK = false; route(); doneDialog("ZeroTier dilepas", ""); },
+  });
+  const use = $("#ztUse");
+  if (use) use.onclick = async () => {
+    const sel = document.querySelector("input[name=ztNet]:checked");
+    $("#ztErr").textContent = "";
+    if (!sel) { $("#ztErr").textContent = "Pilih jaringan dulu."; return; }
+    busyBtn(use, true);
+    try {
+      const r = await api("/api/zt/use", { method: "POST", body: { nwid: sel.value } });
+      ZTPICK = false; await load(); route();
+      doneDialog("VPS tersambung ke ZeroTier", `<p>IP ZeroTier VPS: <b class="mono">${esc(r.vpsIp)}</b> (rentang ${esc(r.subnet)}).</p>${r.ready ? "" : "<p>Interface ZeroTier di VPS belum siap. Tunggu sebentar, lalu muat ulang halaman ini.</p>"}<p>Sekarang Anda bisa memilih jalur <b>ZeroTier</b> saat menambah atau mengubah router.</p>`, "ok", false);
+    } catch (e) { $("#ztErr").textContent = e.message; busyBtn(use, false); }
+  };
+  paintIcons(b);
 }
 
 /* ---------- Telegram ---------- */
@@ -1537,6 +1696,7 @@ document.addEventListener("click", async (e) => {
   else if (act === "menu") $("#menuList").classList.toggle("hidden");
   else if (act === "edit") { $("#menuList").classList.add("hidden"); openEdit(a.dataset.id); }
   else if (act === "resetpw") { $("#menuList").classList.add("hidden"); openResetPw(a.dataset.id); }
+  else if (act === "ztpick") { const m = $("#menuList"); if (m) m.classList.add("hidden"); openZtPick(a.dataset.id || cur); }
   else if (act === "del") { $("#menuList").classList.add("hidden"); openDelete(a.dataset.id); }
   else if (act === "test") openTest(a.dataset.id || cur);
   else if (act === "runtest") runTest();
