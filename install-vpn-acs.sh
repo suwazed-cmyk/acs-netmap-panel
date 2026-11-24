@@ -183,7 +183,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "1.7.0";
+const VERSION = "1.7.1";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -704,6 +704,7 @@ function siteView(s, st, links, h, now) {
     transport: isZt(s) ? "zt" : "l2tp",
     ztNode: s.ztNode || "",
     ztIp: s.ztIp || "",
+    ztStale: !!s.ztStale,
     acsUrl: `http://${st.tun.local}:${ACS_PORT}`,
     inGenie: insideGenie(s.virtualSubnet, st.genieCidr),
     forwards: (s.forwards || []).map((f) => ({
@@ -1045,12 +1046,19 @@ function ztCfg(d) {
   return z && z.nwid ? z : null;
 }
 function ztSubnetOf(cfg) {
+  const cands = [];
   for (const r of (cfg && cfg.routes) || []) {
     if (r.via) continue;
     const c = parseCidr(r.target);
-    if (c && c.prefix >= 8) return c;
+    if (c && c.prefix >= 8) cands.push(c);
   }
-  return null;
+  // Jika rentang diganti di ZTNET dan route lama masih ada, pakai route yang memuat pool IP aktif
+  const pool = ((cfg && cfg.ipAssignmentPools) || [])[0];
+  if (pool && pool.ipRangeStart) {
+    const hit = cands.find((c) => inSubnet(pool.ipRangeStart, c));
+    if (hit) return hit;
+  }
+  return cands[0] || null;
 }
 async function ztMemberIps(nwid) {
   const list = await ztApi("GET", `/controller/network/${nwid}/member`);
@@ -1170,6 +1178,104 @@ async function ztUse(d, nwid) {
   d.settings.zt = { nwid, name: n.json.name || "", subnet: sub.text, vpsNode, vpsIp, iface, managedRoutes: (z && z.nwid === nwid && z.managedRoutes) || [] };
   return { ok: true, vpsIp, iface, subnet: sub.text, ready: !!iface };
 }
+// Periksa ulang jaringan ZeroTier: rentang IP bisa diganti di ZTNET setelah VPS dihubungkan.
+// Tahap 1 (async): baca controller, setujui ulang IP yang perlu dipindah, hasilkan rencana.
+async function ztCheck(d) {
+  const z = ztCfg(d);
+  if (!z) return null;
+  const n = await ztApi("GET", `/controller/network/${z.nwid}`);
+  if (!n.ok) return { error: n.status === 404 ? "Jaringan ZeroTier tidak ada lagi di controller VPS (mungkin dihapus di ZTNET)." : n.error };
+  const sub = ztSubnetOf(n.json);
+  if (!sub) return { error: "Jaringan ZeroTier tidak punya rentang IP. Atur IPv4 Assignment di ZTNET." };
+  if (sub.text !== z.subnet) {
+    const bad = ztConflict(d, sub);
+    if (bad) return { error: `Rentang baru ${sub.text} di ZTNET tidak bisa dipakai: ${bad} Ganti rentangnya di ZTNET.` };
+  }
+  const mi = await ztMemberIps(z.nwid);
+  if (mi.error) return { error: mi.error };
+  const M = mi.members;
+  const ipsOf = (id) => ((M[id] || {}).ipAssignments || []).filter((ip) => inSubnet(ip, sub));
+  const plan = { nwid: z.nwid, name: n.json.name || z.name || "", subnet: sub.text, oldSubnet: z.subnet, vpsIp: z.vpsIp, oldVpsIp: z.vpsIp, sites: {} };
+  // Semua IP yang sedang dipakai anggota (untuk mencari IP kosong)
+  const used = new Set();
+  for (const id of Object.keys(M)) for (const ip of ipsOf(id)) used.add(ip);
+  const take = async (node, keep, start) => {
+    const mine = ipsOf(node);
+    let ip = keep && inSubnet(keep, sub) && (mine.includes(keep) || !used.has(keep)) ? keep : mine[0] || "";
+    if (!ip) ip = ztFreeIp(sub, used, start);
+    if (!ip) return "";
+    used.add(ip);
+    const cur = (M[node] || {}).ipAssignments || [];
+    if (!(cur.length === 1 && cur[0] === ip) || !(M[node] || {}).authorized) {
+      const r = await ztApi("POST", `/controller/network/${z.nwid}/member/${node}`, { authorized: true, ipAssignments: [ip] });
+      if (!r.ok) return "";
+    }
+    return ip;
+  };
+  const vip = await take(z.vpsNode, z.vpsIp, 1);
+  if (!vip) return { error: `Gagal memberi IP VPS di rentang ${sub.text}.` };
+  plan.vpsIp = vip;
+  for (const st of d.sites.filter((x) => isZt(x) && x.ztNode)) {
+    const ip = await take(st.ztNode, st.ztIp, 10);
+    if (ip && ip !== st.ztIp) plan.sites[st.id] = ip;
+  }
+  const j = await ztApi("GET", `/network/${z.nwid}`);
+  if (j.ok && j.json.portDeviceName) plan.iface = j.json.portDeviceName;
+  return plan;
+}
+// Tahap 2 (sinkron): terapkan rencana ke data. Mengembalikan daftar perubahan.
+function ztApplyCheck(d, plan) {
+  const z = ztCfg(d);
+  const out = { changed: false, notes: [] };
+  if (!z || !plan) return out;
+  if (plan.error) {
+    if (z.checkError !== plan.error) { z.checkError = plan.error; out.changed = true; out.error = plan.error; }
+    return out;
+  }
+  if (z.nwid !== plan.nwid) return out;
+  if (z.checkError) { delete z.checkError; out.changed = true; }
+  if (plan.name && z.name !== plan.name) { z.name = plan.name; out.changed = true; }
+  if (plan.iface && z.iface !== plan.iface) { z.iface = plan.iface; out.changed = true; }
+  if (z.subnet !== plan.subnet) { out.notes.push(`rentang ${z.subnet} → ${plan.subnet}`); z.subnet = plan.subnet; out.changed = true; }
+  if (z.vpsIp !== plan.vpsIp) {
+    out.notes.push(`IP VPS ${z.vpsIp} → ${plan.vpsIp}`);
+    z.vpsIp = plan.vpsIp;
+    out.changed = true;
+    out.routes = true;
+    // Gateway di script MikroTik berubah: tandai router ZeroTier agar script dipasang ulang
+    for (const st of d.sites.filter((x) => isZt(x) && x.ztNode)) st.ztStale = true;
+  }
+  for (const [id, ip] of Object.entries(plan.sites)) {
+    const st = d.sites.find((x) => x.id === id);
+    if (!st || st.ztIp === ip) continue;
+    out.notes.push(`${st.name} ${st.ztIp || "-"} → ${ip}`);
+    st.ztIp = ip;
+    out.changed = true;
+    out.routes = true;
+  }
+  return out;
+}
+// Jalankan pemeriksaan lengkap dan simpan bila ada perubahan
+async function ztRefresh(req) {
+  const plan = await ztCheck(loadData());
+  if (!plan) return { changed: false };
+  const d = loadData(); // data terbaru, supaya tidak menimpa perubahan dari panel
+  const r = ztApplyCheck(d, plan);
+  if (!r.changed) return r;
+  saveData(d);
+  if (r.notes.length) logActivity(req || null, "Jaringan ZeroTier disesuaikan", r.notes.join(" · "));
+  if (r.error) logActivity(req || null, "Jaringan ZeroTier bermasalah", r.error);
+  if (r.routes) {
+    const d2 = loadData();
+    const sr = await syncZtRoutes(d2);
+    if (sr.error) console.error("Sinkron route ZeroTier gagal:", sr.error);
+    saveData(d2);
+    await applyFirewall(d2);
+    await ztPingAll(d2);
+  }
+  return r;
+}
+
 // Managed route ZeroTier: subnet virtual tiap router -> IP ZeroTier router
 async function syncZtRoutes(d) {
   const z = ztCfg(d);
@@ -1178,6 +1284,9 @@ async function syncZtRoutes(d) {
   if (!n.ok) return { error: n.error };
   const mine = new Set(z.managedRoutes || []);
   const want = d.sites.filter((s) => isZt(s) && s.ztIp).map((s) => ({ target: s.virtualSubnet, via: s.ztIp }));
+  // Route ke URL ACS (IP .1 jaringan VPN) lewat VPS, dibagikan ke semua anggota.
+  // Router tetap tersambung walaupun IP ZeroTier VPS berubah.
+  if (z.vpsIp) want.push({ target: `${tun(d).local}/32`, via: z.vpsIp });
   const wantT = new Set(want.map((r) => r.target));
   const keep = (n.json.routes || []).filter((r) => !(r.via && (mine.has(r.target) || wantT.has(r.target))));
   const routes = keep.concat(want);
@@ -1212,6 +1321,7 @@ async function ztPending(d) {
 // Pasangkan router dengan anggota ZeroTier: setujui + beri IP + route
 async function ztBind(d, site, node) {
   const z = ztCfg(d);
+  if (z && z.checkError) return { error: z.checkError };
   if (!z) return { error: "ZeroTier belum diatur." };
   node = String(node || "").trim().toLowerCase();
   if (!/^[0-9a-f]{10}$/.test(node)) return { error: "Node ID ZeroTier harus 10 karakter (0-9, a-f)." };
@@ -1590,10 +1700,15 @@ function msgRemind(list, now) {
 //  Pemantau: cek status VPN berkala -> riwayat + notifikasi
 // =====================================================================
 let monitorBusy = false;
+let ztRefreshAt = 0;
 async function monitorTick() {
   if (monitorBusy) return;
   monitorBusy = true;
   try {
+    if (Date.now() - ztRefreshAt >= 5 * 60 * 1000 && ztCfg(loadData())) {
+      ztRefreshAt = Date.now();
+      await ztRefresh(null).catch((e) => console.error("Pemeriksaan ZeroTier gagal:", e.message));
+    }
     await ztPingAll(loadData());
     const peers = await onlinePeers();
     // Mulai di sini semua sinkron (tidak ada await) supaya tidak menimpa perubahan dari panel
@@ -2315,7 +2430,7 @@ async function handleApi(req, res, url) {
         genieUrlManual: (d.settings && d.settings.genieUrl) || "",
         ztnetUrl: ztnetUrl(d, st.publicIp),
         ztnetUrlManual: (d.settings && d.settings.ztnetUrl) || "",
-        zt: st.zt ? { nwid: st.zt.nwid, name: st.zt.name, subnet: st.zt.subnet, vpsIp: st.zt.vpsIp, iface: st.zt.iface } : null,
+        zt: st.zt ? { nwid: st.zt.nwid, name: st.zt.name, subnet: st.zt.subnet, vpsIp: st.zt.vpsIp, iface: st.zt.iface, checkError: st.zt.checkError || "" } : null,
         tunnelNet: st.tun.net,
         tunnelLocal: st.tun.local,
         tunnelStatic: `${intToIp(st.tun.first)} - ${intToIp(st.tun.last)}`,
@@ -2556,6 +2671,7 @@ async function handleApi(req, res, url) {
 
   // --- ZeroTier ---
   if (p === "/api/zt" && method === "GET") {
+    await ztRefresh(req).catch((e) => console.error("Pemeriksaan ZeroTier gagal:", e.message));
     return send(res, 200, await ztStatus(loadData()));
   }
   if (p === "/api/zt/use" && method === "POST") {
@@ -2663,7 +2779,7 @@ async function handleApi(req, res, url) {
   }
 
   // --- Ubah / hapus / tes / riwayat router ---
-  const m = p.match(/^\/api\/sites\/([a-f0-9]{12})(\/(test|test-plan|test-step|reset-password|history|zt-pending|zt-bind))?$/);
+  const m = p.match(/^\/api\/sites\/([a-f0-9]{12})(\/(test|test-plan|test-step|reset-password|history|zt-pending|zt-bind|zt-script-done))?$/);
   if (m) {
     const d = loadData();
     const site = d.sites.find((s) => s.id === m[1]);
@@ -2740,18 +2856,29 @@ async function handleApi(req, res, url) {
       return send(res, 200, { ok: true });
     }
     if (action === "zt-pending" && method === "GET") {
-      const r = await ztPending(d);
+      await ztRefresh(req).catch(() => {});
+      const r = await ztPending(loadData());
       if (r.error) return send(res, 400, { error: r.error });
       return send(res, 200, r);
     }
+    if (action === "zt-script-done" && method === "POST") {
+      delete site.ztStale;
+      saveData(d);
+      logActivity(req, "Script ZeroTier dipasang ulang", site.name);
+      return send(res, 200, { ok: true });
+    }
     if (action === "zt-bind" && method === "POST") {
       if (!isZt(site)) return send(res, 400, { error: "Router ini memakai L2TP." });
-      const r = await ztBind(d, site, body.node);
+      await ztRefresh(req).catch(() => {});
+      const d2 = loadData();
+      const s2 = d2.sites.find((x) => x.id === site.id);
+      if (!s2) return send(res, 404, { error: "Router tidak ditemukan." });
+      const r = await ztBind(d2, s2, body.node);
       if (r.error) return send(res, 400, { error: r.error });
-      saveData(d);
-      logActivity(req, "Router ZeroTier disetujui", `${site.name} · node ${site.ztNode} · IP ${site.ztIp}`);
-      await applyFirewall(d);
-      ztPingAll(d).catch(() => {});
+      saveData(d2);
+      logActivity(req, "Router ZeroTier disetujui", `${s2.name} · node ${s2.ztNode} · IP ${s2.ztIp}`);
+      await applyFirewall(d2);
+      ztPingAll(d2).catch(() => {});
       return send(res, 200, { ok: true, ip: r.ip });
     }
     if (action === "history" && method === "GET") {
@@ -3681,6 +3808,8 @@ function issues() {
     const names = off.map((x) => x.name);
     list.push({ t: `${off.length} router terputus`, d: names.slice(0, 4).join(", ") + (names.length > 4 ? ` dan ${names.length - 4} lainnya` : ""), go: "#/router/terputus" });
   }
+  if (s.zt && s.zt.checkError) list.push({ t: "Jaringan ZeroTier bermasalah", d: s.zt.checkError, go: "#/zerotier" });
+  for (const x of STATE.sites.filter((y) => y.ztStale)) list.push({ t: `${x.name}: pasang ulang script ZeroTier`, d: "IP ZeroTier VPS berubah. Salin script terbaru ke MikroTik.", go: `#/router/${x.id}/script` });
   const tg = s.telegram || {};
   if (tg.active && tg.lastError) list.push({ t: "Notifikasi Telegram gagal terkirim", d: tg.lastError, go: "#/pengaturan/telegram" });
   const cf = s.cloudflare;
@@ -3858,9 +3987,12 @@ function tabSummary(b, x) {
       </dl>
     </div>`}`;
 }
+function ztStaleNote(x, style) {
+  return x.ztStale ? `<div class="note warn"${style ? ` style="${style}"` : ""}>${ic("alert")}<div><b>Pasang ulang script ZeroTier</b>Rentang atau IP ZeroTier VPS berubah (sekarang ${esc((STATE.settings.zt || {}).vpsIp || "-")}). Salin script terbaru dari tab <a href="#/router/${x.id}/script">Script MikroTik</a> ke MikroTik, lalu klik <a href="#" data-act="ztdone" data-id="${x.id}">Sudah dipasang</a>.</div></div>` : "";
+}
 function ztCard(x) {
   const z = STATE.settings.zt;
-  return `${!x.ztNode ? `<div class="note info">${ic("hub")}<div><b>Router ZeroTier belum dipilih</b>Pasang script dari tab <a href="#/router/${x.id}/script">Script MikroTik</a>, lalu klik <a href="#" data-act="ztpick" data-id="${x.id}">Pilih router yang bergabung</a>.</div></div>` : ""}
+  return `${ztStaleNote(x, "margin-top:16px")}${!x.ztNode ? `<div class="note info">${ic("hub")}<div><b>Router ZeroTier belum dipilih</b>Pasang script dari tab <a href="#/router/${x.id}/script">Script MikroTik</a>, lalu klik <a href="#" data-act="ztpick" data-id="${x.id}">Pilih router yang bergabung</a>.</div></div>` : ""}
     <div class="card">
       <div class="ch"><h2>ZeroTier</h2><button class="btn sm" data-act="ztpick" data-id="${x.id}">${ic("hub")}${x.ztNode ? "Ganti router" : "Pilih router yang bergabung"}</button></div>
       <dl class="dl" style="margin:0">
@@ -3965,6 +4097,7 @@ function fwdForm(x) {
 }
 function tabScript(b, x) {
   b.innerHTML = `
+    ${x.transport === "zt" ? ztStaleNote(x) : ""}
     ${x.transport === "zt" ? `<div class="note info">${ic("hub")}<div><b>Jalur ZeroTier</b>Butuh RouterOS v7 dengan paket <code>zerotier</code> (router ARM/ARM64). Setelah script dipasang, buka tab Ringkasan lalu klik <a href="#" data-act="ztpick" data-id="${x.id}">Pilih router yang bergabung</a>.</div></div>` : ""}
     ${x.state !== "pending" ? "" : `<ol class="howto">
       <li><b><i>1</i>Salin script</b>Klik tombol Salin di kotak script.</li>
@@ -4397,6 +4530,7 @@ async function setZerotier(b) {
   const cur = z.current;
   const showPick = !cur || ZTPICK;
   b.innerHTML = `
+    ${cur && cur.checkError ? `<div class="note bad">${ic("alert")}<div><b>Jaringan ZeroTier bermasalah</b>${esc(cur.checkError)}</div></div>` : ""}
     ${cur ? `<div class="note ${cur.status === "OK" ? "ok" : "warn"}">${ic(cur.status === "OK" ? "check" : "alert")}<div><b>${cur.status === "OK" ? "ZeroTier aktif untuk GenieACS" : "VPS belum tersambung ke jaringan ZeroTier"}</b>Jaringan ${esc(cur.name || cur.nwid)} · status ${esc(cur.status || "-")}${cur.sites ? ` · ${cur.sites} router memakai ZeroTier` : ""}</div></div>` : ""}
     <div class="card"><div class="ch"><h2>Controller ZeroTier di VPS</h2></div>
       <div class="kv"><span>Node ID VPS</span><b>${esc(z.node || "—")}</b></div>
@@ -4821,6 +4955,10 @@ document.addEventListener("click", async (e) => {
   else if (act === "menu") $("#menuList").classList.toggle("hidden");
   else if (act === "edit") { $("#menuList").classList.add("hidden"); openEdit(a.dataset.id); }
   else if (act === "resetpw") { $("#menuList").classList.add("hidden"); openResetPw(a.dataset.id); }
+  else if (act === "ztdone") {
+    const id = a.dataset.id || cur;
+    try { await api(`/api/sites/${id}/zt-script-done`, { method: "POST", body: {} }); await load(); route(); toast("Ditandai sudah dipasang"); } catch (err) { toast(err.message, true); }
+  }
   else if (act === "ztpick") { const m = $("#menuList"); if (m) m.classList.add("hidden"); openZtPick(a.dataset.id || cur); }
   else if (act === "del") { $("#menuList").classList.add("hidden"); openDelete(a.dataset.id); }
   else if (act === "test") openTest(a.dataset.id || cur);

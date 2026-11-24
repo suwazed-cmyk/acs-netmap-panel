@@ -261,6 +261,8 @@ Router **ARM/ARM64 dengan RouterOS v7** bisa tersambung ke VPS lewat ZeroTier, b
 
 **Tambah router:** panel → **Tambah router** → jalur **ZeroTier** → **Simpan** → tab **Script MikroTik** → tempel di New Terminal → tab **Ringkasan** → **Pilih router yang bergabung**. Panel otomatis menyetujui router, memberi IP ZeroTier, dan memasang route ke IP virtual.
 
+**Mengganti rentang IP di ZTNET belakangan** boleh: panel memeriksa ulang jaringan setiap 5 menit dan setiap halaman ZeroTier dibuka, lalu menyesuaikan rentang, IP VPS, IP router, dan route secara otomatis (tercatat di Log aktivitas). Jika IP ZeroTier VPS ikut berubah, router ZeroTier diberi tanda **Pasang ulang script ZeroTier**. Rentang baru yang bentrok dengan jaringan lain ditolak dan ditampilkan sebagai peringatan.
+
 URL ACS di ONT tetap `http://192.168.42.1:7547`. Status, riwayat, notifikasi Telegram, tes koneksi, dan port forwarding berlaku untuk kedua jalur.
 
 ---
