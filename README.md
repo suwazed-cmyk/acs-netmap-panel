@@ -18,13 +18,13 @@ ONT ─ OLT ─ MikroTik router C ═══ VPN L2TP / ZeroTier ═══╝    
   - Akun VPN dan **script MikroTik siap salin**, mengikuti nama panel Anda
   - **Tes koneksi** bertahap, status **tersambung/terputus**, dan **riwayat uptime** 24 jam / 7 hari / 30 hari
   - **Port forwarding** untuk remote Winbox / WebFig / web ONT lewat IP publik VPS
-  - Halaman **GenieACS** (status layanan, patch, jumlah ONT per router) dan **ZeroTier** (anggota jaringan)
+  - Halaman **GenieACS** (status layanan, patch, jumlah ONT per router) dan **ZeroTier** (controller lengkap: jaringan, rentang IP, perangkat, rute)
   - **Notifikasi Telegram** saat VPN putus, dikirim ke grup bertopik
-  - **Domain Cloudflare + HTTPS** otomatis, termasuk subdomain untuk GenieACS dan ZTNET
+  - **Domain Cloudflare + HTTPS** otomatis, termasuk subdomain untuk GenieACS
   - **Log aktivitas** dan **nama panel** yang bisa diganti
   - **Alamat tanpa port**: panel dibuka di port 80/443 (`http://IP-VPS` atau `https://domain`)
   - Menu **Add-on** dengan tombol **Install** dan progres 0–100%:
-    - **ZeroTier + ZTNET** (add-on sistem; menu ZeroTier baru muncul setelah dipasang)
+    - **ZeroTier** (add-on sistem, hanya paket zerotier-one; menu ZeroTier baru muncul setelah dipasang)
     - **[Panel ACS](https://github.com/suwazed-cmyk/panel-acs)**: monitoring ONT, **history redaman** seperti SmartOLT, peta lokasi. Dibuka di `/acs`
     - **[Bilingku](https://github.com/suwazed-cmyk/bilingku)**: billing PPPoE & Hotspot MikroTik. Dibuka di `/billing`
 - Script bantu: **`ringkasan.sh`** (alamat web dan port) dan **`cek.sh`** (tes semua layanan)
@@ -35,7 +35,6 @@ ONT ─ OLT ─ MikroTik router C ═══ VPN L2TP / ZeroTier ═══╝    
 |---|---|
 | `install-vpn-acs.sh` | Installer Panel VPN ACS (sudah berisi seluruh panel) |
 | `genieacs-virtualip.sh` | Patch IP virtual untuk GenieACS v1.2.13 |
-| `pasang-ztnet.sh` | Memasang ZeroTier + ZTNET tanpa Docker, web di port 3300 (opsional) |
 | `ringkasan.sh` | Ringkasan semua layanan: alamat web, port, status, port firewall |
 | `cek.sh` | Tes semua layanan: service, port, web menjawab, patch, sertifikat, DNS |
 | `bersihkan.sh` | Menghapus pengaturan yang dipasang repo ini dari VPS |
@@ -151,7 +150,6 @@ Jangan menyalakan `ufw` karena bentrok dengan aturan VPN. Buka port berikut di f
 | 3000 | TCP | Web GenieACS |
 | 20001-20999 | TCP | Port forwarding (remote Winbox / web ONT) |
 | 500, 4500 | UDP | Hanya jika IPsec dinyalakan |
-| 3300 | TCP | Web ZTNET, hanya jika memakai ZeroTier |
 | 9993 | UDP | ZeroTier, hanya jika memakai ZeroTier |
 
 Port 7547 dan 7557 **tidak perlu** dibuka: ONT menghubungi GenieACS lewat VPN. Panel dibuka di port 80/443; port 8088 tetap jalan sebagai cadangan.
@@ -236,13 +234,13 @@ Setelah berhasil:
 - Jika HTTPS dipilih, panel dibuka lewat `https://domain` (atau `https://domain:8088`), dan alamat http/IP dialihkan otomatis. Sertifikat diperpanjang otomatis oleh certbot.
 - Record harus **DNS only** (awan abu-abu). Proxy Cloudflare (awan oranye) tidak bisa meneruskan L2TP dan Winbox; panel mengaturnya otomatis.
 
-**Subdomain layanan:** di halaman yang sama, bagian **Subdomain layanan** membuat record DNS otomatis untuk **GenieACS** (bawaan `acs`, misalnya `http://acs.domainanda.com:3000`) dan **ZTNET** (bawaan `zt`, misalnya `http://zt.domainanda.com:3300`). Link di panel ikut diperbarui, dan namanya bisa diganti kapan saja. Pakai subdomain ini untuk GenieACS dan ZTNET, **jangan domain panel**: domain panel yang ber-HTTPS membuat browser memaksa https di port lain.
+**Subdomain layanan:** di halaman yang sama, bagian **Subdomain layanan** membuat record DNS otomatis untuk **GenieACS** (bawaan `acs`, misalnya `http://acs.domainanda.com:3000`). Link di panel ikut diperbarui, dan namanya bisa diganti kapan saja. Pakai subdomain ini untuk GenieACS, **jangan domain panel**: domain panel yang ber-HTTPS membuat browser memaksa https di port lain.
 
 ### C. Alamat tanpa port (80/443)
 Panel **langsung memakai port 80/443** setelah instal:
 - **Tanpa domain:** `http://IP-VPS` (port 80).
 - **Dengan domain + HTTPS:** `https://domain` (port 443). Port 80 tetap melayani perpanjangan sertifikat dan mengalihkan ke https.
-- Subdomain `acs.` dan `zt.` ikut dibuka tanpa port bila diaktifkan dari **Pengaturan → Umum → Alamat tanpa port** (sertifikat diperluas otomatis).
+- Subdomain `acs.` ikut dibuka tanpa port bila diaktifkan dari **Pengaturan → Umum → Alamat tanpa port** (sertifikat diperluas otomatis).
 - Port **8088 tetap jalan** sebagai cadangan, dan script MikroTik lama tetap berfungsi.
 
 Penting:
@@ -256,7 +254,7 @@ Menu **Add-on** di panel → **Install**. Panel menampilkan progres langkah demi
 
 | Add-on | Isi | Dibuka di |
 |---|---|---|
-| **ZeroTier** | ZeroTier + ZTNET (lihat bagian E) | menu ZeroTier, ZTNET port 3300 |
+| **ZeroTier** | Controller ZeroTier di VPS (lihat bagian E) | menu ZeroTier |
 | **Panel ACS** | Monitoring ONT dari GenieACS: daftar perangkat per router, history redaman (tiap 15 menit, disimpan 90 hari), redaman memburuk 24 jam, peta lokasi | `/acs` |
 | **Bilingku** | Billing PPPoE & Hotspot. Router bisa diambil langsung dari panel utama: cukup isi user/password API | `/billing` |
 
@@ -269,17 +267,11 @@ Menu **Add-on** di panel → **Install**. Panel menampilkan progres langkah demi
 Router **ARM/ARM64 dengan RouterOS v7** bisa tersambung ke VPS lewat ZeroTier, bukan L2TP. Router MIPS (hAP lite, hEX, RB951) tetap memakai L2TP. Kedua jalur bisa dipakai bersamaan.
 
 **Di VPS:**
-1. Jika memakai domain, buat dulu subdomain `zt` di [Fitur opsional B](#b-domain-cloudflare--https) agar alamat ZTNET langsung benar.
-2. Pasang ZeroTier + ZTNET (web pengelola ZeroTier, port **3300**, tanpa Docker): panel → menu **Add-on → ZeroTier → Install**. Atau lewat terminal:
-   ```bash
-   cd /root/acs-netmap-panel
-   bash pasang-ztnet.sh
-   ```
-   Script ini **tidak mem-build ZTNET di VPS**: paket siap pakai diunduh dari rilis repo ini (dibangun otomatis oleh GitHub Actions dari kode resmi ZTNET, lihat folder `ztnet-build/`). Pemasangan biasanya **1–3 menit**, tanpa pertanyaan atau dialog, hemat RAM, dan Node.js tidak diubah. Butuh Ubuntu 22.04 / Debian 12 atau lebih baru dan Node.js 20+. Port ZTNET otomatis 3300 agar tidak bentrok dengan GenieACS (3000). ZTNET yang pernah dipasang dengan installer resmi tetap dipakai (database dan `.env` lama dipertahankan).
-3. Buka web ZTNET (alamatnya ada di ringkasan) dan **segera daftar**: akun pertama menjadi admin.
-4. Di ZTNET: **Networks → Create Network**, lalu atur rentang IPv4, misalnya `172.27.0.0/24`. Rentang ini tidak boleh bentrok dengan `192.168.42.0/24`, `10.100.0.0/14`, subnet ONT, atau `172.17.0.0/16`.
-5. Panel → menu **ZeroTier** → pilih jaringan → **Hubungkan VPS**. Halaman ini juga menampilkan semua anggota jaringan beserta statusnya.
-6. Buka UDP **9993** dan TCP **3300** di firewall provider.
+1. Panel → menu **Add-on → ZeroTier → Install**. Yang dipasang hanya paket resmi `zerotier-one` (±10 MB, beberapa detik). Tidak ada web tambahan, database, atau port baru.
+2. Panel → menu **ZeroTier** → **Buat jaringan**: isi nama dan rentang IP (panel menyarankan rentang yang tidak bentrok, misalnya `172.27.0.0/24`), lalu centang **Langsung hubungkan VPS**.
+3. Buka UDP **9993** di firewall provider.
+
+Rentang ZeroTier tidak boleh bentrok dengan `192.168.42.0/24`, `10.100.0.0/14`, subnet ONT, atau `172.17.0.0/16`; panel menolaknya otomatis.
 
 **Di setiap MikroTik (sekali):** pasang paket ZeroTier.
 1. Cek versi dan arsitektur di Winbox → **System → Resources** (harus RouterOS **7.x** dan arsitektur **arm** atau **arm64**).
@@ -288,16 +280,18 @@ Router **ARM/ARM64 dengan RouterOS v7** bisa tersambung ke VPS lewat ZeroTier, b
 4. **System → Reboot**. Setelah menyala, `zerotier` muncul di **System → Packages**.
 
 **Tambah router:** panel → **Tambah router** → jalur **ZeroTier**.
-- Jika MikroTik **sudah bergabung** ke jaringan (terlihat di ZTNET), pilih dari daftar **Perangkat ZeroTier**. Daftar memakai nama perangkat dari ZTNET, dan nama router terisi otomatis.
+- Jika MikroTik **sudah bergabung** ke jaringan (terlihat di menu ZeroTier), pilih dari daftar **Perangkat ZeroTier**. Nama perangkat yang diisi di menu ZeroTier ikut dipakai sebagai nama router.
 - Jika **belum bergabung** (biasanya), biarkan "Pilih nanti" → **Simpan** → tab **Script MikroTik** → tempel di New Terminal. Di akhir, script **melaporkan Node ID MikroTik ke panel** sehingga router terpilih otomatis dalam beberapa detik. MikroTik harus bisa membuka alamat panel (`http(s)://alamat-VPS`) lewat internet. Jika gagal, pilih manual di tab **Ringkasan** → **Pilih router yang bergabung**.
 
-Panel otomatis menyetujui router, memberi IP ZeroTier, dan memasang route ke IP virtual. Nama perangkat dari ZTNET juga tampil di tabel **Anggota jaringan** di menu ZeroTier.
+Panel otomatis menyetujui router, memberi IP ZeroTier, dan memasang route ke IP virtual.
 
-Pengelolaan ZeroTier dari menu **ZeroTier** di panel (tanpa membuka ZTNET):
-- **Ubah** nama jaringan dan akses **Private/Public**. Private sangat disarankan: dengan Public, siapa pun yang tahu Network ID bisa masuk ke jaringan GenieACS.
-- Di tabel **Anggota jaringan**: **Setujui** / **Cabut** izin perangkat dan **Ubah IP** ZeroTier-nya. Route IP virtual router ikut diperbarui otomatis.
+Semua pengelolaan ada di menu **ZeroTier** (tidak perlu web lain):
+- **Jaringan:** buat, hubungkan, lepas, dan hapus. Ubah **nama**, akses **Private/Public** (Private sangat disarankan), **rentang IP**, **pool IP otomatis**, dan **DNS**.
+- **Ganti rentang IP** kapan saja: IP VPS, router, dan perangkat lain dipindah otomatis ke rentang baru dan rute ikut diperbarui (tercatat di Log aktivitas). Jika IP VPS berubah, router ZeroTier diberi tanda **Pasang ulang script ZeroTier**.
+- **Perangkat:** cari & saring (online, offline, menunggu), **setujui / cabut izin**, **ubah IP**, beri **nama & catatan**, lihat IP asli, latensi, dan versi ZeroTier, serta **hapus** perangkat.
+- **Rute jaringan:** rute IP virtual tiap router dan URL ACS dibuat otomatis oleh panel.
 
-**Mengganti rentang IP di ZTNET belakangan** boleh: panel memeriksa ulang jaringan setiap 5 menit dan setiap halaman ZeroTier dibuka, lalu menyesuaikan rentang, IP VPS, IP router, dan route secara otomatis (tercatat di Log aktivitas). Jika IP ZeroTier VPS ikut berubah, router ZeroTier diberi tanda **Pasang ulang script ZeroTier**. Rentang baru yang bentrok dengan jaringan lain ditolak dan ditampilkan sebagai peringatan.
+**Pindah dari ZTNET:** jika dulu memakai ZTNET, menu ZeroTier menampilkan tombol **Pindahkan & lepas ZTNET**. Nama dan catatan perangkat disalin ke panel, lalu ZTNET dihapus (opsional beserta database PostgreSQL-nya). Jaringan, perangkat, dan IP tidak berubah karena tersimpan di controller ZeroTier.
 
 URL ACS di ONT tetap `http://192.168.42.1:7547`. Status, riwayat, notifikasi Telegram, tes koneksi, dan port forwarding berlaku untuk kedua jalur.
 
@@ -307,10 +301,10 @@ URL ACS di ONT tetap `http://192.168.42.1:7547`. Status, riwayat, notifikasi Tel
 
 | Menu | Kegunaan |
 |---|---|
-| **Dashboard** | Jumlah router tersambung/terputus, uptime tiap router (24 jam, 7 hari, 30 hari), daftar **Perlu perhatian**, alamat GenieACS dan ZTNET |
+| **Dashboard** | Jumlah router tersambung/terputus, uptime tiap router (24 jam, 7 hari, 30 hari), daftar **Perlu perhatian**, alamat GenieACS |
 | **Router** | Daftar router. Detail router punya tab **Ringkasan**, **Port Forwarding**, **Script MikroTik**, dan **Riwayat** |
 | **GenieACS** | Status layanan, patch IP virtual, jumlah ONT per router, alamat GenieACS UI |
-| **ZeroTier** | Jaringan yang dipakai, anggota jaringan, alamat ZTNET |
+| **ZeroTier** | Controller ZeroTier: jaringan, rentang IP, perangkat, rute |
 | **Pengaturan** | Umum (nama panel, VPS, jaringan VPN, password), Notifikasi Telegram, Domain & HTTPS |
 | **Panduan** | Ringkasan cara pakai, langsung di panel |
 | **Log aktivitas** | Semua perubahan di panel selama 90 hari (password dan token tidak dicatat) |
@@ -337,14 +331,14 @@ Jalankan dulu `bash cek.sh`. Sebagian besar masalah langsung terlihat di sana.
 | Router ZeroTier tidak muncul di "Pilih router yang bergabung" | Paket zerotier belum terpasang, VPS belum dihubungkan, atau UDP 9993 tertutup | Cek [Fitur opsional E](#e-router-lewat-zerotier). Di MikroTik: **ZeroTier → Interfaces → zt-acs** |
 | Notifikasi Telegram tidak masuk | Bot bukan admin, topik salah, atau token dipakai webhook lain | **Kirim pesan tes** di panel, lalu **Hapus webhook** jika ditawarkan |
 | Domain gagal: "Domain tidak ditemukan di akun Cloudflare ini" / "Token tidak boleh membaca domain ini" | Token belum punya izin **Zone → Zone → Read** | Edit token di Cloudflare, tambahkan izin itu |
-| Browser memaksa `https://` saat membuka GenieACS/ZTNET | Domain panel ber-HTTPS dipakai untuk port lain | Pakai subdomain `acs`/`zt` ([Fitur opsional B](#b-domain-cloudflare--https)) |
+| Browser memaksa `https://` saat membuka GenieACS | Domain panel ber-HTTPS dipakai untuk port lain | Pakai subdomain `acs` ([Fitur opsional B](#b-domain-cloudflare--https)) |
 
 Log lengkap:
 ```bash
 journalctl -u vpn-acs -n 50 --no-pager
 journalctl -u xl2tpd -n 50 --no-pager
 journalctl -u genieacs-cwmp -n 50 --no-pager
-journalctl -u ztnet -n 50 --no-pager
+journalctl -u zerotier-one -n 50 --no-pager
 ```
 
 ---
@@ -367,7 +361,7 @@ bash cek.sh
 ```
 Setelah update, tekan **Ctrl+F5** di browser agar tampilan panel baru termuat. Add-on (Panel ACS, Bilingku) di-update dari menu **Add-on → Update**.
 
-Jika GenieACS di-update, jalankan ulang `bash genieacs-virtualip.sh`. ZTNET di-update dengan menjalankan ulang `bash pasang-ztnet.sh` (port 3300 tetap).
+Jika GenieACS di-update, jalankan ulang `bash genieacs-virtualip.sh`.
 
 ## Perintah berguna
 ```bash
@@ -377,7 +371,7 @@ bash install-vpn-acs.sh password     # ganti/reset password admin panel (Enter =
 bash install-vpn-acs.sh uninstall    # hapus panel (akun VPN tetap)
 bash genieacs-virtualip.sh status    # cek patch IP virtual
 bash genieacs-virtualip.sh rollback  # kembali ke GenieACS asli
-bash pasang-ztnet.sh status          # cek ZeroTier + ZTNET
+zerotier-cli info                    # cek ZeroTier di VPS
 ```
 
 ## Backup

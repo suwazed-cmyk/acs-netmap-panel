@@ -8,7 +8,7 @@
 #    bash ringkasan.sh
 #
 #  Otomatis dijalankan di akhir install-vpn-acs.sh, genieacs-virtualip.sh,
-#  dan pasang-ztnet.sh, jadi ringkasannya selalu lengkap walaupun
+#  dan add-on, jadi ringkasannya selalu lengkap walaupun
 #  komponen dipasang di hari yang berbeda.
 # =====================================================================
 
@@ -19,7 +19,6 @@ PANEL_DATA="$PANEL_DIR/data.json"
 PANEL_PORT="8088"
 GENIE_ENV="/opt/genieacs/genieacs.env"
 ZTNET_DIR="/opt/ztnet"
-ZTNET_PORT="3300"
 DEFAULT_ADMIN_PW="Admin123"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -50,7 +49,6 @@ panel_get() {
     let v = "";
     if (k === "publicIp") v = s.publicIp || "";
     else if (k === "genieUrl") v = s.genieUrl || "";
-    else if (k === "ztnetUrl") v = s.ztnetUrl || "";
     else if (k === "httpsDomain") v = cf.https ? cf.domain || "" : "";
     else if (k === "panelName") v = s.panelName || "VPN ACS";
     else if (k === "useIpsec") v = s.useIpsec ? "1" : "";
@@ -166,29 +164,19 @@ else
   MISSING+=("GenieACS           : lihat README langkah 4 (genie.sh)")
 fi
 
-# ---------- ZeroTier / ZTNET (opsional) ----------
-head1 "ZeroTier + ZTNET (opsional)"
-if [ -d "$ZTNET_DIR" ] || svc_exists zerotier-one; then
-  ZT_URL="$(panel_get ztnetUrl)"
-  if [ -z "$ZT_URL" ] && [ -f "$ZTNET_DIR/.env" ]; then
-    ZT_URL="$(grep -oP '^NEXTAUTH_URL=\K.*' "$ZTNET_DIR/.env" 2>/dev/null | tr -d '"' | tr -d "'")"
-  fi
-  ZT_URL="${ZT_URL:-http://${VPS_ADDR}:${ZTNET_PORT}}"
+# ---------- ZeroTier (opsional) ----------
+head1 "ZeroTier (opsional)"
+if svc_exists zerotier-one; then
   line "ZeroTier" "$(badge "$(svc_state zerotier-one)")"
-  if [ -d "$ZTNET_DIR" ]; then
-    line "ZTNET" "$(badge "$(svc_state ztnet)")"
-    line "Alamat web" "${GREEN}${ZT_URL}${NC}"
-    TCP_OPEN+=("${ZTNET_PORT}|Web ZTNET")
-  else
-    line "ZTNET" "${DIM}belum dipasang${NC}"
-  fi
+  line "Pengelolaan" "panel → menu ZeroTier (jaringan, rentang IP, perangkat)"
   ZTN="$(panel_get ztNet)"
   if [ -n "$ZTN" ]; then line "Jaringan panel" "$ZTN"
-  elif [ -f "$PANEL_DIR/server.js" ]; then line "Jaringan panel" "${YELLOW}belum dihubungkan${NC} (panel → menu ZeroTier)"; fi
+  elif [ -f "$PANEL_DIR/server.js" ]; then line "Jaringan panel" "${YELLOW}belum ada${NC} (panel → menu ZeroTier → Buat jaringan)"; fi
+  [ -d "$ZTNET_DIR" ] && line "ZTNET lama" "${YELLOW}masih terpasang${NC} (panel → menu ZeroTier → Pindahkan & lepas ZTNET)"
   UDP_OPEN+=("9993|ZeroTier")
 else
   line "Status" "${DIM}belum dipasang${NC} (tidak wajib, hanya untuk router RouterOS v7 ARM/ARM64)"
-  MISSING+=("ZeroTier + ZTNET   : bash pasang-ztnet.sh   (opsional)")
+  MISSING+=("ZeroTier           : panel → Add-on → ZeroTier → Install   (opsional)")
 fi
 
 # ---------- Firewall ----------

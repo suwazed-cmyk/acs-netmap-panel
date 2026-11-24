@@ -20,7 +20,6 @@ PANEL_PORT="8088"
 GENIE_ENV="/opt/genieacs/genieacs.env"
 GENIE_PATCH_DIR="/opt/genieacs-app"
 ZTNET_DIR="/opt/ztnet"
-ZTNET_PORT="3300"
 DEFAULT_ADMIN_PW="Admin123"
 NODE_BIN="$(command -v node || true)"
 
@@ -215,9 +214,9 @@ else
   skip "GenieACS belum dipasang (README langkah 4)"
 fi
 
-# ---------- ZeroTier / ZTNET ----------
-head1 "ZeroTier + ZTNET (opsional)"
-if [ -d "$ZTNET_DIR" ] || svc_exists zerotier-one; then
+# ---------- ZeroTier ----------
+head1 "ZeroTier (opsional)"
+if svc_exists zerotier-one; then
   cek_svc zerotier-one "ZeroTier"
   cek_udp 9993 "ZeroTier"
   if command -v zerotier-cli >/dev/null; then
@@ -230,19 +229,12 @@ if [ -d "$ZTNET_DIR" ] || svc_exists zerotier-one; then
       if echo "$L" | grep -q " OK "; then ok "VPS tergabung di jaringan $NW"
       else bad "VPS belum tergabung di jaringan $NW" "Panel → menu ZeroTier → Hubungkan VPS"; fi
     elif [ -f "$PANEL_DIR/server.js" ]; then
-      warn "Jaringan ZeroTier belum dihubungkan ke panel" "Panel → menu ZeroTier → pilih jaringan → Hubungkan VPS"
+      warn "Belum ada jaringan ZeroTier di panel" "Panel → menu ZeroTier → Buat jaringan"
     fi
   fi
-  if [ -d "$ZTNET_DIR" ]; then
-    svc_exists postgresql && cek_svc postgresql "Database ZTNET (PostgreSQL)"
-    cek_svc ztnet "ZTNET"
-    cek_tcp "$ZTNET_PORT" "web ZTNET" "journalctl -u ztnet -n 50 --no-pager"
-    cek_web "http://127.0.0.1:${ZTNET_PORT}/" "Web ZTNET" "journalctl -u ztnet -n 50 --no-pager"
-  else
-    skip "ZTNET belum dipasang (bash pasang-ztnet.sh)"
-  fi
+  [ -d "$ZTNET_DIR" ] && warn "ZTNET lama masih terpasang (tidak dipakai lagi)" "Panel → menu ZeroTier → Pindahkan & lepas ZTNET"
 else
-  skip "ZeroTier belum dipasang (opsional: bash pasang-ztnet.sh)"
+  skip "ZeroTier belum dipasang (opsional: panel → Add-on → ZeroTier)"
 fi
 
 # ---------- Hasil ----------
