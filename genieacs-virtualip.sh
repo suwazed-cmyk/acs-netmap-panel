@@ -15,6 +15,7 @@
 #  Bisa juga daftar dipisah koma: "10.101.0.0/24,10.102.0.0/24"
 # =====================================================================
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VIRTUAL_CIDR="10.100.0.0/14"
 GENIE_TAG="v1.2.13"
 
@@ -248,6 +249,9 @@ PYEOF
   echo
   ok "Selesai. Summon akan memakai IP virtual setelah ONT Inform 1x."
   echo "Cek: journalctl -u genieacs-cwmp -n 20 | grep version  (harus ada '+' di versi)"
+  local summary
+  summary="$SCRIPT_DIR/ringkasan.sh"
+  [ -f "$summary" ] && bash "$summary"
 }
 
 case "${1:-install}" in

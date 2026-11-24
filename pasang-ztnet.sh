@@ -15,6 +15,7 @@
 #    bash pasang-ztnet.sh status     -> cek status
 # =====================================================================
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ZTNET_PORT=3300
 ZTNET_DIR="/opt/ztnet"
 DROPIN_DIR="/etc/systemd/system/ztnet.service.d"
@@ -159,3 +160,5 @@ echo "   Langkah berikutnya:"
 echo "     1. Di ZTNET: Networks -> Create Network, atur rentang IPv4 (contoh 172.27.0.0/24)"
 echo "     2. Di panel VPN ACS: menu ZeroTier -> pilih jaringan -> Hubungkan VPS"
 echo "   Update ZTNET nanti: jalankan lagi bash $0 (port 3300 tetap)."
+SUMMARY="$SCRIPT_DIR/ringkasan.sh"
+[ -f "$SUMMARY" ] && bash "$SUMMARY"

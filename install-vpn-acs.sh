@@ -13,6 +13,7 @@
 #    bash install-vpn-acs.sh uninstall    -> hapus panel (akun VPN tetap)
 # =====================================================================
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PANEL_PORT="8088"
 # yes = izinkan L2TP biasa tanpa IPsec (seperti tunnel pada umumnya)
 ALLOW_PLAIN_L2TP="yes"
@@ -4881,16 +4882,21 @@ systemctl restart vpn-acs
 sleep 2
 systemctl is-active --quiet vpn-acs || fail "Panel gagal berjalan. Cek: journalctl -u vpn-acs -n 50"
 
-PUBIP="$(hostname -I | awk '{print $1}')"
-HTTPS_DOM="$("$NODE_BIN" -e 'try{const c=require(process.argv[1]).settings.cloudflare;if(c&&c.https)console.log(c.domain)}catch(e){}' "$APP_DIR/data.json" 2>/dev/null)"
 echo
 ok "Panel VPN ACS berjalan"
-if [ -n "$HTTPS_DOM" ]; then
-  echo -e "   Buka di browser: ${GREEN}https://${HTTPS_DOM}:${PANEL_PORT}${NC}"
+SUMMARY="$SCRIPT_DIR/ringkasan.sh"
+if [ -f "$SUMMARY" ]; then
+  bash "$SUMMARY"
 else
-  echo -e "   Buka di browser: ${GREEN}http://${PUBIP}:${PANEL_PORT}${NC}"
-  echo "   (Jika IP di atas bukan IP publik, pakai IP publik VPS Anda)"
-fi
-if "$NODE_BIN" -e 'const c=require("crypto");const a=require(process.argv[1]).admin;process.exit(a&&c.scryptSync(process.argv[2],a.salt,64).toString("hex")===a.hash?0:1)' "$APP_DIR/data.json" "$DEFAULT_ADMIN_PW" 2>/dev/null; then
-  echo -e "   Password login: ${YELLOW}${DEFAULT_ADMIN_PW}${NC} (password bawaan, segera ganti di Pengaturan)"
+  PUBIP="$(hostname -I | awk '{print $1}')"
+  HTTPS_DOM="$("$NODE_BIN" -e 'try{const c=require(process.argv[1]).settings.cloudflare;if(c&&c.https)console.log(c.domain)}catch(e){}' "$APP_DIR/data.json" 2>/dev/null)"
+  if [ -n "$HTTPS_DOM" ]; then
+    echo -e "   Buka di browser: ${GREEN}https://${HTTPS_DOM}:${PANEL_PORT}${NC}"
+  else
+    echo -e "   Buka di browser: ${GREEN}http://${PUBIP}:${PANEL_PORT}${NC}"
+    echo "   (Jika IP di atas bukan IP publik, pakai IP publik VPS Anda)"
+  fi
+  if "$NODE_BIN" -e 'const c=require("crypto");const a=require(process.argv[1]).admin;process.exit(a&&c.scryptSync(process.argv[2],a.salt,64).toString("hex")===a.hash?0:1)' "$APP_DIR/data.json" "$DEFAULT_ADMIN_PW" 2>/dev/null; then
+    echo -e "   Password login: ${YELLOW}${DEFAULT_ADMIN_PW}${NC} (password bawaan, segera ganti di Pengaturan)"
+  fi
 fi
