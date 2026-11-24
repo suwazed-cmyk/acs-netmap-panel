@@ -29,6 +29,8 @@ fail() { echo -e "${RED}[GAGAL]${NC} $*" >&2; exit 1; }
 
 # ZTNET_AUTO=1 : dipasang dari menu Add-on panel (tanpa pertanyaan, pilihan bawaan)
 AUTO="${ZTNET_AUTO:-0}"
+# Jangan biarkan apt (needrestart) me-restart panel di tengah pemasangan
+export NEEDRESTART_SUSPEND=1 NEEDRESTART_MODE=l DEBIAN_FRONTEND=noninteractive
 progress() { [ "$AUTO" = "1" ] && echo "@@PROGRESS $*"; return 0; }
 ask() { # ask "pertanyaan" "bawaan" -> isi variabel REPLY
   if [ "$AUTO" = "1" ]; then REPLY="$2"; echo "$1 $2 (otomatis)"; else read -r -p "$1" REPLY; REPLY="${REPLY:-$2}"; fi
@@ -135,6 +137,7 @@ echo "  - Kirim laporan error (jika ada): No"
 echo
 [ "$AUTO" = "1" ] || read -r -p "Tekan Enter untuk mulai..." _
 progress 18 "Memasang paket pendukung"
+dpkg --configure -a >/dev/null 2>&1 || true
 apt-get update -qq && apt-get install -y -qq sudo curl lsb-release >/dev/null || fail "Gagal memasang sudo/curl/lsb-release"
 progress 25 "Menjalankan installer resmi ZTNET (5-15 menit)"
 TERM="${TERM:-xterm}" bash -c 'curl -s http://install.ztnet.network | sudo -E bash'

@@ -2,3 +2,5 @@ node_modules/
 *.log
 data.json
 .env
+sessions.json
+addon-job.json

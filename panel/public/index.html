@@ -204,9 +204,28 @@
   .addon .am{padding:0 20px 12px;display:flex;flex-direction:column;gap:6px;font-size:12.5px;color:var(--muted)}
   .addon .am b{color:var(--text-2);font-weight:550}
   .addon .af{margin-top:auto;padding:12px 20px;border-top:1px solid var(--line);display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-  .jprog{height:10px;border-radius:99px;background:var(--line);overflow:hidden;margin:4px 0 6px}
-  .jprog i{display:block;height:100%;width:0;background:var(--primary);border-radius:99px;transition:width .4s ease}
+  .jprog{position:relative;height:12px;border-radius:99px;background:var(--line);overflow:hidden;margin:4px 0 6px}
+  .jprog i{position:relative;display:block;height:100%;width:0;min-width:12px;background:var(--primary);border-radius:99px;transition:width .6s ease;overflow:hidden}
+  .jprog.run i{background-image:linear-gradient(45deg,rgba(255,255,255,.22) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.22) 50%,rgba(255,255,255,.22) 75%,transparent 75%,transparent);background-size:22px 22px;animation:jstripe .8s linear infinite}
+  .jprog.run i::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.55),transparent);transform:translateX(-100%);animation:jshine 1.6s ease-in-out infinite}
   .jprog.ok i{background:var(--ok)}.jprog.bad i{background:var(--bad)}
+  @keyframes jstripe{to{background-position:22px 0}}
+  @keyframes jshine{to{transform:translateX(100%)}}
+  .jlive{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--muted);font-size:12.5px;min-height:20px}
+  .jlive .dot{width:8px;height:8px;border-radius:50%;background:var(--primary);flex:none;animation:jpulse 1.2s ease-in-out infinite}
+  .jlive.ok .dot{background:var(--ok);animation:none}.jlive.bad .dot{background:var(--bad);animation:none}.jlive.lost .dot{background:var(--warn)}
+  .jlive .sep{opacity:.5}
+  @keyframes jpulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.7)}}
+  .chk{list-style:none;margin:0;padding:6px 22px 10px}
+  .chk li{display:flex;gap:12px;padding:11px 0;border-bottom:1px solid var(--line);align-items:flex-start}
+  .chk li:last-child{border-bottom:0}
+  .chk .ci{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;flex:none;margin-top:1px}
+  .chk .ci svg{width:13px;height:13px}
+  .chk .ok .ci{background:var(--ok-soft);color:var(--ok)}.chk .bad .ci{background:var(--bad-soft);color:var(--bad)}.chk .warn .ci{background:var(--warn-soft);color:var(--warn)}
+  .chk b{font-weight:600;font-size:13.5px}
+  .chk .cd{color:var(--text-2);font-size:12.5px;margin-top:2px;word-break:break-word}
+  .chk .ch2{margin-top:4px;font-size:12px}
+  .chk .ch2 code{font-size:11.5px}
   .jtop{padding:16px 22px 6px}
   .jtop .jp{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
   .jtop .jp b{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
@@ -1119,6 +1138,30 @@ function viewAddons(v) {
     <div id="adBody"><div class="card"><div class="empty"><p>Memuat add-on…</p></div></div></div>`;
   fillAddons();
 }
+// Periksa apakah add-on terpasang dan berjalan dengan benar
+async function openAddonCheck(a) {
+  modal(`Periksa ${esc(a.name)}`, `<div class="jtop"><div class="jprog run"><i style="width:100%"></i></div><div class="jlive"><span class="dot"></span><span>Memeriksa ${esc(a.name)}…</span></div></div><div id="ckBody"></div>`,
+    `<button class="btn" id="ckAgain" type="button">${ic("refresh")}Periksa lagi</button><button class="btn pri" data-act="closemodal">Tutup</button>`, { size: "lg", flush: true });
+  const runCheck = async () => {
+    const top = $(".modal .jtop"); if (top) top.style.display = "";
+    $("#ckBody").innerHTML = "";
+    let r;
+    try { r = await api(`/api/addons/${a.id}/check`); }
+    catch (e) { if (top) top.style.display = "none"; $("#ckBody").innerHTML = `<div style="padding:16px 22px"><div class="note bad">${ic("alert")}<div><b>Gagal memeriksa</b>${esc(e.message)}</div></div></div>`; return; }
+    if (!$("#ckBody")) return;
+    if (top) top.style.display = "none";
+    const sum = r.bad ? `<div class="tst-sum fail">${ic("alert")}${r.bad} pemeriksaan gagal. Lihat saran perbaikan di bawah.</div>`
+      : r.warn ? `<div class="tst-sum ok">${ic("check")}${esc(r.name)} terpasang dan berjalan, dengan ${r.warn} catatan.</div>`
+      : `<div class="tst-sum ok">${ic("check")}${esc(r.name)} terpasang dan berjalan dengan benar.</div>`;
+    $("#ckBody").innerHTML = `<div style="padding:14px 22px 0">${sum}</div><ul class="chk">${r.checks.map((x) => {
+      const c = x.ok === true ? "ok" : x.ok === false ? "bad" : "warn";
+      return `<li class="${c}"><span class="ci">${ic(c === "ok" ? "check" : c === "bad" ? "x" : "alert")}</span><div style="min-width:0"><b>${esc(x.label)}</b>${x.detail ? `<div class="cd">${esc(x.detail)}</div>` : ""}${x.ok !== true && x.hint ? `<div class="ch2 muted">Saran: ${/^(systemctl|journalctl|apt-get|chown|zerotier-cli)/.test(x.hint) ? `<code>${esc(x.hint)}</code>` : esc(x.hint)}</div>` : ""}</div></li>`;
+    }).join("")}</ul>`;
+    paintIcons($("#ckBody"));
+  };
+  $("#ckAgain").onclick = runCheck;
+  runCheck();
+}
 async function fillAddons() {
   const b = $("#adBody"); if (!b) return;
   let r;
@@ -1142,6 +1185,7 @@ async function fillAddons() {
     else {
       if (a.kind === "aplikasi") btns.push(`<a class="btn pri" href="${esc(a.path)}/" target="_blank" rel="noopener">${ic("ext")}Buka</a>`, `<button class="btn" data-ad="update" data-id="${a.id}">${ic("refresh")}Perbarui</button>`, `<button class="btn" data-ad="path" data-id="${a.id}">${ic("edit")}Alamat</button>`);
       else btns.push(`<a class="btn pri" href="#/zerotier">${ic("hub")}Buka menu ZeroTier</a>`);
+      btns.push(`<button class="btn" data-ad="check" data-id="${a.id}">${ic("check")}Periksa</button>`);
       btns.push(`<span style="flex:1"></span><button class="btn ghost danger" data-ad="remove" data-id="${a.id}">Lepas</button>`);
     }
     return `<div class="card addon"><div class="ah"><span class="ai">${ic(a.icon || "puzzle")}</span><div style="min-width:0"><h3>${esc(a.name)} ${kind}</h3><p>${esc(a.desc)}</p></div></div>
@@ -1155,6 +1199,7 @@ async function fillAddons() {
   b.querySelectorAll("[data-ad]").forEach((btn) => (btn.onclick = () => {
     const a = r.list.find((x) => x.id === btn.dataset.id), act = btn.dataset.ad;
     if (act === "path") return openAddonPath(a);
+    if (act === "check") return openAddonCheck(a);
     if (act === "remove") {
       return confirmDialog({
         title: `Lepas ${esc(a.name)}?`, danger: true, ok: "Lepas", wide: true,
@@ -1192,19 +1237,38 @@ function openAddonPath(a) {
 let JOBPOLL = null;
 function openJob(after) {
   modal(`<span id="jTitle">Memproses…</span>`, `
-    <div class="jtop"><div class="jp"><b id="jPct">0%</b><span id="jDetail">Memulai…</span></div><div class="jprog" id="jBar"><i></i></div></div>
+    <div class="jtop"><div class="jp"><b id="jPct">0%</b><span id="jDetail">Memulai…</span></div><div class="jprog run" id="jBar"><i></i></div><div class="jlive" id="jLive"><span class="dot"></span><span id="jLiveTx">Menghubungi panel…</span></div></div>
     <ol class="steps" id="jSteps"></ol>
     <div id="jSum"></div>
     <details class="jlog more"><summary>Log proses</summary><pre class="code" id="jLog"></pre></details>`,
     `<button class="btn" data-act="closemodal" id="jClose">Tutup</button>`, { size: "lg", flush: true });
   clearInterval(JOBPOLL);
+  let fails = 0;
+  const dur = (n) => { n = Math.max(0, n | 0); const m = Math.floor(n / 60), x = n % 60; return m ? `${m} mnt ${String(x).padStart(2, "0")} dtk` : `${x} dtk`; };
   const tick = async () => {
     if (!$("#jSteps")) { clearInterval(JOBPOLL); return; }
-    let r; try { r = (await api("/api/addons/job")).job; } catch (e) { return; }
+    let r;
+    try {
+      const res = await fetch("/api/addons/job", { credentials: "same-origin", cache: "no-store" });
+      if (res.status === 401) { clearInterval(JOBPOLL); showLogin(); return; }
+      r = (await res.json()).job; fails = 0;
+    } catch (e) {
+      // panel sedang restart atau koneksi terputus: tetap menunggu, jangan dianggap gagal
+      fails++;
+      const lv = $("#jLive"); if (lv) { lv.className = "jlive lost"; $("#jLiveTx").textContent = `Koneksi ke panel terputus, mencoba lagi… (${fails})`; }
+      return;
+    }
     if (!r || !$("#jSteps")) return;
+    const lv = $("#jLive");
+    if (lv) {
+      lv.className = "jlive" + (r.done ? (r.ok ? " ok" : " bad") : "");
+      $("#jLiveTx").innerHTML = r.done
+        ? `${r.ok ? "Selesai" : r.interrupted ? "Terputus" : "Berhenti"} dalam ${dur(r.elapsed)}`
+        : `Sedang bekerja <span class="sep">·</span> berjalan ${dur(r.elapsed)}${r.quiet >= 20 ? ` <span class="sep">·</span> ${r.quiet >= 90 ? "langkah ini memang lama (mis. mengunduh paket), tidak macet" : `menunggu keluaran ${dur(r.quiet)}`}` : ""}`;
+    }
     $("#jTitle").textContent = r.done ? r.title : r.title.replace(/ (dipasang|diperbarui|dilepas|diaktifkan|dimatikan)$/, "") + " sedang diproses";
     $("#jPct").textContent = r.pct + "%";
-    $("#jBar").className = "jprog" + (r.done ? (r.ok ? " ok" : " bad") : "");
+    $("#jBar").className = "jprog" + (r.done ? (r.ok ? " ok" : " bad") : " run");
     $("#jBar i").style.width = r.pct + "%";
     const cur = r.steps[r.cur];
     $("#jDetail").textContent = r.done ? (r.ok ? "Selesai" : "Gagal") : (r.detail || (cur ? cur.label : "")) + "…";

@@ -44,7 +44,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.0.1";
+const VERSION = "2.0.2";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -2354,6 +2354,8 @@ const ADDONS = {
     repo: process.env.VPNACS_REPO_PANEL_ACS || "https://github.com/suwazed-cmyk/panel-acs.git",
     port: 8091,
     path: "/acs",
+    db: "data/panel-acs.db",
+    nbi: true,
     timer: { unit: "collect", script: "bin/collect.php", every: "*:0/15", desc: "Pencatat redaman ONT" },
   },
   bilingku: {
@@ -2364,6 +2366,7 @@ const ADDONS = {
     repo: process.env.VPNACS_REPO_BILINGKU || "https://github.com/suwazed-cmyk/bilingku.git",
     port: 8092,
     path: "/billing",
+    db: "data/bilingku.db",
   },
 };
 const RESERVED_PATHS = ["/api", "/index.html", "/.well-known"];
@@ -2405,12 +2408,48 @@ function addonsMigrate(d) {
   return ch;
 }
 // Proses install/update/lepas berjalan di latar belakang; browser memantau lewat /api/addons/job
+const JOB_FILE = path.dirname(DATA_FILE) + "/addon-job.json";
 let ADDON_JOB = null;
+function jobSave() {
+  if (!ADDON_JOB) return;
+  try {
+    const j = Object.assign({}, ADDON_JOB);
+    delete j.req;
+    fs.writeFileSync(JOB_FILE + ".tmp", JSON.stringify(j));
+    fs.renameSync(JOB_FILE + ".tmp", JOB_FILE);
+  } catch (e) {
+    // abaikan
+  }
+}
+// Saat panel menyala: proses yang terputus ditandai gagal agar tidak terlihat macet
+function jobRestore() {
+  try {
+    const j = JSON.parse(fs.readFileSync(JOB_FILE, "utf8"));
+    if (!j || !j.steps) return;
+    if (!j.done) {
+      const i = Math.max(0, Math.min(j.cur || 0, j.steps.length - 1));
+      j.steps[i].state = "bad";
+      j.steps[i].detail = "Terputus";
+      j.done = true;
+      j.ok = false;
+      j.interrupted = true;
+      j.error = "Panel ter-restart saat proses berjalan (biasanya karena pembaruan paket sistem atau install ulang panel). Klik tombol yang sama lagi: langkah yang sudah selesai akan dilewati.";
+      j.log = (j.log || []).concat(["", "== Panel ter-restart, proses terputus"]);
+      j.finished = Date.now();
+      logActivity(null, `${j.title} terputus`, "Panel ter-restart saat proses berjalan");
+    }
+    ADDON_JOB = j;
+    jobSave();
+  } catch (e) {
+    // belum ada
+  }
+}
 function jobLog(line) {
   if (!ADDON_JOB) return;
   const t = String(line).replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").replace(/\r/g, "").trimEnd();
   if (!t) return;
   ADDON_JOB.log.push(t);
+  ADDON_JOB.lastOut = Date.now();
   if (ADDON_JOB.log.length > 400) ADDON_JOB.log.splice(0, ADDON_JOB.log.length - 400);
 }
 // Jalankan perintah, alirkan keluaran ke log. Baris "@@PROGRESS n" menggeser progres langkah.
@@ -2418,7 +2457,7 @@ function runStream(cmd, args, opts) {
   return new Promise((resolve) => {
     let p;
     try {
-      p = spawn(cmd, args, Object.assign({ env: Object.assign({}, process.env, { DEBIAN_FRONTEND: "noninteractive", LC_ALL: "C.UTF-8" }) }, opts || {}));
+      p = spawn(cmd, args, Object.assign({ env: Object.assign({}, process.env, { DEBIAN_FRONTEND: "noninteractive", LC_ALL: "C.UTF-8", NEEDRESTART_SUSPEND: "1", NEEDRESTART_MODE: "l" }) }, opts || {}));
     } catch (e) {
       jobLog(e.message);
       return resolve({ code: -2 });
@@ -2449,6 +2488,8 @@ function runStream(cmd, args, opts) {
 }
 async function runJob(job, steps) {
   ADDON_JOB = job;
+  job.started = Date.now();
+  job.lastOut = Date.now();
   job.steps = steps.map((x) => ({ label: x.label, state: "wait", detail: "" }));
   const total = steps.reduce((a, x) => a + (x.weight || 1), 0);
   let doneW = 0;
@@ -2456,6 +2497,7 @@ async function runJob(job, steps) {
     const cur = steps[job.cur] || { weight: 0 };
     job.pct = Math.min(99, Math.round(((doneW + (cur.weight || 1) * (job.sub || 0)) / total) * 100));
   }, 300);
+  const saver = setInterval(jobSave, 2000);
   for (let i = 0; i < steps.length; i++) {
     job.cur = i;
     job.sub = 0;
@@ -2480,12 +2522,105 @@ async function runJob(job, steps) {
     doneW += steps[i].weight || 1;
   }
   clearInterval(tick);
+  clearInterval(saver);
   job.done = true;
   job.ok = !job.error;
   job.pct = job.ok ? 100 : Math.round((doneW / total) * 100);
   job.finished = Date.now();
   logActivity(job.req || null, `${job.title} ${job.ok ? "berhasil" : "gagal"}`, job.ok ? "" : job.error);
   delete job.req;
+  jobSave();
+}
+// ---------- Pemeriksaan add-on: apakah terpasang dan berjalan dengan benar ----------
+function httpCode(opts) {
+  return new Promise((resolve) => {
+    const rq = http.request(Object.assign({ host: "127.0.0.1", method: "GET", timeout: 5000 }, opts), (r) => {
+      r.resume();
+      resolve(r.statusCode);
+    });
+    rq.on("error", () => resolve(0));
+    rq.on("timeout", () => {
+      rq.destroy();
+      resolve(0);
+    });
+    rq.end();
+  });
+}
+async function addonCheck(id) {
+  const a = ADDONS[id];
+  const d = loadData();
+  const out = [];
+  const add = (label, ok, detail, hint) => out.push({ label, ok, detail: detail || "", hint: hint || "" });
+  if (a.kind === "sistem") {
+    const z1 = (await run("systemctl", ["is-active", "zerotier-one"])).out.trim();
+    add("Layanan zerotier-one", z1 === "active", z1 || "tidak ada", z1 === "active" ? "" : "systemctl restart zerotier-one");
+    const st = await ztApi("GET", "/status");
+    add("API ZeroTier di VPS", !!st.ok, st.ok ? `Node ${st.json.address} · ${st.json.online ? "online" : "offline"}` : st.error, st.ok ? "" : "Cek: zerotier-cli info");
+    if (st.ok && st.json && !st.json.online) out[out.length - 1].ok = null;
+    const z2 = (await run("systemctl", ["is-active", "ztnet"])).out.trim();
+    add("Layanan ztnet", z2 === "active", z2 || "tidak ada", z2 === "active" ? "" : "journalctl -u ztnet -n 50");
+    const wc = await httpCode({ port: ZTNET_PORT, path: "/" });
+    add(`Web ZTNET (port ${ZTNET_PORT})`, wc > 0 && wc < 500, wc ? `HTTP ${wc}` : "Tidak menjawab", wc > 0 && wc < 500 ? "" : "systemctl restart ztnet");
+    const zt = d.settings.zt || {};
+    if (zt.nwid) {
+      const n = await ztApi("GET", `/network/${zt.nwid}`);
+      add("Jaringan terhubung", !!(n.ok && n.json && n.json.status === "OK"), n.ok ? `${zt.name || zt.nwid} · status ${n.json.status} · IP VPS ${(n.json.assignedAddresses || []).join(", ") || "-"}` : n.error, "Menu ZeroTier → Hubungkan VPS");
+    } else add("Jaringan terhubung", null, "Belum ada jaringan yang dihubungkan", "Buat jaringan di ZTNET, lalu menu ZeroTier → Hubungkan VPS");
+    return out;
+  }
+  const dir = addonDir(id);
+  const okDir = fs.existsSync(dir + "/index.php");
+  const ver = okDir ? (await run("git", ["-C", dir, "log", "-1", "--format=%h %cs"])).out.trim() : "";
+  add("Berkas aplikasi", okDir, okDir ? `${dir}${ver ? " · versi " + ver : ""}` : `${dir} tidak lengkap`, okDir ? "" : "Klik Perbarui atau Install ulang");
+  const php = await run("php", ["-r", 'echo PHP_VERSION; foreach (["pdo_sqlite","curl","mbstring"] as $e) if (!extension_loaded($e)) echo " -", $e;']);
+  const phpOk = php.code === 0 && !/ -/.test(php.out);
+  add("PHP", phpOk, php.code === 0 ? "PHP " + php.out.trim().replace(/ -/g, " kurang: ") : "PHP tidak ditemukan", phpOk ? "" : "apt-get install -y php-cli php-sqlite3 php-curl php-mbstring");
+  const svc = (await run("systemctl", ["is-active", `addon-${id}`])).out.trim();
+  add(`Layanan addon-${id}`, svc === "active", svc || "tidak ada", svc === "active" ? "" : `journalctl -u addon-${id} -n 50`);
+  if (a.timer) {
+    const t = (await run("systemctl", ["is-active", `addon-${id}-${a.timer.unit}.timer`])).out.trim();
+    add(a.timer.desc || "Tugas berkala", t === "active", t === "active" ? `Berjalan (${a.timer.every})` : t || "tidak ada", t === "active" ? "" : `systemctl enable --now addon-${id}-${a.timer.unit}.timer`);
+  }
+  const c1 = await httpCode({ port: a.port, path: "/" });
+  add(`Aplikasi menjawab (port ${a.port})`, c1 > 0 && c1 < 500, c1 ? `HTTP ${c1}` : "Tidak menjawab", c1 > 0 && c1 < 500 ? "" : `journalctl -u addon-${id} -n 50`);
+  const pth = addonPath(d, id);
+  const c2 = await httpCode({ port: a.port, path: "/", headers: { "X-Forwarded-Prefix": pth, "X-Forwarded-Proto": "http" } });
+  const route = proxyPathTarget(pth + "/");
+  const viaOk = !!route && c2 > 0 && c2 < 500;
+  add(`Alamat ${pth}/ di panel`, viaOk, !route ? "Belum terdaftar di panel" : viaOk ? `Diteruskan ke port ${route.port}` : `Diteruskan ke port ${route.port}, tetapi aplikasi tidak menjawab`, !route ? "Klik Perbarui" : viaOk ? "" : `systemctl restart addon-${id}`);
+  const w = await run("runuser", ["-u", "www-data", "--", "test", "-w", dir + "/data"]);
+  add("Folder data bisa ditulis", w.code === 0, w.code === 0 ? dir + "/data" : "Tidak bisa ditulis oleh www-data", w.code === 0 ? "" : `chown -R www-data:www-data ${dir}/data`);
+  if (a.db) {
+    const q = await run("runuser", ["-u", "www-data", "--", "php", "-r", '$p=new PDO("sqlite:".$argv[1]); echo $p->query("PRAGMA quick_check")->fetchColumn(), " ", round(filesize($argv[1])/1024), " KB";', dir + "/" + a.db]);
+    const dbOk = q.code === 0 && /^ok /.test(q.out.trim());
+    add("Database SQLite", fs.existsSync(dir + "/" + a.db) ? dbOk : null, fs.existsSync(dir + "/" + a.db) ? (dbOk ? `Sehat · ${q.out.trim().slice(3)}` : q.out.trim().slice(0, 200)) : "Belum dibuat (dibuat saat aplikasi pertama dibuka)", dbOk ? "" : "Klik Perbarui untuk menyiapkan ulang data");
+  }
+  let link = null;
+  try {
+    link = JSON.parse(fs.readFileSync(dir + "/data/panel-link.json", "utf8"));
+  } catch (e) {
+    // belum ada
+  }
+  const linkOk = !!(link && link.key === d.settings.addonKey && link.prefix === pth);
+  add("Penghubung ke panel utama", linkOk, link ? (linkOk ? "Kunci dan alamat cocok" : "Kunci atau alamat tidak cocok") : "panel-link.json tidak ada", linkOk ? "" : "Klik Perbarui");
+  if (link && phpOk) {
+    const api = await run("runuser", ["-u", "www-data", "--", "php", "-r", '$l=json_decode(file_get_contents($argv[1]),true); $c=curl_init(rtrim($l["url"],"/")."/api/addon/routers"); curl_setopt_array($c,[CURLOPT_RETURNTRANSFER=>1,CURLOPT_TIMEOUT=>8,CURLOPT_HTTPHEADER=>["X-Addon-Key: ".$l["key"]]]); $b=curl_exec($c); $j=json_decode((string)$b,true); echo curl_getinfo($c,CURLINFO_HTTP_CODE)," ",is_array($j)&&isset($j["routers"])?count($j["routers"]):-1;', dir + "/data/panel-link.json"]);
+    const m = api.out.trim().match(/^(\d+) (-?\d+)$/);
+    const apiOk = !!(m && m[1] === "200" && m[2] !== "-1");
+    add("Aplikasi membaca router panel", apiOk, apiOk ? `${m[2]} router terbaca` : `Gagal (${api.out.trim().slice(0, 120) || "tidak ada jawaban"})`, apiOk ? "" : "Klik Perbarui, lalu restart panel: systemctl restart vpn-acs");
+  }
+  if (a.nbi) {
+    const nb = nbiBase();
+    let u;
+    try {
+      u = new URL(nb + "/devices/?projection=_id&limit=1");
+    } catch (e) {
+      u = null;
+    }
+    const c3 = u ? await httpCode({ host: u.hostname, port: u.port || 80, path: u.pathname + u.search }) : 0;
+    add("GenieACS NBI", c3 === 200, c3 ? `${nb} · HTTP ${c3}` : `${nb} tidak menjawab`, c3 === 200 ? "" : "systemctl restart genieacs-nbi");
+  }
+  return out;
 }
 function writeIfChanged(file, text, mode) {
   try {
@@ -2564,6 +2699,9 @@ function phpInstallSteps(id, req, opts) {
     run: async (job) => {
       const chk = await run("php", ["-r", 'echo PHP_VERSION, " ", (extension_loaded("pdo_sqlite") && extension_loaded("curl") && extension_loaded("mbstring")) ? "lengkap" : "kurang";']);
       if (chk.code === 0 && /lengkap/.test(chk.out)) return { skip: true, detail: `PHP ${chk.out.split(" ")[0]} sudah ada` };
+      // pulihkan paket yang setengah terpasang (mis. proses sebelumnya terputus)
+      job.detail = "memeriksa paket";
+      await runStream("dpkg", ["--configure", "-a"], { timeoutMs: 10 * 60 * 1000 });
       job.detail = "apt-get update";
       job.sub = 0.1;
       const u = await runStream("apt-get", ["update", "-q"], { timeoutMs: 10 * 60 * 1000 });
@@ -2609,7 +2747,7 @@ function phpInstallSteps(id, req, opts) {
       const d = loadData();
       fs.mkdirSync(dir + "/data", { recursive: true });
       // Penghubung ke panel utama: alamat lokal + kunci rahasia (hanya dari 127.0.0.1)
-      writeIfChanged(dir + "/data/panel-link.json", JSON.stringify({ url: `http://127.0.0.1:${PORT}`, key: d.settings.addonKey, prefix: addonPath(d, id), nbi: NBI_URL.replace(/\/$/, "") }, null, 2), 0o640);
+      writeIfChanged(dir + "/data/panel-link.json", JSON.stringify({ url: `http://127.0.0.1:${PORT}`, key: d.settings.addonKey, prefix: addonPath(d, id), nbi: nbiBase() }, null, 2), 0o640);
       await run("chown", ["-R", "www-data:www-data", dir + "/data"]);
       await run("chmod", ["750", dir + "/data"]);
       if (fs.existsSync(dir + "/bin/setup.php")) {
@@ -3119,11 +3257,42 @@ function stdOffSteps() {
 }
 
 // ---------- Sesi & keamanan login ----------
+// Sesi disimpan ke berkas (hanya hash token) agar tidak logout saat panel di-restart
+const SESSION_FILE = path.dirname(DATA_FILE) + "/sessions.json";
 const sessions = new Map();
 const loginFails = new Map();
+const tokHash = (t) => crypto.createHash("sha256").update(String(t)).digest("hex");
+let sessSaveTimer = null;
+function sessionsSave(now) {
+  const write = () => {
+    sessSaveTimer = null;
+    try {
+      const o = {};
+      const n = Date.now();
+      for (const [k, v] of sessions) if (v > n) o[k] = v;
+      fs.writeFileSync(SESSION_FILE + ".tmp", JSON.stringify(o), { mode: 0o600 });
+      fs.renameSync(SESSION_FILE + ".tmp", SESSION_FILE);
+    } catch (e) {
+      // abaikan
+    }
+  };
+  if (now) return write();
+  if (!sessSaveTimer) sessSaveTimer = setTimeout(write, 30 * 1000);
+}
+function sessionsLoad() {
+  try {
+    const o = JSON.parse(fs.readFileSync(SESSION_FILE, "utf8"));
+    const n = Date.now();
+    for (const [k, v] of Object.entries(o)) if (/^[a-f0-9]{64}$/.test(k) && v > n) sessions.set(k, v);
+  } catch (e) {
+    // belum ada
+  }
+}
+sessionsLoad();
 function newSession() {
   const t = crypto.randomBytes(32).toString("hex");
-  sessions.set(t, Date.now() + SESSION_TTL);
+  sessions.set(tokHash(t), Date.now() + SESSION_TTL);
+  sessionsSave(true);
   return t;
 }
 function getCookie(req, name) {
@@ -3136,13 +3305,15 @@ function getCookie(req, name) {
 }
 function authed(req) {
   const t = getCookie(req, "vpnacs");
-  const exp = t && sessions.get(t);
+  const k = t && tokHash(t);
+  const exp = k && sessions.get(k);
   if (!exp) return false;
   if (exp < Date.now()) {
-    sessions.delete(t);
+    sessions.delete(k);
     return false;
   }
-  sessions.set(t, Date.now() + SESSION_TTL);
+  sessions.set(k, Date.now() + SESSION_TTL);
+  sessionsSave();
   return true;
 }
 function clientIp(req) {
@@ -3237,7 +3408,8 @@ async function handleApi(req, res, url) {
   }
   if (p === "/api/logout" && method === "POST") {
     if (authed(req)) logActivity(req, "Logout", "");
-    sessions.delete(getCookie(req, "vpnacs"));
+    sessions.delete(tokHash(getCookie(req, "vpnacs")));
+    sessionsSave(true);
     return send(res, 200, { ok: true }, { "Set-Cookie": `vpnacs=; ${cookieFlags(req)}; Max-Age=0` });
   }
   if (p === "/api/me" && method === "GET") return send(res, 200, { loggedIn: authed(req), panelName: brandOf(loadData()) });
@@ -3594,13 +3766,20 @@ async function handleApi(req, res, url) {
   if (p === "/api/addons/job" && method === "GET") {
     if (!ADDON_JOB) return send(res, 200, { job: null });
     const j = ADDON_JOB;
-    return send(res, 200, { job: { id: j.id, addon: j.addon, title: j.title, pct: j.pct || 0, cur: j.cur, detail: j.detail || "", steps: j.steps, log: j.log.slice(-120), done: !!j.done, ok: !!j.ok, error: j.error || "" } });
+    const now = Date.now();
+    return send(res, 200, { job: { id: j.id, addon: j.addon, title: j.title, pct: j.pct || 0, cur: j.cur, detail: j.detail || "", steps: j.steps, log: (j.log || []).slice(-120), done: !!j.done, ok: !!j.ok, error: j.error || "", interrupted: !!j.interrupted, elapsed: Math.round(((j.done ? j.finished || now : now) - (j.started || now)) / 1000), quiet: j.done ? 0 : Math.round((now - (j.lastOut || now)) / 1000) } });
   }
-  const am = p.match(/^\/api\/addons\/([a-z-]+)(?:\/(install|update|remove))?$/);
+  const am = p.match(/^\/api\/addons\/([a-z-]+)(?:\/(install|update|remove|check))?$/);
   if (am && ADDONS[am[1]]) {
     const id = am[1];
     const a = ADDONS[id];
     const action = am[2];
+    if (action === "check" && method === "GET") {
+      if (!addonInstalled(loadData(), id)) return send(res, 400, { error: `${a.name} belum dipasang.` });
+      const checks = await addonCheck(id);
+      const bad = checks.filter((x) => x.ok === false).length, warn = checks.filter((x) => x.ok === null).length;
+      return send(res, 200, { name: a.name, checks, ok: !bad, bad, warn });
+    }
     if (!action && method === "PUT") {
       if (a.kind !== "aplikasi") return send(res, 400, { error: "Add-on ini tidak punya alamat sendiri." });
       const v = "/" + String(body.path || "").trim().replace(/^\/+|\/+$/g, "").toLowerCase();
@@ -4164,6 +4343,7 @@ if (process.argv[2] === "--set-password") {
     }
   }, 60 * 1000);
   setInterval(certReloadCheck, 3600 * 1000);
+  jobRestore();
   httpServer.on("upgrade", onUpgrade);
   const front = net.createServer(frontHandler);
   front.listen(PORT, HOST, () => console.log(`Panel VPN ACS berjalan di port ${PORT}`));
