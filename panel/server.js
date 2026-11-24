@@ -152,6 +152,15 @@ function checkPassword(pw, rec) {
   const r = Buffer.from(rec.hash, "hex");
   return h.length === r.length && crypto.timingSafeEqual(h, r);
 }
+// Password bawaan saat instalasi (tinggal Enter). Panel menampilkan peringatan sampai diganti.
+const DEFAULT_ADMIN_PW = "Admin123";
+let DEFPW_CACHE = { hash: null, v: false };
+function isDefaultPw(d) {
+  const rec = d && d.admin;
+  if (!rec || !rec.hash) return false;
+  if (DEFPW_CACHE.hash !== rec.hash) DEFPW_CACHE = { hash: rec.hash, v: checkPassword(DEFAULT_ADMIN_PW, rec) };
+  return DEFPW_CACHE.v;
+}
 function randomPassword(len) {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
   const bytes = crypto.randomBytes(len);
@@ -2158,6 +2167,7 @@ async function handleApi(req, res, url) {
         genieCidr: st.genieCidr,
         virtualPool: VIRTUAL_POOL,
         acsUrl: `http://${st.tun.local}:${ACS_PORT}`,
+        defaultPassword: isDefaultPw(d),
         genieUrl: genieUrl(d, st.publicIp),
         genieUrlManual: (d.settings && d.settings.genieUrl) || "",
         ztnetUrl: ztnetUrl(d, st.publicIp),
@@ -2711,6 +2721,7 @@ async function handleApi(req, res, url) {
     if (body.newPassword !== undefined) {
       if (!checkPassword(body.oldPassword || "", d.admin)) return send(res, 400, { error: "Password lama salah." });
       if (String(body.newPassword).length < 8) return send(res, 400, { error: "Password baru minimal 8 karakter." });
+      if (String(body.newPassword) === DEFAULT_ADMIN_PW) return send(res, 400, { error: "Gunakan password selain password bawaan." });
       d.admin = hashPassword(body.newPassword);
       logs.push(["Password admin diganti", ""]);
     }

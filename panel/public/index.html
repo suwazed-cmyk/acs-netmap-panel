@@ -697,6 +697,7 @@ window.addEventListener("hashchange", route);
 /* ================= Dashboard ================= */
 function issues() {
   const s = STATE.settings, list = [];
+  if (s.defaultPassword) list.push({ t: "Password admin masih bawaan", d: "Password Admin123 mudah ditebak. Ganti di Pengaturan → Umum → Password admin.", go: "#/pengaturan" });
   if (!s.publicIp) list.push({ t: "Alamat VPS belum diisi", d: "Script MikroTik membutuhkan alamat VPS.", go: "#/pengaturan" });
   if (s.genieCidr !== null && !genieOk(s.genieCidr)) list.push({ t: "Patch IP virtual GenieACS belum aktif", d: "Summon ke ONT akan gagal.", go: "#/genieacs" });
   const off = STATE.sites.filter((x) => x.state === "down");
@@ -1274,6 +1275,7 @@ function setGeneral(b) {
       </form>
     </div>
     <div class="card"><div class="ch"><h2>Password admin</h2></div><form class="cb" id="pwForm" style="padding-top:4px">
+      ${STATE.settings.defaultPassword ? `<div class="note warn" style="margin-bottom:12px">${ic("alert")}<div><b>Masih memakai password bawaan</b>Isi password lama dengan <code>Admin123</code>, lalu buat password baru.</div></div>` : ""}
       <div class="f2"><div><label for="pOld">Password lama</label><input id="pOld" type="password" autocomplete="current-password"></div>
         <div><label for="pNew">Password baru</label><input id="pNew" type="password" autocomplete="new-password" placeholder="Minimal 8 karakter"></div></div>
       <div class="err" id="pwErr"></div>
@@ -1310,7 +1312,7 @@ function setGeneral(b) {
   $("#pwForm").onsubmit = async (e) => {
     e.preventDefault(); $("#pwErr").textContent = "";
     const btn = $("#pwForm button"); busyBtn(btn, true);
-    try { await api("/api/settings", { method: "PUT", body: { oldPassword: $("#pOld").value, newPassword: $("#pNew").value } }); $("#pOld").value = ""; $("#pNew").value = ""; doneDialog("Password admin diganti", "Gunakan password baru saat login berikutnya."); }
+    try { await api("/api/settings", { method: "PUT", body: { oldPassword: $("#pOld").value, newPassword: $("#pNew").value } }); $("#pOld").value = ""; $("#pNew").value = ""; await load(); route(); doneDialog("Password admin diganti", "Gunakan password baru saat login berikutnya."); }
     catch (err) { $("#pwErr").textContent = err.message; }
     busyBtn(btn, false);
   };

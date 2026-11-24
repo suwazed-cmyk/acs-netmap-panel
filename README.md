@@ -106,7 +106,9 @@ Cek: `bash genieacs-virtualip.sh status`
 cd /root/suwazed-panel
 bash install-vpn-acs.sh
 ```
-Buka `http://IP_VPS:8088` lalu login dengan password yang dibuat.
+Saat ditanya password admin, cukup tekan **Enter** untuk memakai password bawaan **`Admin123`**, atau ketik password sendiri (minimal 8 karakter).
+
+Buka `http://IP_VPS:8088` lalu login. Jika masih memakai `Admin123`, dashboard menampilkan peringatan sampai password diganti di **Pengaturan → Umum → Password admin**.
 
 ### 7. Firewall provider
 Jangan menyalakan `ufw` (bentrok dengan aturan VPN). Buka di firewall provider jika ada:
@@ -206,7 +208,7 @@ Jika GenieACS di-update, jalankan ulang `bash genieacs-virtualip.sh`.
 
 ## Perintah berguna
 ```bash
-bash install-vpn-acs.sh password     # ganti password admin panel
+bash install-vpn-acs.sh password     # ganti/reset password admin panel (Enter = Admin123)
 bash install-vpn-acs.sh uninstall    # hapus panel (akun VPN tetap)
 bash genieacs-virtualip.sh rollback  # kembali ke GenieACS asli
 

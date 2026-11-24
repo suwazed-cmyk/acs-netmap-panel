@@ -30,16 +30,21 @@ fail() { echo -e "${RED}[GAGAL]${NC} $*"; exit 1; }
 NODE_BIN="$(command -v node || true)"
 [ -n "$NODE_BIN" ] || fail "Node.js tidak ditemukan. Jalankan genie.sh dulu."
 
+DEFAULT_ADMIN_PW="Admin123"
 ask_password() {
   local p1 p2
   while true; do
-    read -r -s -p "Buat password admin panel (minimal 8 karakter): " p1; echo
-    [ ${#p1} -ge 8 ] || { echo "Terlalu pendek, coba lagi."; continue; }
+    read -r -s -p "Password admin panel (Enter = ${DEFAULT_ADMIN_PW}): " p1; echo
+    if [ -z "$p1" ]; then p1="$DEFAULT_ADMIN_PW"; break; fi
+    [ ${#p1} -ge 8 ] || { echo "Minimal 8 karakter, coba lagi (atau Enter untuk password bawaan)."; continue; }
     read -r -s -p "Ulangi password: " p2; echo
     [ "$p1" = "$p2" ] || { echo "Tidak sama, coba lagi."; continue; }
     break
   done
   "$NODE_BIN" "$APP_DIR/server.js" --set-password "$p1"
+  if [ "$p1" = "$DEFAULT_ADMIN_PW" ]; then
+    warn "Memakai password bawaan ${DEFAULT_ADMIN_PW}. Segera ganti di Pengaturan panel."
+  fi
 }
 
 if [ "${1:-}" = "password" ]; then
@@ -288,6 +293,15 @@ function checkPassword(pw, rec) {
   const h = crypto.scryptSync(String(pw), rec.salt, 64);
   const r = Buffer.from(rec.hash, "hex");
   return h.length === r.length && crypto.timingSafeEqual(h, r);
+}
+// Password bawaan saat instalasi (tinggal Enter). Panel menampilkan peringatan sampai diganti.
+const DEFAULT_ADMIN_PW = "Admin123";
+let DEFPW_CACHE = { hash: null, v: false };
+function isDefaultPw(d) {
+  const rec = d && d.admin;
+  if (!rec || !rec.hash) return false;
+  if (DEFPW_CACHE.hash !== rec.hash) DEFPW_CACHE = { hash: rec.hash, v: checkPassword(DEFAULT_ADMIN_PW, rec) };
+  return DEFPW_CACHE.v;
 }
 function randomPassword(len) {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
@@ -2295,6 +2309,7 @@ async function handleApi(req, res, url) {
         genieCidr: st.genieCidr,
         virtualPool: VIRTUAL_POOL,
         acsUrl: `http://${st.tun.local}:${ACS_PORT}`,
+        defaultPassword: isDefaultPw(d),
         genieUrl: genieUrl(d, st.publicIp),
         genieUrlManual: (d.settings && d.settings.genieUrl) || "",
         ztnetUrl: ztnetUrl(d, st.publicIp),
@@ -2848,6 +2863,7 @@ async function handleApi(req, res, url) {
     if (body.newPassword !== undefined) {
       if (!checkPassword(body.oldPassword || "", d.admin)) return send(res, 400, { error: "Password lama salah." });
       if (String(body.newPassword).length < 8) return send(res, 400, { error: "Password baru minimal 8 karakter." });
+      if (String(body.newPassword) === DEFAULT_ADMIN_PW) return send(res, 400, { error: "Gunakan password selain password bawaan." });
       d.admin = hashPassword(body.newPassword);
       logs.push(["Password admin diganti", ""]);
     }
@@ -3655,6 +3671,7 @@ window.addEventListener("hashchange", route);
 /* ================= Dashboard ================= */
 function issues() {
   const s = STATE.settings, list = [];
+  if (s.defaultPassword) list.push({ t: "Password admin masih bawaan", d: "Password Admin123 mudah ditebak. Ganti di Pengaturan → Umum → Password admin.", go: "#/pengaturan" });
   if (!s.publicIp) list.push({ t: "Alamat VPS belum diisi", d: "Script MikroTik membutuhkan alamat VPS.", go: "#/pengaturan" });
   if (s.genieCidr !== null && !genieOk(s.genieCidr)) list.push({ t: "Patch IP virtual GenieACS belum aktif", d: "Summon ke ONT akan gagal.", go: "#/genieacs" });
   const off = STATE.sites.filter((x) => x.state === "down");
@@ -4232,6 +4249,7 @@ function setGeneral(b) {
       </form>
     </div>
     <div class="card"><div class="ch"><h2>Password admin</h2></div><form class="cb" id="pwForm" style="padding-top:4px">
+      ${STATE.settings.defaultPassword ? `<div class="note warn" style="margin-bottom:12px">${ic("alert")}<div><b>Masih memakai password bawaan</b>Isi password lama dengan <code>Admin123</code>, lalu buat password baru.</div></div>` : ""}
       <div class="f2"><div><label for="pOld">Password lama</label><input id="pOld" type="password" autocomplete="current-password"></div>
         <div><label for="pNew">Password baru</label><input id="pNew" type="password" autocomplete="new-password" placeholder="Minimal 8 karakter"></div></div>
       <div class="err" id="pwErr"></div>
@@ -4268,7 +4286,7 @@ function setGeneral(b) {
   $("#pwForm").onsubmit = async (e) => {
     e.preventDefault(); $("#pwErr").textContent = "";
     const btn = $("#pwForm button"); busyBtn(btn, true);
-    try { await api("/api/settings", { method: "PUT", body: { oldPassword: $("#pOld").value, newPassword: $("#pNew").value } }); $("#pOld").value = ""; $("#pNew").value = ""; doneDialog("Password admin diganti", "Gunakan password baru saat login berikutnya."); }
+    try { await api("/api/settings", { method: "PUT", body: { oldPassword: $("#pOld").value, newPassword: $("#pNew").value } }); $("#pOld").value = ""; $("#pNew").value = ""; await load(); route(); doneDialog("Password admin diganti", "Gunakan password baru saat login berikutnya."); }
     catch (err) { $("#pwErr").textContent = err.message; }
     busyBtn(btn, false);
   };
@@ -4872,4 +4890,7 @@ if [ -n "$HTTPS_DOM" ]; then
 else
   echo -e "   Buka di browser: ${GREEN}http://${PUBIP}:${PANEL_PORT}${NC}"
   echo "   (Jika IP di atas bukan IP publik, pakai IP publik VPS Anda)"
+fi
+if "$NODE_BIN" -e 'const c=require("crypto");const a=require(process.argv[1]).admin;process.exit(a&&c.scryptSync(process.argv[2],a.salt,64).toString("hex")===a.hash?0:1)' "$APP_DIR/data.json" "$DEFAULT_ADMIN_PW" 2>/dev/null; then
+  echo -e "   Password login: ${YELLOW}${DEFAULT_ADMIN_PW}${NC} (password bawaan, segera ganti di Pengaturan)"
 fi
