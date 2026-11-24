@@ -12,12 +12,15 @@ const tls = require("tls");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const { execFile } = require("child_process");
+const { execFile, spawn } = require("child_process");
 
 // ---------- Konfigurasi ----------
 const ROOT = process.env.VPNACS_FSROOT || ""; // hanya untuk pengujian
 const PORT = parseInt(process.env.VPNACS_PORT || "8088", 10);
 const HOST = process.env.VPNACS_HOST || "0.0.0.0";
+// Hanya untuk pengujian (VPNACS_DRYRUN): port pengganti 80/443
+const STD_HTTP = parseInt(process.env.VPNACS_STD_HTTP || "18080", 10);
+const STD_HTTPS = parseInt(process.env.VPNACS_STD_HTTPS || "18443", 10);
 const APP_DIR = __dirname;
 const DATA_FILE = ROOT + "/opt/vpn-acs/data.json";
 const CHAP_FILE = ROOT + "/etc/ppp/chap-secrets";
@@ -41,7 +44,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "1.9.1";
+const VERSION = "2.0.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -568,8 +571,9 @@ function ensureJoinKey(site) {
 // Alamat panel yang bisa dijangkau MikroTik lewat internet
 function panelPublicUrl(st, d) {
   const cf = d && d.settings && d.settings.cloudflare;
-  if (cf && cf.https && cf.domain) return `https://${cf.domain}:${PORT}`;
-  return st.publicIp ? `http://${st.publicIp}:${PORT}` : "";
+  const std = d && d.settings && d.settings.stdPorts && STD_ON;
+  if (cf && cf.https && cf.domain) return std ? `https://${cf.domain}` : `https://${cf.domain}:${PORT}`;
+  return st.publicIp ? (std ? `http://${st.publicIp}` : `http://${st.publicIp}:${PORT}`) : "";
 }
 function mikrotikScriptZt(s, st) {
   const c = st.brand;
@@ -732,6 +736,7 @@ function validateSite(d, input, existing) {
   if (overlap(sub, T.cidr)) return `Subnet ONT tidak boleh bentrok dengan jaringan VPN ${T.net}.`;
   const zc = ztCfg(d);
   const zsub = zc && parseCidr(zc.subnet);
+  if (input.transport === "zt" && !addonInstalled(d, "zerotier")) return "Add-on ZeroTier belum dipasang. Pasang dulu di menu Add-on.";
   if (input.transport === "zt" && !zc) return "ZeroTier belum diatur. Buka menu ZeroTier di panel, lalu hubungkan VPS ke jaringan.";
   if (zsub && overlap(sub, zsub)) return `Subnet ONT tidak boleh bentrok dengan jaringan ZeroTier ${zc.subnet}.`;
   if (input.ztNode && !/^[0-9a-f]{10}$/i.test(String(input.ztNode).trim())) return "Node ID ZeroTier harus 10 karakter (0-9, a-f). Lihat di Winbox → ZeroTier.";
@@ -2102,6 +2107,8 @@ const SUB_SERVICES = {
   zt: { label: "ZTNET", port: () => ZTNET_PORT, def: "zt" },
 };
 function subUrl(svc, host) {
+  if (STD_ON && HTTPS_ON) return `https://${host}`;
+  if (STD_ON) return `http://${host}`;
   return `http://${host}:${SUB_SERVICES[svc].port()}`;
 }
 // Buat / perbarui record A (DNS only) untuk satu nama host
@@ -2266,6 +2273,7 @@ function httpsEnable(domain) {
         return resolve();
       }
       httpsServer = https.createServer(opts, appHandler);
+      httpsServer.on("upgrade", onUpgrade);
       httpsServer.on("error", reject);
       httpsServer.listen(0, "127.0.0.1", () => {
         httpsPort = httpsServer.address().port;
@@ -2302,27 +2310,811 @@ function frontHandler(sock) {
     if (buf[0] !== 0x16) {
       const m = buf.toString("latin1").match(/^[A-Z]+ (\S+) HTTP/);
       const p = m && m[1].startsWith("/") ? m[1] : "/";
-      sock.end(`HTTP/1.1 301 Moved Permanently\r\nLocation: https://${HTTPS_DOMAIN}:${PORT}${p}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`);
+      // Laporan Node ID dari script MikroTik tetap dilayani lewat http biasa
+      if (p.startsWith("/api/zt/join") || p.startsWith("/.well-known/acme-challenge/")) {
+        sock.unshift(buf);
+        return httpServer.emit("connection", sock);
+      }
+      const host = hostOf(buf.toString("latin1"));
+      const base = STD_ON ? `https://${host && isOurHost(host) ? host : HTTPS_DOMAIN}` : `https://${HTTPS_DOMAIN}:${PORT}`;
+      sock.end(`HTTP/1.1 301 Moved Permanently\r\nLocation: ${base}${p}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`);
       return;
     }
-    sock.pause();
-    const remote = sock.remoteAddress;
-    let key = 0;
-    const up = net.connect({ host: "127.0.0.1", port: httpsPort }, () => {
-      key = up.localPort;
-      PROXY_IPS.set(key, remote);
-      up.write(buf);
-      sock.pipe(up);
-      up.pipe(sock);
-      sock.resume();
-    });
-    up.on("error", () => sock.destroy());
-    up.on("close", () => {
-      if (key) PROXY_IPS.delete(key);
-      sock.destroy();
-    });
-    sock.on("close", () => up.destroy());
+    pipeTls(sock, buf);
   });
+}
+
+// =====================================================================
+//  Add-on
+//  - sistem   : ZeroTier (memasang ZTNET di VPS, fitur ada di dalam panel)
+//  - aplikasi : Panel ACS, Bilingku (aplikasi PHP terpisah dari repo sendiri,
+//               berjalan di 127.0.0.1 dan dibuka lewat path panel, mis. /acs)
+// =====================================================================
+const ADDON_ROOT = ROOT + "/opt/addons";
+const SCRIPTS_DIR = ROOT + "/opt/vpn-acs/scripts";
+const SYSTEMD_DIR = ROOT + "/etc/systemd/system";
+const ADDONS = {
+  zerotier: {
+    kind: "sistem",
+    name: "ZeroTier",
+    icon: "hub",
+    desc: "Router RouterOS v7 (ARM/ARM64) tersambung lewat ZeroTier selain L2TP. Memasang ZeroTier + ZTNET (web pengelola, port 3300) di VPS dan menambah menu ZeroTier di panel.",
+    note: "Pemasangan ZTNET butuh 5–15 menit dan RAM + swap minimal 3,5 GB.",
+  },
+  "panel-acs": {
+    kind: "aplikasi",
+    name: "Panel ACS",
+    icon: "box",
+    desc: "Monitoring ONT dari GenieACS: daftar & detail ONT, redaman RX dengan history grafik, ubah WiFi, reboot, faults, peta. ONT dikelompokkan otomatis per router panel.",
+    repo: process.env.VPNACS_REPO_PANEL_ACS || "https://github.com/suwazed-cmyk/panel-acs.git",
+    port: 8091,
+    path: "/acs",
+    timer: { unit: "collect", script: "bin/collect.php", every: "*:0/15", desc: "Pencatat redaman ONT" },
+  },
+  bilingku: {
+    kind: "aplikasi",
+    name: "Bilingku",
+    icon: "wallet",
+    desc: "Billing PPPoE & Hotspot MikroTik: paket, jatuh tempo, isolir otomatis, pembayaran, voucher. Router bisa diambil dari panel, API lewat VPN.",
+    repo: process.env.VPNACS_REPO_BILINGKU || "https://github.com/suwazed-cmyk/bilingku.git",
+    port: 8092,
+    path: "/billing",
+    timer: { unit: "cron", script: "bin/cron.php", every: "*:0/5", desc: "Tugas berkala Bilingku" },
+  },
+};
+const RESERVED_PATHS = ["/api", "/index.html", "/.well-known"];
+function addonState(d, id) {
+  const a = ((d.settings || {}).addons || {})[id] || {};
+  return a;
+}
+function addonInstalled(d, id) {
+  return !!addonState(d, id).installed;
+}
+function addonPath(d, id) {
+  return addonState(d, id).path || (ADDONS[id] && ADDONS[id].path) || "";
+}
+function addonDir(id) {
+  return `${ADDON_ROOT}/${id}`;
+}
+function addonRoutes() {
+  const d = loadData();
+  const out = [];
+  for (const [id, a] of Object.entries(ADDONS)) {
+    if (a.kind !== "aplikasi" || !addonInstalled(d, id)) continue;
+    out.push({ id, path: addonPath(d, id), port: a.port });
+  }
+  return out;
+}
+// Panel versi lama yang sudah memakai ZeroTier: add-on ZeroTier dianggap terpasang
+function addonsMigrate(d) {
+  d.settings = d.settings || {};
+  const A = (d.settings.addons = d.settings.addons || {});
+  let ch = false;
+  if (!A.zerotier && (ztCfg(d) || d.sites.some(isZt) || fs.existsSync(ZTNET_DIR))) {
+    A.zerotier = { installed: true, at: new Date().toISOString(), auto: true };
+    ch = true;
+  }
+  if (!d.settings.addonKey) {
+    d.settings.addonKey = crypto.randomBytes(24).toString("hex");
+    ch = true;
+  }
+  return ch;
+}
+// Proses install/update/lepas berjalan di latar belakang; browser memantau lewat /api/addons/job
+let ADDON_JOB = null;
+function jobLog(line) {
+  if (!ADDON_JOB) return;
+  const t = String(line).replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").replace(/\r/g, "").trimEnd();
+  if (!t) return;
+  ADDON_JOB.log.push(t);
+  if (ADDON_JOB.log.length > 400) ADDON_JOB.log.splice(0, ADDON_JOB.log.length - 400);
+}
+// Jalankan perintah, alirkan keluaran ke log. Baris "@@PROGRESS n" menggeser progres langkah.
+function runStream(cmd, args, opts) {
+  return new Promise((resolve) => {
+    let p;
+    try {
+      p = spawn(cmd, args, Object.assign({ env: Object.assign({}, process.env, { DEBIAN_FRONTEND: "noninteractive", LC_ALL: "C.UTF-8" }) }, opts || {}));
+    } catch (e) {
+      jobLog(e.message);
+      return resolve({ code: -2 });
+    }
+    let buf = "";
+    const onData = (chunk) => {
+      buf += chunk.toString();
+      const lines = buf.split("\n");
+      buf = lines.pop();
+      for (const l of lines) {
+        const m = l.match(/@@PROGRESS\s+(\d+)(?:\s+(.*))?/);
+        if (m && ADDON_JOB) {
+          ADDON_JOB.sub = Math.min(100, parseInt(m[1], 10)) / 100;
+          if (m[2]) ADDON_JOB.detail = m[2].trim();
+        } else jobLog(l);
+      }
+    };
+    p.stdout && p.stdout.on("data", onData);
+    p.stderr && p.stderr.on("data", onData);
+    const timer = opts && opts.timeoutMs ? setTimeout(() => { jobLog("Waktu habis, proses dihentikan."); p.kill("SIGKILL"); }, opts.timeoutMs) : null;
+    p.on("error", (e) => jobLog(e.code === "ENOENT" ? `Perintah ${cmd} tidak ditemukan` : e.message));
+    p.on("close", (code) => {
+      if (timer) clearTimeout(timer);
+      if (buf) jobLog(buf);
+      resolve({ code: code === null ? 1 : code });
+    });
+  });
+}
+async function runJob(job, steps) {
+  ADDON_JOB = job;
+  job.steps = steps.map((x) => ({ label: x.label, state: "wait", detail: "" }));
+  const total = steps.reduce((a, x) => a + (x.weight || 1), 0);
+  let doneW = 0;
+  const tick = setInterval(() => {
+    const cur = steps[job.cur] || { weight: 0 };
+    job.pct = Math.min(99, Math.round(((doneW + (cur.weight || 1) * (job.sub || 0)) / total) * 100));
+  }, 300);
+  for (let i = 0; i < steps.length; i++) {
+    job.cur = i;
+    job.sub = 0;
+    job.detail = "";
+    job.steps[i].state = "run";
+    jobLog(`== ${steps[i].label}`);
+    let r;
+    try {
+      r = await steps[i].run(job);
+    } catch (e) {
+      r = { error: e.message };
+    }
+    if (r && r.error) {
+      job.steps[i].state = "bad";
+      job.steps[i].detail = r.error;
+      job.error = r.error;
+      jobLog("GAGAL: " + r.error);
+      break;
+    }
+    job.steps[i].state = r && r.skip ? "skip" : "ok";
+    job.steps[i].detail = (r && r.detail) || "";
+    doneW += steps[i].weight || 1;
+  }
+  clearInterval(tick);
+  job.done = true;
+  job.ok = !job.error;
+  job.pct = job.ok ? 100 : Math.round((doneW / total) * 100);
+  job.finished = Date.now();
+  logActivity(job.req || null, `${job.title} ${job.ok ? "berhasil" : "gagal"}`, job.ok ? "" : job.error);
+  delete job.req;
+}
+function writeIfChanged(file, text, mode) {
+  try {
+    if (fs.readFileSync(file, "utf8") === text) return false;
+  } catch (e) {
+    // belum ada
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, text, mode ? { mode } : undefined);
+  return true;
+}
+function phpUnits(id) {
+  const a = ADDONS[id];
+  const dir = addonDir(id);
+  const units = {};
+  units[`addon-${id}.service`] = `[Unit]
+Description=Add-on ${a.name} (ACS NETMAP Panel)
+After=network.target
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=${dir}
+Environment=PHP_CLI_SERVER_WORKERS=4
+ExecStart=/usr/bin/php -d variables_order=EGPCS -S 127.0.0.1:${a.port} -t ${dir} ${dir}/router.php
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+`;
+  if (a.timer) {
+    units[`addon-${id}-${a.timer.unit}.service`] = `[Unit]
+Description=${a.timer.desc} (add-on ${a.name})
+
+[Service]
+Type=oneshot
+User=www-data
+Group=www-data
+WorkingDirectory=${dir}
+ExecStart=/usr/bin/php ${dir}/${a.timer.script}
+`;
+    units[`addon-${id}-${a.timer.unit}.timer`] = `[Unit]
+Description=${a.timer.desc} (add-on ${a.name})
+
+[Timer]
+OnCalendar=${a.timer.every}
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+`;
+  }
+  return units;
+}
+function phpInstallSteps(id, req, opts) {
+  const a = ADDONS[id];
+  const dir = addonDir(id);
+  const update = opts && opts.update;
+  const steps = [];
+  steps.push({
+    label: "Periksa sistem",
+    weight: 1,
+    run: async () => {
+      const d = loadData();
+      if (!d.settings.addonKey) return { error: "Kunci add-on belum ada, restart panel lalu coba lagi" };
+      const r = await run("df", ["-Pm", ROOT || "/"]);
+      const free = parseInt((r.out.split("\n")[1] || "").split(/\s+/)[3], 10);
+      if (free && free < 500) return { error: `Ruang disk tinggal ${free} MB (minimal 500 MB)` };
+      return { detail: free ? `Disk kosong ${Math.round(free / 1024)} GB` : "" };
+    },
+  });
+  steps.push({
+    label: "Pasang PHP",
+    weight: 4,
+    run: async (job) => {
+      const chk = await run("php", ["-r", 'echo PHP_VERSION, " ", (extension_loaded("pdo_sqlite") && extension_loaded("curl") && extension_loaded("mbstring")) ? "lengkap" : "kurang";']);
+      if (chk.code === 0 && /lengkap/.test(chk.out)) return { skip: true, detail: `PHP ${chk.out.split(" ")[0]} sudah ada` };
+      job.detail = "apt-get update";
+      job.sub = 0.1;
+      const u = await runStream("apt-get", ["update", "-q"], { timeoutMs: 10 * 60 * 1000 });
+      if (u.code !== 0) return { error: "apt-get update gagal (lihat log). Mungkin apt sedang dipakai proses lain, coba lagi beberapa menit lagi." };
+      job.sub = 0.4;
+      job.detail = "apt-get install php";
+      const i = await runStream("apt-get", ["install", "-y", "-q", "php-cli", "php-sqlite3", "php-curl", "php-mbstring", "php-xml"], { timeoutMs: 15 * 60 * 1000 });
+      if (i.code !== 0) return { error: "Gagal memasang PHP (lihat log)" };
+      const v = await run("php", ["-r", "echo PHP_VERSION;"]);
+      return { detail: `PHP ${v.out.trim()} terpasang` };
+    },
+  });
+  steps.push({
+    label: update ? "Unduh versi terbaru" : "Unduh aplikasi",
+    weight: 2,
+    run: async () => {
+      if (fs.existsSync(dir + "/.git")) {
+        const r = await runStream("git", ["-C", dir, "pull", "--ff-only"], { timeoutMs: 5 * 60 * 1000 });
+        if (r.code !== 0) return { error: "git pull gagal (lihat log). Jika ada berkas yang diubah manual, kembalikan dulu." };
+      } else {
+        if (fs.existsSync(dir) && fs.readdirSync(dir).filter((x) => x !== "data").length) return { error: `Folder ${dir} sudah ada tetapi bukan hasil unduhan add-on. Pindahkan dulu.` };
+        fs.mkdirSync(ADDON_ROOT, { recursive: true });
+        const tmp = `${ADDON_ROOT}/.${id}-${Date.now()}`;
+        const r = await runStream("git", ["clone", "--depth", "1", a.repo, tmp], { timeoutMs: 5 * 60 * 1000 });
+        if (r.code !== 0) return { error: `Gagal mengunduh ${a.repo} (lihat log). Jika repo privat, VPS butuh akses ke repo itu.` };
+        // folder data lama (jika ada) dipertahankan
+        if (fs.existsSync(dir + "/data")) fs.renameSync(dir + "/data", tmp + "/data.keep");
+        fs.rmSync(dir, { recursive: true, force: true });
+        fs.renameSync(tmp, dir);
+        if (fs.existsSync(dir + "/data.keep")) {
+          fs.rmSync(dir + "/data", { recursive: true, force: true });
+          fs.renameSync(dir + "/data.keep", dir + "/data");
+        }
+      }
+      const h = await run("git", ["-C", dir, "log", "-1", "--format=%h %cs"]);
+      return { detail: h.out.trim() ? `Versi ${h.out.trim()}` : "" };
+    },
+  });
+  steps.push({
+    label: "Siapkan data",
+    weight: 1,
+    run: async () => {
+      const d = loadData();
+      fs.mkdirSync(dir + "/data", { recursive: true });
+      // Penghubung ke panel utama: alamat lokal + kunci rahasia (hanya dari 127.0.0.1)
+      writeIfChanged(dir + "/data/panel-link.json", JSON.stringify({ url: `http://127.0.0.1:${PORT}`, key: d.settings.addonKey, prefix: addonPath(d, id) }, null, 2), 0o640);
+      await run("chown", ["-R", "www-data:www-data", dir + "/data"]);
+      await run("chmod", ["750", dir + "/data"]);
+      if (fs.existsSync(dir + "/bin/setup.php")) {
+        const r = await runStream("runuser", ["-u", "www-data", "--", "php", dir + "/bin/setup.php"], { timeoutMs: 5 * 60 * 1000, cwd: dir });
+        if (r.code !== 0) return { error: "Setup database gagal (lihat log)" };
+      }
+      return { detail: "Database siap" };
+    },
+  });
+  steps.push({
+    label: "Pasang layanan",
+    weight: 1,
+    run: async () => {
+      const units = phpUnits(id);
+      for (const [n, t] of Object.entries(units)) writeIfChanged(`${SYSTEMD_DIR}/${n}`, t);
+      await run("systemctl", ["daemon-reload"]);
+      // Layanan oneshot milik timer tidak diaktifkan langsung; timer yang menjalankannya
+      const oneshot = a.timer ? `addon-${id}-${a.timer.unit}.service` : "";
+      const started = [];
+      for (const n of Object.keys(units)) {
+        if (n === oneshot) continue;
+        await run("systemctl", ["enable", n]);
+        const r = await run("systemctl", ["restart", n]);
+        if (r.code !== 0 && !DRY_RUN) return { error: `Gagal menjalankan ${n}: ${r.out.trim().slice(0, 200)}` };
+        started.push(n);
+      }
+      return { detail: started.join(", ") };
+    },
+  });
+  steps.push({
+    label: "Uji aplikasi",
+    weight: 1,
+    run: async () => {
+      for (let i = 0; i < 15; i++) {
+        const code = await new Promise((resolve) => {
+          const rq = http.get({ host: "127.0.0.1", port: a.port, path: "/", timeout: 3000 }, (r) => {
+            r.resume();
+            resolve(r.statusCode);
+          });
+          rq.on("error", () => resolve(0));
+          rq.on("timeout", () => {
+            rq.destroy();
+            resolve(0);
+          });
+        });
+        if (code && code < 500) return { detail: `Aplikasi menjawab (HTTP ${code})` };
+        await new Promise((z) => setTimeout(z, 1000));
+      }
+      return { error: `Aplikasi tidak menjawab di port ${a.port}. Cek: journalctl -u addon-${id} -n 50` };
+    },
+  });
+  steps.push({
+    label: "Aktifkan di panel",
+    weight: 1,
+    run: async () => {
+      const d = loadData();
+      const A = (d.settings.addons = d.settings.addons || {});
+      A[id] = Object.assign({}, A[id] || {}, { installed: true, path: addonPath(d, id), at: (A[id] && A[id].at) || new Date().toISOString(), updatedAt: new Date().toISOString() });
+      saveData(d);
+      return { detail: `Dibuka di ${addonPath(d, id)}/` };
+    },
+  });
+  return steps;
+}
+function phpRemoveSteps(id, purge) {
+  const a = ADDONS[id];
+  const dir = addonDir(id);
+  return [
+    {
+      label: "Hentikan layanan",
+      run: async () => {
+        for (const n of Object.keys(phpUnits(id))) {
+          await run("systemctl", ["disable", "--now", n]);
+          try {
+            fs.unlinkSync(`${SYSTEMD_DIR}/${n}`);
+          } catch (e) {
+            // sudah tidak ada
+          }
+        }
+        await run("systemctl", ["daemon-reload"]);
+        return {};
+      },
+    },
+    {
+      label: purge ? "Hapus aplikasi dan data" : "Simpan data",
+      run: async () => {
+        if (purge) {
+          fs.rmSync(dir, { recursive: true, force: true });
+          return { detail: `${dir} dihapus` };
+        }
+        return { detail: `Data tetap di ${dir}/data (dipakai lagi jika dipasang ulang)` };
+      },
+    },
+    {
+      label: "Nonaktifkan di panel",
+      run: async () => {
+        const d = loadData();
+        const A = (d.settings.addons = d.settings.addons || {});
+        A[id] = Object.assign({}, A[id] || {}, { installed: false, removedAt: new Date().toISOString() });
+        saveData(d);
+        return { detail: `${a.name} dilepas` };
+      },
+    },
+  ];
+}
+function ztInstallSteps() {
+  return [
+    {
+      label: "Periksa ZTNET",
+      weight: 1,
+      run: async (job) => {
+        if (fs.existsSync(ZTNET_DIR + "/.env")) {
+          job.ztExists = true;
+          return { detail: "ZTNET sudah terpasang, cukup diaktifkan" };
+        }
+        if (!fs.existsSync(SCRIPTS_DIR + "/pasang-ztnet.sh")) return { error: "Script pasang-ztnet.sh tidak ada. Update panel dulu: git pull lalu bash install-vpn-acs.sh" };
+        const d = loadData();
+        if (d.sites.length && !(d.settings.cloudflare && d.settings.subdomains && d.settings.subdomains.zt)) jobLog("Catatan: ZTNET akan memakai alamat IP VPS. Subdomain zt bisa dibuat nanti di Domain & HTTPS.");
+        return { detail: "ZTNET belum ada, akan dipasang" };
+      },
+    },
+    {
+      label: "Pasang ZeroTier + ZTNET",
+      weight: 12,
+      run: async (job) => {
+        if (job.ztExists) return { skip: true, detail: "Dilewati" };
+        const d = loadData();
+        const sub = d.settings.subdomains && d.settings.subdomains.zt && d.settings.subdomains.zt.host;
+        const host = sub || settings(d).publicIp;
+        // Installer resmi ZTNET bertanya lewat terminal: dijalankan lewat "script" dan dijawab Enter (pilihan bawaan)
+        const cmd = `yes "" | ZTNET_AUTO=1 ZTNET_HOST='${String(host).replace(/[^\w.-]/g, "")}' script -qefc "bash ${SCRIPTS_DIR}/pasang-ztnet.sh" /dev/null`;
+        const r = await runStream("bash", ["-c", cmd], { timeoutMs: 40 * 60 * 1000 });
+        if (r.code !== 0 || !fs.existsSync(ZTNET_DIR + "/.env")) return { error: "Pemasangan ZTNET gagal (lihat log). Bisa juga dipasang lewat SSH: bash pasang-ztnet.sh" };
+        return { detail: "ZTNET terpasang" };
+      },
+    },
+    {
+      label: "Periksa layanan",
+      weight: 1,
+      run: async () => {
+        const a = await run("systemctl", ["is-active", "zerotier-one"]);
+        const b = await run("systemctl", ["is-active", "ztnet"]);
+        const st = await ztApi("GET", "/status");
+        if (!st.ok) return { error: "ZeroTier di VPS belum menjawab: " + st.error };
+        return { detail: `zerotier-one ${a.out.trim() || "?"} · ztnet ${b.out.trim() || "?"} · node ${st.json.address}` };
+      },
+    },
+    {
+      label: "Aktifkan di panel",
+      weight: 1,
+      run: async () => {
+        const d = loadData();
+        const A = (d.settings.addons = d.settings.addons || {});
+        A.zerotier = Object.assign({}, A.zerotier || {}, { installed: true, at: new Date().toISOString() });
+        saveData(d);
+        return { detail: "Menu ZeroTier aktif. Buat jaringan di ZTNET, lalu hubungkan di menu ZeroTier." };
+      },
+    },
+  ];
+}
+function ztRemoveSteps(purge) {
+  return [
+    {
+      label: "Periksa router",
+      run: async () => {
+        const d = loadData();
+        const n = d.sites.filter(isZt).length;
+        if (n) return { error: `Masih ada ${n} router yang memakai ZeroTier. Pindahkan ke L2TP atau hapus dulu.` };
+        return {};
+      },
+    },
+    {
+      label: "Lepas jaringan dari panel",
+      run: async () => {
+        const d = loadData();
+        const z = ztCfg(d);
+        if (!z) return { skip: true, detail: "Tidak ada jaringan terhubung" };
+        await ztApi("DELETE", `/network/${z.nwid}`);
+        delete d.settings.zt;
+        saveData(d);
+        await ensureLoAddr(d);
+        return { detail: `VPS keluar dari ${z.name || z.nwid}` };
+      },
+    },
+    {
+      label: purge ? "Hapus ZTNET dari VPS" : "Biarkan ZTNET di VPS",
+      run: async () => {
+        if (!purge) return { detail: "ZTNET tetap terpasang (hanya disembunyikan)" };
+        for (const u of ["ztnet"]) await run("systemctl", ["disable", "--now", u]);
+        fs.rmSync(ZTNET_DIR, { recursive: true, force: true });
+        try {
+          fs.rmSync(SYSTEMD_DIR + "/ztnet.service.d", { recursive: true, force: true });
+          fs.unlinkSync(SYSTEMD_DIR + "/ztnet.service");
+        } catch (e) {
+          // abaikan
+        }
+        await run("systemctl", ["daemon-reload"]);
+        return { detail: "Layanan ztnet dan folder /opt/ztnet dihapus (ZeroTier & PostgreSQL tetap)" };
+      },
+    },
+    {
+      label: "Nonaktifkan di panel",
+      run: async () => {
+        const d = loadData();
+        const A = (d.settings.addons = d.settings.addons || {});
+        A.zerotier = Object.assign({}, A.zerotier || {}, { installed: false, removedAt: new Date().toISOString() });
+        saveData(d);
+        return { detail: "Menu ZeroTier disembunyikan" };
+      },
+    },
+  ];
+}
+async function addonList(d) {
+  const out = [];
+  for (const [id, a] of Object.entries(ADDONS)) {
+    const st = addonState(d, id);
+    const x = { id, kind: a.kind, name: a.name, icon: a.icon, desc: a.desc, note: a.note || "", installed: !!st.installed, at: st.at || null, updatedAt: st.updatedAt || null };
+    if (a.kind === "aplikasi") {
+      x.path = addonPath(d, id);
+      x.repo = a.repo.replace(/\.git$/, "");
+      x.port = a.port;
+      const dir = addonDir(id);
+      x.hasData = fs.existsSync(dir + "/data");
+      if (st.installed) {
+        const r = await run("systemctl", ["is-active", `addon-${id}`]);
+        x.running = r.out.trim() === "active" || (DRY_RUN && r.code === 0);
+        const g = await run("git", ["-C", dir, "log", "-1", "--format=%h %cs"]);
+        x.version = g.code === 0 ? g.out.trim() : "";
+      }
+    } else {
+      x.ztnet = fs.existsSync(ZTNET_DIR + "/.env");
+      x.routers = d.sites.filter(isZt).length;
+    }
+    out.push(x);
+  }
+  return out;
+}
+
+// =====================================================================
+//  Port standar 80/443 (opsional) dan reverse proxy
+//  - 80 : http. Jika HTTPS aktif dialihkan ke https, kecuali laporan MikroTik
+//  - 443: https (hanya jika HTTPS aktif), memakai server https internal yang sama
+//  - Subdomain layanan (acs./zt.) diteruskan ke GenieACS UI / ZTNET di VPS
+//  - Path add-on (mis. /acs, /billing) diteruskan ke aplikasi add-on di 127.0.0.1
+//  Port 8088 tetap hidup sebagai cadangan.
+// =====================================================================
+let STD_ON = false;
+let STD_ERR = "";
+let std80 = null;
+let std443 = null;
+function hostOf(head) {
+  const m = String(head).match(/\r\nhost:\s*([^\r\n:]+)/i);
+  return m ? m[1].trim().toLowerCase() : "";
+}
+function reqHost(req) {
+  return String(req.headers.host || "").replace(/:\d+$/, "").trim().toLowerCase();
+}
+// Host milik panel: domain panel dan subdomain layanannya
+function isOurHost(h) {
+  if (!h) return false;
+  const d = loadData();
+  const s = d.settings || {};
+  if (s.cloudflare && s.cloudflare.domain === h) return true;
+  return Object.values(s.subdomains || {}).some((x) => x && x.host === h);
+}
+// Subdomain yang diteruskan: host -> port lokal
+function proxyHostTarget(h) {
+  if (!STD_ON || !h) return 0;
+  const subs = (loadData().settings || {}).subdomains || {};
+  for (const [svc, x] of Object.entries(subs)) if (x && x.host === h && SUB_SERVICES[svc]) return SUB_SERVICES[svc].port();
+  return 0;
+}
+// Path add-on: "/acs/..." -> { port, prefix }
+function proxyPathTarget(pathname) {
+  for (const a of addonRoutes()) {
+    if (pathname === a.path || pathname.startsWith(a.path + "/")) return a;
+  }
+  return null;
+}
+function proxyRequest(req, res, port, prefix) {
+  let pathPart = req.url;
+  if (prefix) {
+    if (pathPart === prefix) {
+      res.writeHead(301, { Location: prefix + "/" });
+      return res.end();
+    }
+    pathPart = pathPart.slice(prefix.length) || "/";
+  }
+  const headers = Object.assign({}, req.headers);
+  const proto = req.socket.encrypted ? "https" : "http";
+  headers["x-forwarded-for"] = clientIp(req);
+  headers["x-forwarded-proto"] = proto;
+  headers["x-forwarded-host"] = req.headers.host || "";
+  if (prefix) headers["x-forwarded-prefix"] = prefix;
+  const up = http.request({ host: "127.0.0.1", port, method: req.method, path: pathPart, headers }, (r) => {
+    const h = Object.assign({}, r.headers);
+    // Alihkan Location absolut ke path add-on
+    if (prefix && h.location && h.location.startsWith("/")) h.location = prefix + h.location;
+    res.writeHead(r.statusCode || 502, h);
+    r.pipe(res);
+  });
+  up.on("error", (e) => {
+    if (!res.headersSent) res.writeHead(502, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(`<!doctype html><meta charset="utf-8"><title>Layanan tidak menjawab</title><body style="font-family:system-ui;padding:40px;color:#334"><h2>Layanan belum berjalan</h2><p>Aplikasi di port ${port} tidak menjawab (${String(e.code || e.message)}).</p><p>Cek di VPS: <code>systemctl status</code> layanan add-on atau aplikasinya.</p></body>`);
+  });
+  req.pipe(up);
+}
+function proxyUpgrade(req, sock, head, port, prefix) {
+  const up = net.connect({ host: "127.0.0.1", port }, () => {
+    let pathPart = req.url;
+    if (prefix && pathPart.startsWith(prefix)) pathPart = pathPart.slice(prefix.length) || "/";
+    const lines = [`${req.method} ${pathPart} HTTP/${req.httpVersion}`];
+    for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
+    up.write(lines.join("\r\n") + "\r\n\r\n");
+    if (head && head.length) up.write(head);
+    sock.pipe(up);
+    up.pipe(sock);
+  });
+  up.on("error", () => sock.destroy());
+  sock.on("error", () => up.destroy());
+}
+function onUpgrade(req, sock, head) {
+  const port = proxyHostTarget(reqHost(req));
+  if (port) return proxyUpgrade(req, sock, head, port, "");
+  const a = proxyPathTarget(new URL(req.url, "http://x").pathname);
+  if (a) return proxyUpgrade(req, sock, head, a.port, a.path);
+  sock.destroy();
+}
+// Kirim koneksi TLS ke server https internal (dipakai port 443 dan 8088)
+function pipeTls(sock, buf) {
+  sock.pause();
+  const remote = sock.remoteAddress;
+  let key = 0;
+  const up = net.connect({ host: "127.0.0.1", port: httpsPort }, () => {
+    key = up.localPort;
+    PROXY_IPS.set(key, remote);
+    up.write(buf);
+    sock.pipe(up);
+    up.pipe(sock);
+    sock.resume();
+  });
+  up.on("error", () => sock.destroy());
+  up.on("close", () => {
+    if (key) PROXY_IPS.delete(key);
+    sock.destroy();
+  });
+  sock.on("close", () => up.destroy());
+}
+function handler80(sock) {
+  sock.on("error", () => {});
+  if (!HTTPS_ON) return httpServer.emit("connection", sock);
+  sock.setTimeout(20000, () => sock.destroy());
+  sock.once("data", (buf) => {
+    sock.setTimeout(0);
+    const head = buf.toString("latin1");
+    const m = head.match(/^[A-Z]+ (\S+) HTTP/);
+    const p = m && m[1].startsWith("/") ? m[1] : "/";
+    const host = hostOf(head);
+    // Laporan MikroTik dan verifikasi Let's Encrypt tetap http; akses lewat IP juga tetap http
+    if (p.startsWith("/api/zt/join") || p.startsWith("/.well-known/acme-challenge/") || !isOurHost(host)) {
+      sock.unshift(buf);
+      return httpServer.emit("connection", sock);
+    }
+    sock.end(`HTTP/1.1 301 Moved Permanently\r\nLocation: https://${host}${p}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`);
+  });
+}
+function handler443(sock) {
+  sock.on("error", () => {});
+  if (!HTTPS_ON) return sock.destroy();
+  sock.once("data", (buf) => {
+    if (buf[0] !== 0x16) return sock.destroy();
+    pipeTls(sock, buf);
+  });
+}
+function listenPort(port, fn) {
+  return new Promise((resolve) => {
+    const srv = net.createServer(fn);
+    srv.once("error", (e) => resolve({ error: e.code === "EADDRINUSE" ? `Port ${port} sudah dipakai aplikasi lain` : e.code === "EACCES" ? `Tidak punya izin membuka port ${port}` : e.message }));
+    srv.listen(port, HOST, () => resolve({ srv }));
+  });
+}
+async function stdPortsStart() {
+  if (STD_ON) return { ok: true };
+  const a = await listenPort(DRY_RUN ? STD_HTTP : 80, handler80);
+  if (a.error) return { error: a.error };
+  const b = await listenPort(DRY_RUN ? STD_HTTPS : 443, handler443);
+  if (b.error) {
+    a.srv.close();
+    return { error: b.error };
+  }
+  std80 = a.srv;
+  std443 = b.srv;
+  STD_ON = true;
+  STD_ERR = "";
+  return { ok: true };
+}
+function stdPortsStop() {
+  if (std80) std80.close();
+  if (std443) std443.close();
+  std80 = std443 = null;
+  STD_ON = false;
+}
+// Cek port 80/443 bisa dipakai, tanpa mengubah apa pun
+async function stdPortsProbe() {
+  if (STD_ON) return { ok: true };
+  const out = [];
+  for (const port of DRY_RUN ? [STD_HTTP, STD_HTTPS] : [80, 443]) {
+    const r = await listenPort(port, () => {});
+    if (r.error) out.push(r.error);
+    else await new Promise((z) => r.srv.close(z));
+  }
+  return out.length ? { error: out.join("; ") } : { ok: true };
+}
+
+// Terbitkan ulang sertifikat agar mencakup subdomain layanan (lewat Cloudflare DNS)
+async function certExpand(domain, hosts) {
+  if (!fs.existsSync(CF_INI)) return { error: "Token Cloudflare untuk sertifikat tidak ditemukan. Aktifkan ulang HTTPS di Domain & HTTPS." };
+  const args = ["certonly", "--non-interactive", "--agree-tos", "--register-unsafely-without-email", "--dns-cloudflare", "--dns-cloudflare-credentials", CF_INI, "--dns-cloudflare-propagation-seconds", "30", "--cert-name", domain, "--expand", "-d", domain];
+  for (const h of hosts) args.push("-d", h);
+  const r = await runStream("certbot", args, { timeoutMs: 6 * 60 * 1000 });
+  if (r.code !== 0) return { error: "Sertifikat gagal diperluas (lihat log). Let's Encrypt membatasi 5 kali gagal per jam." };
+  await httpsEnable(domain);
+  return { ok: true };
+}
+function setZtnetUrl(url) {
+  const envFile = ZTNET_DIR + "/.env";
+  if (!fs.existsSync(envFile)) return false;
+  const old = fs.readFileSync(envFile, "utf8");
+  const line = `NEXTAUTH_URL=${url}`;
+  const next = /^NEXTAUTH_URL=.*$/m.test(old) ? old.replace(/^NEXTAUTH_URL=.*$/m, line) : old.replace(/\n?$/, "\n") + line + "\n";
+  if (next === old) return false;
+  fs.writeFileSync(envFile, next);
+  return true;
+}
+// Perbarui link GenieACS/ZTNET yang dibuat dari subdomain sesuai mode port
+async function refreshSubUrls(d) {
+  const s = d.settings || {};
+  const notes = [];
+  for (const [svc, x] of Object.entries(s.subdomains || {})) {
+    if (!x || !x.host || !SUB_SERVICES[svc]) continue;
+    const urlKey = svc === "acs" ? "genieUrl" : "ztnetUrl";
+    const want = subUrl(svc, x.host);
+    s[urlKey] = want;
+    notes.push(want);
+    if (svc === "zt" && setZtnetUrl(want)) {
+      await run("systemctl", ["restart", "ztnet"]);
+      notes.push("ZTNET di-restart");
+    }
+  }
+  return notes;
+}
+function stdOnSteps() {
+  return [
+    {
+      label: "Periksa password admin",
+      run: async () => {
+        if (isDefaultPw(loadData())) return { error: "Password admin masih Admin123. Ganti dulu di Pengaturan → Umum → Password admin, karena port 80/443 lebih sering dicoba orang." };
+        return { detail: "Password sudah diganti" };
+      },
+    },
+    {
+      label: "Periksa port 80 dan 443",
+      run: async () => {
+        const r = await stdPortsProbe();
+        if (r.error) return { error: r.error + ". Hentikan aplikasi itu (mis. nginx/apache) atau tetap pakai port " + PORT + "." };
+        return { detail: "Port kosong" };
+      },
+    },
+    {
+      label: "Sertifikat untuk subdomain",
+      weight: 3,
+      run: async () => {
+        const d = loadData();
+        const cf = d.settings.cloudflare;
+        const hosts = Object.values(d.settings.subdomains || {}).map((x) => x && x.host).filter(Boolean);
+        if (!(cf && cf.https && HTTPS_ON) || !hosts.length) return { skip: true, detail: "Tidak diperlukan" };
+        const r = await certExpand(cf.domain, hosts);
+        if (r.error) return r;
+        return { detail: `Sertifikat mencakup ${[cf.domain].concat(hosts).join(", ")}` };
+      },
+    },
+    {
+      label: "Aktifkan port 80 dan 443",
+      run: async () => {
+        const r = await stdPortsStart();
+        if (r.error) return r;
+        const d = loadData();
+        d.settings.stdPorts = true;
+        const notes = await refreshSubUrls(d);
+        saveData(d);
+        return { detail: "Panel: " + panelPublicUrl(settings(d), d) + (notes.length ? " · " + notes.join(" · ") : "") };
+      },
+    },
+  ];
+}
+function stdOffSteps() {
+  return [
+    {
+      label: "Matikan port 80 dan 443",
+      run: async () => {
+        stdPortsStop();
+        const d = loadData();
+        d.settings.stdPorts = false;
+        const notes = await refreshSubUrls(d);
+        saveData(d);
+        return { detail: `Panel kembali di port ${PORT}` + (notes.length ? " · " + notes.join(" · ") : "") };
+      },
+    },
+  ];
 }
 
 // ---------- Sesi & keamanan login ----------
@@ -2448,6 +3240,42 @@ async function handleApi(req, res, url) {
     return send(res, 200, { ok: true }, { "Set-Cookie": `vpnacs=; ${cookieFlags(req)}; Max-Age=0` });
   }
   if (p === "/api/me" && method === "GET") return send(res, 200, { loggedIn: authed(req), panelName: brandOf(loadData()) });
+  // Jalur data untuk add-on (hanya dari dalam VPS, wajib kunci add-on)
+  if (p.startsWith("/api/addon/")) {
+    const ip = (req.socket.remoteAddress || "").replace(/^::ffff:/, "");
+    const d = loadData();
+    const key = String(req.headers["x-addon-key"] || "");
+    const ok = (ip === "127.0.0.1" || ip === "::1") && d.settings && d.settings.addonKey && key.length === d.settings.addonKey.length && crypto.timingSafeEqual(Buffer.from(key), Buffer.from(d.settings.addonKey));
+    if (!ok) return send(res, 403, { error: "Akses ditolak" });
+    if (p === "/api/addon/routers" && method === "GET") {
+      const st = settings(d);
+      const links = await siteLinks(d);
+      const h = loadHistory();
+      const now = Date.now();
+      return send(res, 200, {
+        panel: { name: st.brand, version: VERSION, url: panelPublicUrl(st, d), tunnelLocal: st.tun.local, ztVpsIp: st.zt ? st.zt.vpsIp : "" },
+        routers: d.sites.map((x) => {
+          const v = siteView(x, st, links, h, now);
+          return {
+            id: x.id,
+            name: x.name,
+            note: x.note || "",
+            transport: isZt(x) ? "zt" : "l2tp",
+            address: isZt(x) ? x.ztIp || "" : x.tunnelIp,
+            vpsAddress: isZt(x) ? (st.zt ? st.zt.vpsIp : "") : st.tun.local,
+            realSubnet: x.realSubnet,
+            virtualSubnet: x.virtualSubnet,
+            state: v.state,
+            online: v.state === "up",
+            downSince: v.downSince,
+            uptime: v.uptime || null,
+            panelLink: `#/router/${x.id}`,
+          };
+        }),
+      });
+    }
+    return send(res, 404, { error: "Tidak ditemukan." });
+  }
   // Dipanggil script MikroTik (tanpa login): router ZeroTier melapor Node ID-nya memakai kunci per router
   if (p === "/api/zt/join" && method === "GET") {
     const k = String(url.searchParams.get("k") || "");
@@ -2506,6 +3334,9 @@ async function handleApi(req, res, url) {
         autoPortStart: FWD_AUTO_START,
         reservedPorts: Array.from(RESERVED_PORTS),
         port: PORT,
+        stdPorts: { enabled: !!(d.settings && d.settings.stdPorts), active: STD_ON, error: STD_ERR },
+        panelUrl: panelPublicUrl(st, d),
+        addons: Object.fromEntries(Object.entries(ADDONS).map(([id, a]) => [id, { installed: addonInstalled(d, id), kind: a.kind, name: a.name, icon: a.icon, path: a.kind === "aplikasi" ? addonPath(d, id) : "" }])),
         version: VERSION,
         panelName: st.brand,
         brandHistory: st.brands.filter((n) => n !== st.brand),
@@ -2753,6 +3584,77 @@ async function handleApi(req, res, url) {
   if (p === "/api/zt" && method === "GET") {
     await ztRefresh(req).catch((e) => console.error("Pemeriksaan ZeroTier gagal:", e.message));
     return send(res, 200, await ztStatus(loadData()));
+  }
+  // --- Add-on ---
+  if (p === "/api/addons" && method === "GET") {
+    const d = loadData();
+    return send(res, 200, { list: await addonList(d), job: ADDON_JOB && !ADDON_JOB.done ? { id: ADDON_JOB.id, addon: ADDON_JOB.addon, title: ADDON_JOB.title } : null });
+  }
+  if (p === "/api/addons/job" && method === "GET") {
+    if (!ADDON_JOB) return send(res, 200, { job: null });
+    const j = ADDON_JOB;
+    return send(res, 200, { job: { id: j.id, addon: j.addon, title: j.title, pct: j.pct || 0, cur: j.cur, detail: j.detail || "", steps: j.steps, log: j.log.slice(-120), done: !!j.done, ok: !!j.ok, error: j.error || "" } });
+  }
+  const am = p.match(/^\/api\/addons\/([a-z-]+)(?:\/(install|update|remove))?$/);
+  if (am && ADDONS[am[1]]) {
+    const id = am[1];
+    const a = ADDONS[id];
+    const action = am[2];
+    if (!action && method === "PUT") {
+      if (a.kind !== "aplikasi") return send(res, 400, { error: "Add-on ini tidak punya alamat sendiri." });
+      const v = "/" + String(body.path || "").trim().replace(/^\/+|\/+$/g, "").toLowerCase();
+      if (!/^\/[a-z0-9][a-z0-9-]{1,29}$/.test(v)) return send(res, 400, { error: "Alamat 2-30 karakter: huruf kecil, angka, atau minus. Contoh: /acs" });
+      if (RESERVED_PATHS.some((r) => v === r || v.startsWith(r + "/"))) return send(res, 400, { error: "Alamat itu dipakai panel." });
+      const d = loadData();
+      for (const [oid, oa] of Object.entries(ADDONS)) if (oid !== id && oa.kind === "aplikasi" && addonPath(d, oid) === v) return send(res, 400, { error: `Alamat ${v} sudah dipakai ${oa.name}.` });
+      const A = (d.settings.addons = d.settings.addons || {});
+      const before = addonPath(d, id);
+      A[id] = Object.assign({}, A[id] || {}, { path: v });
+      saveData(d);
+      try {
+        const f = addonDir(id) + "/data/panel-link.json";
+        if (fs.existsSync(f)) {
+          const j = JSON.parse(fs.readFileSync(f, "utf8"));
+          j.prefix = v;
+          fs.writeFileSync(f, JSON.stringify(j, null, 2));
+        }
+      } catch (e) {
+        // abaikan
+      }
+      logActivity(req, `Alamat add-on ${a.name} diubah`, `${before} → ${v}`);
+      return send(res, 200, { ok: true, path: v });
+    }
+    if (action && method === "POST") {
+      if (ADDON_JOB && !ADDON_JOB.done) return send(res, 409, { error: `Masih ada proses berjalan: ${ADDON_JOB.title}. Tunggu sampai selesai.` });
+      const d = loadData();
+      let steps;
+      let label;
+      if (action === "install" || action === "update") {
+        if (action === "update" && !addonInstalled(d, id)) return send(res, 400, { error: "Add-on belum terpasang." });
+        steps = a.kind === "aplikasi" ? phpInstallSteps(id, req, { update: action === "update" }) : ztInstallSteps();
+        label = action === "install" ? "dipasang" : "diperbarui";
+      } else {
+        steps = a.kind === "aplikasi" ? phpRemoveSteps(id, !!body.purge) : ztRemoveSteps(!!body.purge);
+        label = "dilepas";
+      }
+      const job = { id: crypto.randomBytes(6).toString("hex"), addon: id, action, title: `Add-on ${a.name} ${label}`, log: [], steps: [], pct: 0, req, created: Date.now() };
+      runJob(job, steps).catch((e) => {
+        job.done = true;
+        job.error = e.message;
+      });
+      return send(res, 200, { ok: true, id: job.id });
+    }
+  }
+  // --- Port standar 80/443 ---
+  if (p === "/api/stdports" && method === "POST") {
+    if (ADDON_JOB && !ADDON_JOB.done) return send(res, 409, { error: `Masih ada proses berjalan: ${ADDON_JOB.title}. Tunggu sampai selesai.` });
+    const on = !!body.enable;
+    const job = { id: crypto.randomBytes(6).toString("hex"), addon: "", action: on ? "on" : "off", title: on ? "Port 80/443 diaktifkan" : "Port 80/443 dimatikan", log: [], steps: [], pct: 0, req, created: Date.now() };
+    runJob(job, on ? stdOnSteps() : stdOffSteps()).catch((e) => {
+      job.done = true;
+      job.error = e.message;
+    });
+    return send(res, 200, { ok: true, id: job.id });
   }
   if (p === "/api/zt/free" && method === "GET") {
     await ztRefresh(req).catch(() => {});
@@ -3168,6 +4070,10 @@ async function handleApi(req, res, url) {
 async function appHandler(req, res) {
   try {
     const url = new URL(req.url, "http://localhost");
+    const hp = proxyHostTarget(reqHost(req));
+    if (hp) return proxyRequest(req, res, hp, "");
+    const ap = proxyPathTarget(url.pathname);
+    if (ap) return proxyRequest(req, res, ap.port, ap.path);
     if (url.pathname.startsWith("/api/")) return await handleApi(req, res, url);
     if (url.pathname === "/" || url.pathname === "/index.html") {
       const h = {
@@ -3212,7 +4118,9 @@ if (process.argv[2] === "--set-password") {
     }
     let keys = false;
     for (const st of d.sites || []) if (ensureJoinKey(st)) keys = true;
-    if (genieMigrate(d) || keys) saveData(d);
+    const m1 = genieMigrate(d);
+    const m2 = addonsMigrate(d);
+    if (m1 || m2 || keys) saveData(d);
     const gs = await genieSync(d);
     if (gs.changed) console.log("Rentang patch GenieACS disesuaikan dengan IP virtual di panel");
     const cf = d.settings && d.settings.cloudflare;
@@ -3255,6 +4163,15 @@ if (process.argv[2] === "--set-password") {
     }
   }, 60 * 1000);
   setInterval(certReloadCheck, 3600 * 1000);
+  httpServer.on("upgrade", onUpgrade);
   const front = net.createServer(frontHandler);
   front.listen(PORT, HOST, () => console.log(`Panel VPN ACS berjalan di port ${PORT}`));
+  if ((loadData().settings || {}).stdPorts) {
+    stdPortsStart().then((r) => {
+      if (r.error) {
+        STD_ERR = r.error;
+        console.error("Port 80/443 tidak bisa dipakai:", r.error, "- panel tetap di port", PORT);
+      } else console.log("Panel juga berjalan di port 80 dan 443");
+    });
+  }
 }

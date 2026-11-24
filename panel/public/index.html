@@ -188,6 +188,28 @@
   .note.info{background:var(--primary-soft);border-color:color-mix(in srgb,var(--primary) 25%,transparent)}
   .note.info svg{color:var(--primary)}
 
+  /* Add-on */
+  .addons{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px}
+  .addon{display:flex;flex-direction:column}
+  .addon .ah{display:flex;gap:14px;align-items:flex-start;padding:18px 20px 12px}
+  .addon .ai{width:42px;height:42px;border-radius:10px;display:grid;place-items:center;background:var(--primary-soft);color:var(--primary);flex:none}
+  .addon .ai svg{width:22px;height:22px}
+  .addon h3{font-size:15px;font-weight:650;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .addon p{color:var(--text-2);font-size:13px;margin-top:4px;line-height:1.5}
+  .addon .am{padding:0 20px 12px;display:flex;flex-direction:column;gap:6px;font-size:12.5px;color:var(--muted)}
+  .addon .am b{color:var(--text-2);font-weight:550}
+  .addon .af{margin-top:auto;padding:12px 20px;border-top:1px solid var(--line);display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .jprog{height:10px;border-radius:99px;background:var(--line);overflow:hidden;margin:4px 0 6px}
+  .jprog i{display:block;height:100%;width:0;background:var(--primary);border-radius:99px;transition:width .4s ease}
+  .jprog.ok i{background:var(--ok)}.jprog.bad i{background:var(--bad)}
+  .jtop{padding:16px 22px 6px}
+  .jtop .jp{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+  .jtop .jp b{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
+  .jtop .jp span{color:var(--muted);font-size:13px}
+  .jlog{margin:4px 22px 14px}
+  .jlog pre.code{max-height:220px;font-size:11.5px}
+  .nav .nav-ext{margin-left:auto;opacity:.55;display:inline-flex}
+  .nav .nav-ext svg{width:13px;height:13px}
   /* Stepper tes */
   .tst-head{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:18px 20px;border-bottom:1px solid var(--line)}
   .tst-head h2{font-size:15px;font-weight:600}
@@ -441,8 +463,10 @@
     <button class="nav" data-go="#/"><span data-ic="home"></span>Dashboard</button>
     <button class="nav" data-go="#/router"><span data-ic="router"></span>Router</button>
     <button class="nav" data-go="#/genieacs"><span data-ic="box"></span>GenieACS</button>
-    <button class="nav" data-go="#/zerotier"><span data-ic="hub"></span>ZeroTier</button>
+    <button class="nav hidden" id="navZt" data-go="#/zerotier"><span data-ic="hub"></span>ZeroTier</button>
+    <div id="navApps"></div>
     <button class="nav" data-go="#/pengaturan"><span data-ic="gear"></span>Pengaturan</button>
+    <button class="nav" data-go="#/addon"><span data-ic="puzzle"></span>Add-on</button>
     <button class="nav" data-go="#/panduan"><span data-ic="book"></span>Panduan</button>
     <button class="nav" data-go="#/log"><span data-ic="list"></span>Log aktivitas</button>
     <div class="grow"></div>
@@ -507,6 +531,8 @@ const ICONS = {
   wifi_off: '<path d="M2 2l20 20M8.5 16.5a5 5 0 0 1 7 0M5 12.9a10 10 0 0 1 5.2-2.8M19 12.9a10 10 0 0 0-2-1.4M12 20h.01"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
   box: '<path d="M21 8l-9-5-9 5v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
+  puzzle: '<path d="M10 3h4v3a2 2 0 1 0 4 0V6h3v5h-3a2 2 0 1 0 0 4h3v6h-5v-3a2 2 0 1 0-4 0v3H4v-6h3a2 2 0 1 0 0-4H4V6h6z"/>',
+  wallet: '<rect x="3" y="6" width="18" height="14" rx="2"/><path d="M3 10h18"/><path d="M16 15h2"/><path d="M6 6V5a2 2 0 0 1 2-2h9"/>',
   hub: '<circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M12 7.2v4.3M12 11.5l-5.5 4.6M12 11.5l5.5 4.6"/>',
   bolt: '<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',
   share: '<path d="M4 12h11M11 8l4 4-4 4"/><rect x="15" y="5" width="6" height="14" rx="2"/>',
@@ -658,7 +684,12 @@ async function load() {
   LOADED = true;
   $("#ver").textContent = STATE.settings.version ? "v" + STATE.settings.version : "";
   setBrand(STATE.settings.panelName);
+  const A = STATE.settings.addons || {};
+  $("#navZt").classList.toggle("hidden", !(A.zerotier && A.zerotier.installed));
+  $("#navApps").innerHTML = Object.entries(A).filter(([, a]) => a.kind === "aplikasi" && a.installed)
+    .map(([id, a]) => `<a class="nav" href="${esc(a.path)}/" target="_blank" rel="noopener" title="Buka ${esc(a.name)} di tab baru"><span>${ic(a.icon || "box")}</span>${esc(a.name)}<span class="nav-ext">${ic("ext", "")}</span></a>`).join("");
 }
+function ztOn() { const a = (STATE.settings.addons || {}).zerotier; return !!(a && a.installed); }
 
 /* ================= Router ================= */
 let TEST = null; // tes koneksi yang sedang tampil
@@ -690,7 +721,9 @@ function route() {
   else if (parts[0] === "panduan") { viewGuide(v); title = "Panduan"; }
   else if (parts[0] === "pengaturan") { viewSettings(v, parts[1] || "umum"); title = "Pengaturan"; }
   else if (parts[0] === "genieacs") { viewGenie(v); title = "GenieACS"; }
+  else if (parts[0] === "zerotier" && !ztOn()) { location.hash = "#/addon"; return; }
   else if (parts[0] === "zerotier") { viewZerotier(v); title = "ZeroTier"; }
+  else if (parts[0] === "addon") { viewAddons(v); title = "Add-on"; }
   else if (parts[0] === "log") { viewLog(v); title = "Log aktivitas"; }
   else { viewDashboard(v); }
   document.title = `${title} · ${BRAND}`;
@@ -788,7 +821,7 @@ function serverKv() {
   const genie = s.genieUrl
     ? `<div class="kv"><span>GenieACS</span><b><a class="ext" href="${esc(s.genieUrl)}" target="_blank" rel="noopener" title="Buka GenieACS di tab baru">${esc(s.genieUrl.replace(/^https?:\/\//, ""))}${ic("ext", "")}</a></b></div>`
     : `<div class="kv"><span>GenieACS</span><b><a href="#/genieacs">Atur alamat</a></b></div>`;
-  const ztnet = s.ztnetUrl ? `<div class="kv"><span>ZTNET</span><b><a class="ext" href="${esc(s.ztnetUrl)}" target="_blank" rel="noopener" title="Buka ZTNET di tab baru">${esc(s.ztnetUrl.replace(/^https?:\/\//, ""))}${ic("ext", "")}</a></b></div>` : "";
+  const ztnet = s.ztnetUrl && ztOn() ? `<div class="kv"><span>ZTNET</span><b><a class="ext" href="${esc(s.ztnetUrl)}" target="_blank" rel="noopener" title="Buka ZTNET di tab baru">${esc(s.ztnetUrl.replace(/^https?:\/\//, ""))}${ic("ext", "")}</a></b></div>` : "";
   const zt = s.zt ? `${s.zt.name || s.zt.nwid} · ${s.zt.vpsIp}` : "Tidak dipakai";
   return genie + ztnet + [["Alamat VPS", s.publicIp || "—"], ["URL ACS ONT", s.acsUrl || "—"], ["Jaringan VPN", s.tunnelNet || "—"], ["ZeroTier", zt], ["Patch GenieACS", g], ["Notifikasi Telegram", tgs], ["HTTPS panel", https]]
     .map(([k, val]) => `<div class="kv"><span>${k}</span><b>${esc(val)}</b></div>`).join("");
@@ -1060,6 +1093,123 @@ function tabHistory(b, x) {
   }).catch((e) => { b.innerHTML = `<div class="card"><div class="empty"><p>${esc(e.message)}</p></div></div>`; });
 }
 
+/* ---------- Add-on ---------- */
+function viewAddons(v) {
+  crumb([["Add-on"]]);
+  v.innerHTML = `
+    <div class="ph"><div><h1>Add-on</h1><p>Fitur tambahan yang bisa dipasang sesuai kebutuhan. Yang belum dipasang tidak muncul di menu.</p></div></div>
+    <div id="adBody"><div class="card"><div class="empty"><p>Memuat add-on…</p></div></div></div>`;
+  fillAddons();
+}
+async function fillAddons() {
+  const b = $("#adBody"); if (!b) return;
+  let r;
+  try { r = await api("/api/addons"); } catch (e) { b.innerHTML = `<div class="note bad">${ic("alert")}<div><b>Gagal memuat add-on</b>${esc(e.message)}</div></div>`; return; }
+  if (!$("#adBody")) return;
+  const base = (STATE.settings.panelUrl || "").replace(/\/$/, "");
+  const card = (a) => {
+    const kind = a.kind === "sistem" ? `<span class="tag gray">Sistem</span>` : `<span class="tag">Aplikasi</span>`;
+    const st = a.installed ? (a.kind === "aplikasi" && a.running === false ? `<span class="pill bad">Terpasang · berhenti</span>` : `<span class="pill ok">Terpasang</span>`) : `<span class="pill wait">Belum dipasang</span>`;
+    const meta = [];
+    if (a.kind === "aplikasi") {
+      meta.push(`<span>Alamat: <b class="mono">${a.installed ? `<a href="${esc(a.path)}/" target="_blank" rel="noopener">${esc((base || "") + a.path)}/</a>` : esc(a.path + "/")}</b></span>`);
+      if (a.version) meta.push(`<span>Versi: <b class="mono">${esc(a.version)}</b></span>`);
+      meta.push(`<span>Sumber: <a href="${esc(a.repo)}" target="_blank" rel="noopener">${esc(a.repo.replace(/^https:\/\/github.com\//, "github.com/"))}</a></span>`);
+    } else {
+      meta.push(`<span>ZTNET di VPS: <b>${a.ztnet ? "terdeteksi" : "belum ada"}</b>${a.routers ? ` · ${a.routers} router memakai ZeroTier` : ""}</span>`);
+      if (a.note) meta.push(`<span>${esc(a.note)}</span>`);
+    }
+    const btns = [];
+    if (!a.installed) btns.push(`<button class="btn pri" data-ad="install" data-id="${a.id}">${ic("down")}${a.kind === "sistem" && a.ztnet ? "Aktifkan" : "Install"}</button>`);
+    else {
+      if (a.kind === "aplikasi") btns.push(`<a class="btn pri" href="${esc(a.path)}/" target="_blank" rel="noopener">${ic("ext")}Buka</a>`, `<button class="btn" data-ad="update" data-id="${a.id}">${ic("refresh")}Perbarui</button>`, `<button class="btn" data-ad="path" data-id="${a.id}">${ic("edit")}Alamat</button>`);
+      else btns.push(`<a class="btn pri" href="#/zerotier">${ic("hub")}Buka menu ZeroTier</a>`);
+      btns.push(`<span style="flex:1"></span><button class="btn ghost danger" data-ad="remove" data-id="${a.id}">Lepas</button>`);
+    }
+    return `<div class="card addon"><div class="ah"><span class="ai">${ic(a.icon || "puzzle")}</span><div style="min-width:0"><h3>${esc(a.name)} ${kind}</h3><p>${esc(a.desc)}</p></div></div>
+      <div class="am"><span>${st}</span>${meta.join("")}</div><div class="af">${btns.join("")}</div></div>`;
+  };
+  b.innerHTML = `${r.job ? `<div class="note info">${ic("clock")}<div><b>${esc(r.job.title.replace(/ (dipasang|diperbarui|dilepas)$/, ""))} sedang diproses</b><a href="#" id="adJob">Lihat progres</a></div></div>` : ""}
+    <div class="addons">${r.list.map(card).join("")}</div>
+    <p class="help" style="margin-top:14px">Add-on aplikasi berjalan di dalam VPS dan dibuka lewat alamat panel (tanpa port tambahan). Data add-on tidak ikut terhapus saat dilepas, kecuali Anda memilihnya.</p>`;
+  paintIcons(b);
+  const j = $("#adJob"); if (j) j.onclick = (e) => { e.preventDefault(); openJob(); };
+  b.querySelectorAll("[data-ad]").forEach((btn) => (btn.onclick = () => {
+    const a = r.list.find((x) => x.id === btn.dataset.id), act = btn.dataset.ad;
+    if (act === "path") return openAddonPath(a);
+    if (act === "remove") {
+      return confirmDialog({
+        title: `Lepas ${esc(a.name)}?`, danger: true, ok: "Lepas", wide: true,
+        text: a.kind === "sistem"
+          ? `<p>Menu ZeroTier disembunyikan dan VPS keluar dari jaringan ZeroTier panel. Router yang masih memakai ZeroTier harus dipindah ke L2TP atau dihapus dulu.</p><label class="check" style="margin-top:10px"><input type="checkbox" id="adPurge"> Hapus juga ZTNET dari VPS</label>`
+          : `<p>Layanan ${esc(a.name)} dihentikan dan menunya hilang dari panel. Data tetap disimpan dan dipakai lagi jika dipasang ulang.</p><label class="check" style="margin-top:10px"><input type="checkbox" id="adPurge"> Hapus juga aplikasi dan <b>semua datanya</b></label>`,
+        onOk: async () => { const purge = !!($("#adPurge") && $("#adPurge").checked); await api(`/api/addons/${a.id}/remove`, { method: "POST", body: { purge } }); openJob(); },
+      });
+    }
+    const go = async () => { busyBtn(btn, true); try { await api(`/api/addons/${a.id}/${act}`, { method: "POST", body: {} }); openJob(); } catch (e) { busyBtn(btn, false); toast(e.message); } };
+    if (act === "install" && a.kind === "sistem" && !a.ztnet) {
+      return confirmDialog({
+        title: "Pasang ZeroTier + ZTNET?", icon: "hub", ok: "Install", wide: true,
+        text: `<p>Panel akan menjalankan installer ZTNET di VPS: memasang ZeroTier, PostgreSQL, dan web ZTNET (port 3300). Proses ini butuh <b>5–15 menit</b>; jika RAM + swap kurang dari 3,5 GB, swap 2 GB ditambahkan otomatis.</p><p>Jangan me-restart VPS selama proses berjalan. Panel tetap bisa dipakai.</p>`,
+        onOk: async () => { await api(`/api/addons/${a.id}/install`, { method: "POST", body: {} }); openJob(); },
+      });
+    }
+    go();
+  }));
+}
+function openAddonPath(a) {
+  modal(`Alamat ${esc(a.name)}`, `
+    <label for="adPath">Alamat di panel</label>
+    <div style="display:flex;align-items:center;gap:6px"><span class="mono muted">${esc((STATE.settings.panelUrl || "").replace(/\/$/, ""))}</span><input id="adPath" type="text" class="mono" value="${esc(a.path)}" style="flex:1"></div>
+    <div class="help">Contoh: <code>/acs</code>, <code>/panelku</code>, <code>/billing</code>. Huruf kecil, angka, atau minus.</div>
+    <div class="err" id="adPathErr"></div>`,
+    `<button class="btn" data-act="closemodal">Batal</button><button class="btn pri" id="adPathSave">Simpan</button>`);
+  $("#adPathSave").onclick = async () => {
+    $("#adPathErr").textContent = ""; busyBtn($("#adPathSave"), true);
+    try { await api(`/api/addons/${a.id}`, { method: "PUT", body: { path: $("#adPath").value } }); await load(); closeModal(); route(); toast("Alamat disimpan"); }
+    catch (e) { $("#adPathErr").textContent = e.message; busyBtn($("#adPathSave"), false); }
+  };
+}
+// Modal progres proses (install, update, lepas, port 80/443)
+let JOBPOLL = null;
+function openJob(after) {
+  modal(`<span id="jTitle">Memproses…</span>`, `
+    <div class="jtop"><div class="jp"><b id="jPct">0%</b><span id="jDetail">Memulai…</span></div><div class="jprog" id="jBar"><i></i></div></div>
+    <ol class="steps" id="jSteps"></ol>
+    <div id="jSum"></div>
+    <details class="jlog more"><summary>Log proses</summary><pre class="code" id="jLog"></pre></details>`,
+    `<button class="btn" data-act="closemodal" id="jClose">Tutup</button>`, { size: "lg", flush: true });
+  clearInterval(JOBPOLL);
+  const tick = async () => {
+    if (!$("#jSteps")) { clearInterval(JOBPOLL); return; }
+    let r; try { r = (await api("/api/addons/job")).job; } catch (e) { return; }
+    if (!r || !$("#jSteps")) return;
+    $("#jTitle").textContent = r.done ? r.title : r.title.replace(/ (dipasang|diperbarui|dilepas|diaktifkan|dimatikan)$/, "") + " sedang diproses";
+    $("#jPct").textContent = r.pct + "%";
+    $("#jBar").className = "jprog" + (r.done ? (r.ok ? " ok" : " bad") : "");
+    $("#jBar i").style.width = r.pct + "%";
+    const cur = r.steps[r.cur];
+    $("#jDetail").textContent = r.done ? (r.ok ? "Selesai" : "Gagal") : (r.detail || (cur ? cur.label : "")) + "…";
+    $("#jSteps").innerHTML = r.steps.map((x) => {
+      const cls = x.state === "run" ? "run" : x.state === "ok" ? "ok" : x.state === "bad" ? "fail" : x.state === "skip" ? "skip" : "wait";
+      const icn = x.state === "ok" ? ic("check") : x.state === "bad" ? ic("x") : x.state === "skip" ? ic("minus") : "";
+      return `<li class="step ${cls}"><span class="sic">${icn}</span><span class="stx"><b>${esc(x.label)}</b>${x.detail ? `<div class="sres">${esc(x.detail)}</div>` : ""}</span></li>`;
+    }).join("");
+    const lg = $("#jLog"); const atEnd = lg.scrollTop + lg.clientHeight >= lg.scrollHeight - 20;
+    lg.textContent = r.log.join("\n"); if (atEnd) lg.scrollTop = lg.scrollHeight;
+    if (r.done) {
+      clearInterval(JOBPOLL);
+      $("#jSum").innerHTML = r.ok ? `<div class="tst-sum ok">${ic("check")}${esc(r.title)}.</div>` : `<div class="tst-sum fail">${ic("alert")}${esc(r.error)}</div>`;
+      if (!r.ok) $(".jlog").open = true;
+      await load().catch(() => {});
+      if (after) after(r);
+      if (location.hash.startsWith("#/addon")) fillAddons();
+      else if (location.hash.startsWith("#/pengaturan")) route();
+    }
+  };
+  tick(); JOBPOLL = setInterval(tick, 1000);
+}
+
 /* ---------- Tes koneksi (popup) ---------- */
 function openTest(id) {
   const x = site(id); if (!x) return;
@@ -1120,6 +1270,7 @@ async function runTest() {
 /* ================= Tambah / ubah / hapus router ================= */
 function siteForm(x) {
   const z = STATE.settings.zt, cur = x ? x.transport : "l2tp";
+  if (!ztOn() && cur !== "zt") return `<input type="radio" name="fTr" value="l2tp" checked class="hidden"><div id="fZtBox" class="hidden"></div>` + siteFormRest(x);
   return `
     <label>Jalur ke VPS</label>
     <div class="seg"><label><input type="radio" name="fTr" value="l2tp" ${cur !== "zt" ? "checked" : ""}>L2TP</label><label ${z ? "" : 'class="netopt dis" style="margin:0;padding:8px 12px" title="Hubungkan VPS ke jaringan di menu ZeroTier dulu"'}><input type="radio" name="fTr" value="zt" ${cur === "zt" ? "checked" : ""} ${z ? "" : "disabled"}>ZeroTier</label></div>
@@ -1130,6 +1281,10 @@ function siteForm(x) {
       <select id="fZtSel"><option value="">Memuat perangkat yang bergabung…</option></select>
       <input id="fZtNode" type="text" maxlength="10" class="hidden" style="margin-top:8px" placeholder="Node ID 10 karakter, contoh: 1a2b3c4d5e">
       <div class="help" id="fZtHelp">Biasanya tidak perlu dipilih: script MikroTik melaporkan Node ID-nya sendiri ke panel. Pilih dari daftar hanya jika MikroTik sudah bergabung lebih dulu (nama dari ZTNET).</div>`}</div>
+` + siteFormRest(x);
+}
+function siteFormRest(x) {
+  return `
     <label for="fName">Nama router</label>
     <input id="fName" type="text" maxlength="40" placeholder="contoh: Nangahale" value="${esc(x?.name || "")}">
     <label for="fSub">Subnet ONT di MikroTik</label>
@@ -1265,12 +1420,12 @@ function viewGuide(v) {
       <li><b>Jalankan tes koneksi</b>Klik tombol Tes koneksi di halaman router. Popup tes memeriksa VPN, jaringan ONT, GenieACS, dan akses remote satu per satu.</li>
       <li><b>Atur ONT</b>URL ACS di ONT atau profil TR-069 OLT: <code>${esc(s.acsUrl || "")}</code></li>
     </ol></div></div>
-    <div class="card"><div class="ch"><h2>Router lewat ZeroTier (opsional)</h2></div><div class="cb"><ol class="ol">
+${ztOn() ? `    <div class="card"><div class="ch"><h2>Router lewat ZeroTier (opsional)</h2></div><div class="cb"><ol class="ol">
       <li><b>Pasang ZTNET di VPS</b>Jalankan <code>bash pasang-ztnet.sh</code> dari folder <code>acs-netmap-panel</code>. Web ZTNET berjalan di port 3300.</li>
       <li><b>Buat jaringan di ZTNET</b>Networks → Create Network, lalu atur rentang IPv4, misalnya <code>172.27.0.0/24</code>.</li>
       <li><b>Hubungkan VPS</b>Menu ZeroTier → pilih jaringan → Hubungkan VPS.</li>
       <li><b>Tambah router dengan jalur ZeroTier</b>Pasang script di MikroTik (RouterOS v7, router ARM/ARM64), lalu di tab Ringkasan klik <b>Pilih router yang bergabung</b>.</li>
-    </ol><p class="help">URL ACS di ONT tetap sama (<code>${esc(s.acsUrl || "")}</code>), baik lewat L2TP maupun ZeroTier. Router MIPS (hAP lite, hEX, RB951) tetap memakai L2TP.</p></div></div>
+    </ol><p class="help">URL ACS di ONT tetap sama (<code>${esc(s.acsUrl || "")}</code>), baik lewat L2TP maupun ZeroTier. Router MIPS (hAP lite, hEX, RB951) tetap memakai L2TP.</p></div></div>` : `<div class="card"><div class="ch"><h2>Router lewat ZeroTier (opsional)</h2></div><div class="cb"><p style="color:var(--text-2)">Untuk router RouterOS v7 ARM/ARM64, pasang add-on <b>ZeroTier</b> di menu <a href="#/addon">Add-on</a>.</p></div></div>`}
     <div class="card"><div class="ch"><h2>Remote MikroTik dari mana saja</h2></div><div class="cb"><ol class="ol">
       <li><b>Tambah akses remote</b>Buka router → tab Port Forwarding → Tambah → pilih Winbox atau WebFig.</li>
       <li><b>Hubungkan Winbox</b>Isi Connect To dengan alamat yang diberikan, misalnya <code>${esc(s.publicIp || "IP_VPS")}:20001</code>.</li>
@@ -1342,6 +1497,17 @@ function setGeneral(b) {
         <div class="form-actions"><button class="btn danger">Ganti jaringan VPN</button></div>
       </form>
     </div>
+    ${(() => {
+      const P = STATE.settings.stdPorts || {}, https = !!(STATE.settings.cloudflare && STATE.settings.cloudflare.https);
+      const url = STATE.settings.panelUrl || "";
+      return `<div class="card"><div class="ch"><h2>Alamat tanpa port (80 / 443)</h2>${P.enabled ? (P.active ? `<span class="pill ok">Aktif</span>` : `<span class="pill bad">Gagal</span>`) : `<span class="pill wait">Tidak aktif</span>`}</div><div class="cb" style="padding-top:4px">
+        <p style="color:var(--text-2)">Panel juga dibuka lewat port standar, jadi alamatnya tanpa <code>:${esc(String(STATE.settings.port || 8088))}</code>: ${https ? "<b>443</b> (https) dengan domain, dan port <b>80</b> dialihkan ke https" : "port <b>80</b> (http)"}. Port ${esc(String(STATE.settings.port || 8088))} tetap bisa dipakai.${https ? " Subdomain GenieACS dan ZTNET juga ikut tanpa port dan ber-HTTPS." : ""}</p>
+        ${P.error ? `<div class="note bad" style="margin:10px 0 0">${ic("alert")}<div><b>Port 80/443 tidak bisa dipakai</b>${esc(P.error)}. Panel tetap di port ${esc(String(STATE.settings.port || 8088))}.</div></div>` : ""}
+        ${P.enabled && P.active ? `<div class="kv" style="padding:10px 0 0;border:0"><span>Alamat panel</span><b><a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a></b></div>` : ""}
+        <div class="help">Syarat: password admin sudah bukan bawaan, port 80/443 tidak dipakai aplikasi lain, dan TCP 80 + 443 dibuka di firewall provider VPS.</div>
+        <div class="form-actions">${P.enabled ? `<button class="btn" id="stdOff" type="button">Matikan</button>` : `<button class="btn pri" id="stdOn" type="button">${ic("globe")}Aktifkan port 80/443</button>`}</div>
+      </div></div>`;
+    })()}
     <div class="card"><div class="ch"><h2>Password admin</h2></div><form class="cb" id="pwForm" style="padding-top:4px">
       ${STATE.settings.defaultPassword ? `<div class="note warn" style="margin-bottom:12px">${ic("alert")}<div><b>Masih memakai password bawaan</b>Isi password lama dengan <code>Admin123</code>, lalu buat password baru.</div></div>` : ""}
       <div class="f2"><div><label for="pOld">Password lama</label><input id="pOld" type="password" autocomplete="current-password"></div>
@@ -1376,6 +1542,14 @@ function setGeneral(b) {
       text: `<p>Dari <b>${esc(s.tunnelNet)}</b> ke <b>${esc(val)}</b>.</p><p>Semua VPN terputus sebentar, script di ${STATE.sites.length} MikroTik harus dipasang ulang, dan URL ACS di semua ONT berubah.</p>`,
       onOk: async () => { await api("/api/settings", { method: "PUT", body: { tunnelNet: val } }); await load(); route(); doneDialog("Jaringan VPN diganti", `Sekarang ${esc(STATE.settings.tunnelNet)}. Pasang ulang script di semua MikroTik dan perbarui URL ACS di ONT.`, "ok", false); },
     });
+  };
+  const stdBtn = $("#stdOn") || $("#stdOff");
+  if (stdBtn) stdBtn.onclick = async () => {
+    const on = stdBtn.id === "stdOn";
+    if (on && STATE.settings.defaultPassword) return doneDialog("Ganti password dulu", "<p>Port 80/443 lebih sering dicoba orang. Ganti password admin <b>Admin123</b> di kartu Password admin di bawah, lalu aktifkan lagi.</p>", "bad", false);
+    busyBtn(stdBtn, true);
+    try { await api("/api/stdports", { method: "POST", body: { enable: on } }); openJob(); }
+    catch (err) { busyBtn(stdBtn, false); toast(err.message); }
   };
   $("#pwForm").onsubmit = async (e) => {
     e.preventDefault(); $("#pwErr").textContent = "";

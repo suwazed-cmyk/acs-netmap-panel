@@ -27,6 +27,13 @@ fail() { echo -e "${RED}[GAGAL]${NC} $*" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || fail "Jalankan sebagai root"
 
+# ZTNET_AUTO=1 : dipasang dari menu Add-on panel (tanpa pertanyaan, pilihan bawaan)
+AUTO="${ZTNET_AUTO:-0}"
+progress() { [ "$AUTO" = "1" ] && echo "@@PROGRESS $*"; return 0; }
+ask() { # ask "pertanyaan" "bawaan" -> isi variabel REPLY
+  if [ "$AUTO" = "1" ]; then REPLY="$2"; echo "$1 $2 (otomatis)"; else read -r -p "$1" REPLY; REPLY="${REPLY:-$2}"; fi
+}
+
 cek_layanan() {
   for s in genieacs-cwmp genieacs-ui vpn-acs xl2tpd; do
     if systemctl list-unit-files "$s.service" >/dev/null 2>&1 && systemctl cat "$s" >/dev/null 2>&1; then
@@ -45,6 +52,7 @@ if [ "${1:-}" = "status" ]; then
 fi
 
 echo -e "${GREEN}== Pemeriksaan sebelum memasang ==${NC}"
+progress 3 "Pemeriksaan awal"
 
 # 1) Port 3300 harus kosong (kecuali sudah dipakai ZTNET sendiri)
 if ss -lnt 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${ZTNET_PORT}$"; then
@@ -62,6 +70,7 @@ if command -v node >/dev/null 2>&1; then
     ok "Node.js $NODE_BEFORE (tidak akan diubah installer ZTNET)"
   else
     warn "Node.js $NODE_BEFORE akan DIGANTI ke Node 20 oleh installer ZTNET. GenieACS dan panel ikut memakai Node ini."
+    [ "$AUTO" = "1" ] && fail "Node.js di bawah versi 20. Pasang ZTNET lewat SSH (bash pasang-ztnet.sh) supaya bisa dikonfirmasi."
     read -r -p "Lanjutkan? [y/N]: " jawab
     [ "${jawab,,}" = "y" ] || fail "Dibatalkan."
   fi
@@ -77,7 +86,7 @@ ok "RAM ${MEM_MB} MB + swap ${SWAP_MB} MB"
 if [ "$TOTAL_MB" -lt 3500 ]; then
   warn "RAM + swap di bawah 3.5 GB. Build ZTNET bisa gagal atau membuat GenieACS lambat."
   if [ ! -f /swapfile-ztnet ]; then
-    read -r -p "Buat swap tambahan 2 GB di /swapfile-ztnet? [Y/n]: " jawab
+    ask "Buat swap tambahan 2 GB di /swapfile-ztnet? [Y/n]: " "y"; jawab="$REPLY"
     if [ "${jawab,,}" != "n" ]; then
       fallocate -l 2G /swapfile-ztnet && chmod 600 /swapfile-ztnet && mkswap /swapfile-ztnet >/dev/null && swapon /swapfile-ztnet \
         && { grep -q '/swapfile-ztnet' /etc/fstab || echo '/swapfile-ztnet none swap sw 0 0' >> /etc/fstab; } \
@@ -98,8 +107,10 @@ fi
 echo
 echo "Alamat untuk membuka ZTNET (domain atau IP publik VPS), tanpa http:// dan tanpa port."
 echo "Contoh: zt.inetwifi.xyz   (sebaiknya subdomain sendiri, bukan domain panel)"
-read -r -p "Alamat [${DEF_HOST}]: " ZT_HOST
+[ -n "${ZTNET_HOST:-}" ] && DEF_HOST="$ZTNET_HOST"
+ask "Alamat [${DEF_HOST}]: " "$DEF_HOST"; ZT_HOST="$REPLY"
 ZT_HOST="${ZT_HOST:-$DEF_HOST}"
+progress 12 "Alamat ZTNET: $ZT_HOST"
 ZT_HOST="$(echo "$ZT_HOST" | sed -E 's#^https?://##; s#/.*$##; s#:[0-9]+$##')"
 [ -n "$ZT_HOST" ] || fail "Alamat kosong."
 ZT_URL="http://${ZT_HOST}:${ZTNET_PORT}"
@@ -122,9 +133,12 @@ echo "  - IP address or domain name     : ${ZT_HOST}"
 echo "  - Password PostgreSQL           : tekan Enter (pakai bawaan)"
 echo "  - Kirim laporan error (jika ada): No"
 echo
-read -r -p "Tekan Enter untuk mulai..." _
+[ "$AUTO" = "1" ] || read -r -p "Tekan Enter untuk mulai..." _
+progress 18 "Memasang paket pendukung"
 apt-get update -qq && apt-get install -y -qq sudo curl lsb-release >/dev/null || fail "Gagal memasang sudo/curl/lsb-release"
-curl -s http://install.ztnet.network | sudo bash
+progress 25 "Menjalankan installer resmi ZTNET (5-15 menit)"
+TERM="${TERM:-xterm}" bash -c 'curl -s http://install.ztnet.network | sudo -E bash'
+progress 85 "Menyesuaikan pengaturan ZTNET"
 [ -d "$ZTNET_DIR" ] || fail "Installer ZTNET tidak selesai ($ZTNET_DIR tidak ada). Lihat pesan di atas."
 
 echo
@@ -149,7 +163,9 @@ if [ -n "$NODE_BEFORE" ] && [ "$(node -v)" != "$NODE_BEFORE" ]; then
 fi
 cek_layanan
 # Panel membaca ZeroTier saat halaman dibuka; restart agar deteksi ZTNET langsung muncul
-systemctl is-active --quiet vpn-acs && systemctl restart vpn-acs
+# (tidak dilakukan bila dipasang dari panel, karena panel sendiri yang menjalankan script ini)
+[ "$AUTO" = "1" ] || { systemctl is-active --quiet vpn-acs && systemctl restart vpn-acs; }
+progress 100 "Selesai"
 
 echo
 ok "Selesai."
@@ -161,4 +177,4 @@ echo "     1. Di ZTNET: Networks -> Create Network, atur rentang IPv4 (contoh 17
 echo "     2. Di panel VPN ACS: menu ZeroTier -> pilih jaringan -> Hubungkan VPS"
 echo "   Update ZTNET nanti: jalankan lagi bash $0 (port 3300 tetap)."
 SUMMARY="$SCRIPT_DIR/ringkasan.sh"
-[ -f "$SUMMARY" ] && bash "$SUMMARY"
+[ "$AUTO" = "1" ] || { [ -f "$SUMMARY" ] && bash "$SUMMARY"; }
