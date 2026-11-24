@@ -18,7 +18,7 @@ ONT ─ OLT ─ MikroTik router C ═══ VPN L2TP / ZeroTier ═══╝    
   - Akun VPN dan **script MikroTik siap salin**, mengikuti nama panel Anda
   - **Tes koneksi** bertahap, status **tersambung/terputus**, dan **riwayat uptime** 24 jam / 7 hari / 30 hari
   - **Port forwarding** untuk remote Winbox / WebFig / web ONT lewat IP publik VPS
-  - Halaman **GenieACS** (status layanan, patch, jumlah ONT per router) dan **ZeroTier** (controller lengkap: jaringan, rentang IP, perangkat, rute; Network ID besar + tombol salin, ganti nama dan deskripsi langsung di kartu, QR Network ID)
+  - Halaman **GenieACS** (status layanan, patch, jumlah ONT per router) dan **ZeroTier** (controller lengkap: jaringan, rentang IP, perangkat, rute; Network ID + tombol salin, ganti nama langsung di kartu, QR Network ID)
   - **Notifikasi Telegram** saat VPN putus, dikirim ke grup bertopik
   - **Domain Cloudflare + HTTPS** otomatis, termasuk subdomain untuk GenieACS dan add-on (Panel ACS, Bilingku)
   - **Log aktivitas** dan **nama panel** yang bisa diganti

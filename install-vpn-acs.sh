@@ -194,7 +194,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.4.0";
+const VERSION = "2.4.1";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -5483,33 +5483,26 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .zt-empty .big svg{width:24px;height:24px}
   .zt-empty p{max-width:460px;margin:6px auto 0;line-height:1.55}
   .zt-hero{overflow:hidden}
-  .zt-hb{display:flex;gap:24px;align-items:flex-start;padding:22px 22px 18px}
+  .zt-hb{display:flex;gap:20px;align-items:center;padding:16px 20px}
   .zt-hinfo{flex:1;min-width:0}
-  .zt-hrow{display:grid;grid-template-columns:150px minmax(0,1fr);align-items:center;gap:12px;min-height:40px}
-  .zt-hl{font-weight:650;color:var(--text);font-size:14px}
+  .zt-hrow{display:grid;grid-template-columns:120px minmax(0,1fr);align-items:center;gap:10px;min-height:32px}
+  .zt-hl{font-weight:500;color:var(--muted);font-size:13px}
   .zt-hv{display:flex;align-items:center;gap:8px;min-width:0}
-  .zt-nwid{font-size:26px;font-weight:600;letter-spacing:.03em;color:var(--text);line-height:1.2;word-break:break-all}
-  .zt-nname{font-size:18px;font-weight:550;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .zt-nin{max-width:320px;height:36px!important;font-size:15px!important}
-  .zt-ib{width:32px;height:32px;flex:none;display:grid;place-items:center;border:1px solid transparent;border-radius:8px;background:none;color:var(--primary);cursor:pointer;transition:background .12s,border-color .12s}
+  .zt-nwid{font-size:17px;font-weight:600;letter-spacing:.02em;color:var(--text);line-height:1.2;word-break:break-all}
+  .zt-nname{font-size:14.5px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .zt-nin{max-width:280px;height:32px!important;font-size:14px!important}
+  .zt-ib{width:28px;height:28px;flex:none;display:grid;place-items:center;border:1px solid transparent;border-radius:8px;background:none;color:var(--primary);cursor:pointer;transition:background .12s,border-color .12s}
   .zt-ib:hover{background:var(--primary-soft);border-color:color-mix(in srgb,var(--primary) 25%,transparent)}
-  .zt-ib svg{width:17px;height:17px}
+  .zt-ib svg{width:15px;height:15px}
   .zt-ib.ok{color:var(--ok)}
-  .zt-desc{margin:14px 0 0;padding:6px 0 6px 14px;border-left:3px solid var(--primary);color:var(--text-2);font-size:14px;line-height:1.55;cursor:text;border-radius:0;white-space:pre-wrap;word-break:break-word}
-  .zt-desc.empty{color:var(--muted)}
-  .zt-desc:hover:not(.editing){background:var(--hover)}
-  .zt-desc:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
-  .zt-desc.editing{cursor:default;padding-right:0}
-  .zt-dact{display:flex;align-items:center;gap:8px;margin-top:8px}
-  .zt-dact .sp{flex:1}
-  .zt-hmeta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:16px;font-size:12.5px}
+  .zt-hmeta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;font-size:12.5px}
   .zt-hmeta .pill svg{width:11px;height:11px;margin-right:3px;vertical-align:-1px}
-  .zt-hside{display:flex;flex-direction:column;align-items:center;gap:6px;flex:none}
-  .zt-qrmini{width:132px;height:132px;padding:10px;border-radius:12px;background:#fff;border:1px solid var(--line);cursor:zoom-in;transition:box-shadow .15s,transform .15s}
+  .zt-hside{display:flex;flex-direction:column;align-items:center;gap:4px;flex:none}
+  .zt-qrmini{width:92px;height:92px;padding:7px;border-radius:10px;background:#fff;border:1px solid var(--line);cursor:zoom-in;transition:box-shadow .15s,transform .15s}
   .zt-qrmini:hover{box-shadow:0 10px 24px -12px rgba(16,24,40,.35);transform:translateY(-1px)}
   .zt-qrmini svg{width:100%;height:100%;display:block}
-  .zt-qrcap{font-size:11.5px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
-  .zt-hbar{display:flex;align-items:center;gap:10px;padding:12px 22px;border-top:1px solid var(--line);background:var(--subtle)}
+  .zt-qrcap{font-size:10.5px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+  .zt-hbar{display:flex;align-items:center;gap:10px;padding:10px 20px;border-top:1px solid var(--line);background:var(--subtle)}
   .zt-hbar .sp{flex:1}
   .zt-hh{display:flex;align-items:center;gap:14px;padding:18px 20px;border-bottom:1px solid var(--line)}
   .zt-hic{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;background:linear-gradient(135deg,var(--primary),#3b82f6);color:#fff;flex:none;box-shadow:0 6px 16px -6px rgba(29,78,216,.55)}
@@ -5586,8 +5579,8 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   @media (max-width:1024px){.zt-g2{grid-template-columns:1fr}}
   @media (max-width:720px){
     .stats.zt-stats{grid-template-columns:1fr 1fr}.zt-stats .stat:nth-child(2){border-right:0}.zt-stats .stat:nth-child(-n+2){border-bottom:1px solid var(--line)}
-    .zt-hb{flex-direction:column-reverse;align-items:stretch;gap:16px;padding:18px 16px}.zt-hside{align-self:center}
-    .zt-hrow{grid-template-columns:1fr;gap:2px;min-height:0;margin-bottom:10px}.zt-nwid{font-size:21px}
+    .zt-hb{align-items:flex-start;gap:12px;padding:14px 16px}.zt-qrmini{width:76px;height:76px;padding:5px}.zt-qrcap{font-size:9.5px}
+    .zt-hrow{grid-template-columns:1fr;gap:2px;min-height:0;margin-bottom:10px}.zt-nwid{font-size:16px}
     .zt-hbar{flex-wrap:wrap;padding:12px 16px}.zt-hbar .muted{flex-basis:100%}.zt-hbar .btn{flex:1;justify-content:center}
     .zt-2col{grid-template-columns:1fr}
     .zt-qr{flex-direction:column;align-items:center}.zt-qrinfo{width:100%}
@@ -7408,7 +7401,6 @@ async function setZerotier(b) {
         <div class="zt-hinfo">
           <div class="zt-hrow"><span class="zt-hl">Network ID</span><span class="zt-hv"><span class="zt-nwid mono">${esc(cur.nwid)}</span><button class="zt-ib" data-copy="${esc(cur.nwid)}" data-msg="Network ID tersalin" title="Salin Network ID" aria-label="Salin Network ID">${ic("copy")}</button></span></div>
           <div class="zt-hrow"><span class="zt-hl">Nama jaringan</span><span class="zt-hv" id="ztNameBox"><span class="zt-nname">${esc(cur.name || "(tanpa nama)")}</span><button class="zt-ib" id="ztNameEdit" title="Ganti nama" aria-label="Ganti nama">${ic("edit")}</button></span></div>
-          <div class="zt-desc${cur.desc ? "" : " empty"}" id="ztDesc" role="button" tabindex="0" title="Klik untuk mengubah deskripsi">${cur.desc ? esc(cur.desc) : "Tambah deskripsi"}</div>
           <div class="zt-hmeta">${cur.private ? `<span class="pill ok">${ic("lock", "")}Private</span>` : `<span class="pill bad">Public</span>`}${okNet ? `<span class="pill info">Dipakai panel</span>` : ""}<span class="muted">interface <span class="mono">${esc(cur.iface || "—")}</span></span></div>
         </div>
         <div class="zt-hside">
@@ -7516,7 +7508,7 @@ function ztAutoRefresh(b, members) {
   const sig = ztSig(members);
   ZTPOLL = setInterval(async () => {
     if (!location.hash.startsWith("#/zerotier") || !document.body.contains(b)) { clearInterval(ZTPOLL); return; }
-    if ($("#modalRoot").innerHTML || document.activeElement === $("#ztQ") || $("#ztNameIn") || $("#ztDescIn") || document.hidden) return;
+    if ($("#modalRoot").innerHTML || document.activeElement === $("#ztQ") || $("#ztNameIn") || document.hidden) return;
     let z;
     try { z = await api("/api/zt"); } catch (e) { return; }
     if (ztSig(z.members) !== sig) setZerotier(b);
@@ -7539,25 +7531,6 @@ function ztInlineEdit(cur, b) {
     $("#ztNameNo").onclick = () => setZerotier(b);
     inp.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } else if (e.key === "Escape") { e.stopPropagation(); setZerotier(b); } };
   };
-  const desc = $("#ztDesc");
-  const editDesc = () => {
-    if (desc.classList.contains("editing")) return;
-    desc.classList.add("editing"); desc.classList.remove("empty");
-    desc.innerHTML = `<textarea id="ztDescIn" class="zt-ta" rows="2" maxlength="200" placeholder="contoh: Jaringan router pelanggan area Maumere">${esc(cur.desc || "")}</textarea>
-      <div class="zt-dact"><span class="muted zt-small">Enter untuk simpan · Esc untuk batal</span><span class="sp"></span><button class="btn sm" id="ztDescNo" type="button">Batal</button><button class="btn sm pri" id="ztDescOk" type="button">Simpan</button></div>`;
-    const ta = $("#ztDescIn"); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
-    const go = async () => {
-      const v = ta.value.trim();
-      if (v === (cur.desc || "")) return setZerotier(b);
-      busyBtn($("#ztDescOk"), true);
-      try { await save({ description: v }, v ? "Deskripsi disimpan" : "Deskripsi dihapus"); } catch (e) { toast(e.message); busyBtn($("#ztDescOk"), false); }
-    };
-    $("#ztDescOk").onclick = (e) => { e.stopPropagation(); go(); };
-    $("#ztDescNo").onclick = (e) => { e.stopPropagation(); setZerotier(b); };
-    ta.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); go(); } else if (e.key === "Escape") { e.stopPropagation(); setZerotier(b); } };
-  };
-  desc.onclick = editDesc;
-  desc.onkeydown = (e) => { if (e.key === "Enter" && !desc.classList.contains("editing")) { e.preventDefault(); editDesc(); } };
 }
 function ztQrDialog(cur) {
   let svg = "";
