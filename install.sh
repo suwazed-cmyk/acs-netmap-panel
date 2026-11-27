@@ -495,13 +495,11 @@ st_patch() {
 
 st_panel() {
   export PATH="/usr/local/bin:$PATH"
-  local code=""
+  # Panel baru (belum ada password admin): password dibuat lewat wizard saat panel pertama dibuka
   if [ $HAVE_PANEL = 0 ] || ! grep -qs '"admin"' /opt/vpn-acs/data.json; then
-    # Kode pemasangan untuk wizard di panel (huruf/angka yang tidak mudah tertukar)
-    code="$(head -c 64 /dev/urandom | tr -dc 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' | head -c 8)"
-    echo "$code" >/tmp/acsnm-code; chmod 600 /tmp/acsnm-code
+    : >/tmp/acsnm-wizard
   fi
-  VPNACS_SETUP_CODE="$code" bash "$(repo_dir)/install-vpn-acs.sh"
+  VPNACS_WIZARD=1 bash "$(repo_dir)/install-vpn-acs.sh"
   systemctl is-active --quiet vpn-acs
   # ufw aktif: buka port yang dibutuhkan (README menyarankan ufw tetap mati)
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
@@ -536,11 +534,11 @@ public_ip() {
   echo "$ip"
 }
 finish() {
-  local ip pw psk tun std ui_port repo
+  local ip wiz=0 psk tun std ui_port repo
   ip="$(public_ip)"
-  pw="$(cat /tmp/acsnm-code 2>/dev/null || true)"
+  [ -f /tmp/acsnm-wizard ] && wiz=1
   repo="$(cat /tmp/acsnm-repo 2>/dev/null || echo "$REPO_DIR_DEFAULT")"
-  rm -f /tmp/acsnm-code /tmp/acsnm-repo
+  rm -f /tmp/acsnm-wizard /tmp/acsnm-repo
   psk="$(grep -oP 'PSK\s+"\K[^"]*' /etc/ipsec.secrets 2>/dev/null | head -1)"
   tun="$(node -e 'try{const s=require("/opt/vpn-acs/data.json").settings||{};console.log((s.tunnelNet||"192.168.42.0/24").replace(/\.0\/\d+$/,".1"))}catch(e){console.log("192.168.42.1")}' 2>/dev/null || echo 192.168.42.1)"
   std="$(ss -Hltnp 2>/dev/null | grep -E '[:.]80[[:space:]]' | grep -q node && echo 1 || echo 0)"
@@ -552,7 +550,7 @@ finish() {
     echo
     if [ "$std" = 1 ]; then echo "Panel VPN ACS    : ${panel_url}   (cadangan: http://${ip}:8088)"
     else echo "Panel VPN ACS    : ${panel_url}"; fi
-    if [ -n "$pw" ]; then echo "Kode pemasangan  : ${pw}   (isi di wizard saat panel pertama dibuka)"
+    if [ "$wiz" = 1 ]; then echo "Password admin   : dibuat sendiri di wizard saat panel pertama dibuka"
     else echo "Password admin   : (tidak berubah, pakai password lama)"; fi
     echo "GenieACS UI      : http://${ip}:${ui_port}   (pertama kali: buat akun admin di wizard)"
     echo "URL ACS di ONT   : http://${tun}:7547   (lewat VPN, sama untuk semua router)"
@@ -570,7 +568,7 @@ finish() {
   sed -n '4,9p' "$INFO" | sed 's/^/  /'
   say ""
   say "  Info di atas juga disimpan di ${B}${INFO}${N} (hanya root yang bisa membaca)."
-  [ -n "$pw" ] && say "  ${Y}Buka alamat panel di browser, isi kode pemasangan, lalu buat password admin Anda sendiri.${N}"
+  [ "$wiz" = 1 ] && say "  ${Y}Segera buka alamat panel di browser dan buat password admin Anda sendiri.${N}"
   say ""
 }
 

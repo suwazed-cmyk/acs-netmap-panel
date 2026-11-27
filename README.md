@@ -111,17 +111,18 @@ Yang dipasang (semua dari sumber resmi, bukan script pihak ketiga):
 | Node.js 22 | rilis resmi `nodejs.org`, dicek SHA256 | dipasang ke `/usr/local` |
 | GenieACS 1.2.16 | npm resmi, susunan sesuai dokumentasi GenieACS | `/opt/genieacs/genieacs.env`, log di `/var/log/genieacs`, JWT acak, **NBI hanya 127.0.0.1** |
 | Patch IP virtual | `genieacs-virtualip.sh` (repo ini) | dibangun dari source GenieACS versi yang terpasang |
-| Panel VPN ACS | `install-vpn-acs.sh` (repo ini) | password admin acak |
+| Panel VPN ACS | `install-vpn-acs.sh` (repo ini) | password admin dibuat sendiri di wizard |
 | Inform berkala | provision `vpnacs-inform` | ONT melapor tiap 300 detik (bisa diubah di menu GenieACS) |
 
-Di akhir muncul ringkasan: **alamat panel, kode pemasangan, alamat GenieACS UI, dan PSK**. Ringkasan yang sama disimpan di **`/root/acs-netmap-info.txt`** (hanya root).
+Di akhir muncul ringkasan: **alamat panel, alamat GenieACS UI, dan PSK**. Ringkasan yang sama disimpan di **`/root/acs-netmap-info.txt`** (hanya root).
 
-Buka alamat panel di browser. Yang muncul pertama adalah **wizard pemasangan** (±1 menit):
-1. Isi **kode pemasangan** dari ringkasan instalasi (melindungi panel agar tidak diambil orang lain sebelum Anda).
-2. Buat **password admin panel** sendiri.
-3. **Nama panel** dan **zona waktu**.
-4. **Alamat VPS** (terisi otomatis) dan **Jaringan VPN L2TP**: langsung terlihat URL ACS untuk ONT. Tentukan sekarang, karena mengganti belakangan berarti URL ACS di semua ONT ikut berubah.
-5. Periksa ringkasan, lalu **Selesai** dan langsung masuk ke Dashboard.
+**Segera** buka alamat panel di browser setelah instalasi selesai. Yang muncul pertama adalah **wizard pemasangan** (±1 menit):
+1. Buat **password admin panel** sendiri (ada ikon mata untuk melihat yang Anda ketik).
+2. **Nama panel** dan **zona waktu**.
+3. **Jaringan VPN L2TP**: langsung terlihat URL ACS untuk ONT. Tentukan sekarang, karena mengganti belakangan berarti URL ACS di semua ONT ikut berubah.
+4. Periksa ringkasan, lalu **Selesai**. Halaman login tampil: masuk dengan password yang baru dibuat untuk memastikan Anda mengingatnya.
+
+Alamat VPS tidak ditanyakan di wizard; panel mendeteksinya otomatis dan bisa diubah nanti di **Pengaturan → Umum**. Wizard hanya muncul selama password admin belum dibuat, jadi selesaikan segera setelah instalasi.
 
 Akun **GenieACS UI** terpisah dari akun panel. Buat, ganti, atau reset passwordnya di menu **GenieACS → Pengaturan → Akun GenieACS UI**.
 
@@ -176,9 +177,9 @@ Setiap pemeriksaan diberi tanda **[OK]**, **[PERINGATAN]**, atau **[GAGAL]**. Ba
 Buka `http://IP_VPS`. Pada pemasangan baru, selesaikan dulu wizard pemasangan (lihat langkah 1). Jika port 80 dipakai program lain, buka `http://IP_VPS:8088`.
 
 Menu **Pengaturan → Umum**:
-1. **Nama panel** (opsional), misalnya `INET WIFI`. Dipakai di judul panel dan sebagai komentar aturan di MikroTik (`INET WIFI - ONT ke IP virtual`). Bisa diganti kapan saja; script baru otomatis membersihkan aturan dengan nama lama.
+1. **Nama panel** (opsional), misalnya `NetKu WiFi`. Dipakai di judul panel dan sebagai komentar aturan di MikroTik (`NetKu WiFi - ONT ke IP virtual`). Bisa diganti kapan saja; script baru otomatis membersihkan aturan dengan nama lama.
 2. **Alamat VPS**: IP publik VPS (atau domain). Alamat ini dipakai di script MikroTik.
-3. **Password admin**: bisa diganti dengan password Anda sendiri. Instalasi lama yang masih memakai `Admin123` mendapat peringatan di dashboard sampai diganti.
+3. **Password admin**: bisa diganti kapan saja (minimal 8 karakter).
 
 Menu **L2TP → Pengaturan**:
 1. **Pakai IPsec**: biarkan mati (L2TP biasa), kecuali Anda memang butuh.
@@ -193,7 +194,7 @@ Buka **GenieACS UI** di `http://IP_VPS:3000`. Pada pemasangan baru muncul *initi
 ### 9. Tambah router
 Panel → **Tambah router**:
 1. **Jalur ke VPS**: pilih **L2TP** (semua MikroTik). Jalur **ZeroTier** dibahas di [Fitur opsional E](#e-router-lewat-zerotier), **WireGuard** di [Fitur opsional F](#f-router-lewat-wireguard).
-2. **Nama router**, misalnya `Nangahale`.
+2. **Nama router**, misalnya `Kantor Pusat`.
 3. **Subnet ONT di MikroTik**: lihat di Winbox → IP → DHCP Server → Networks, misalnya `10.0.0.0/24`.
 4. **IP virtual**: kosongkan agar dipilih otomatis (`10.100.x.0/24`), atau isi sendiri dengan IP private apa saja (misalnya `172.16.10.0/24`). GenieACS di VPS ikut menyesuaikan otomatis. Tidak boleh sama dengan router lain.
 5. **Simpan**.
@@ -262,7 +263,6 @@ Panel **langsung memakai port 80/443** setelah instal:
 - Port **8088 tetap jalan** sebagai cadangan, dan script MikroTik lama tetap berfungsi.
 
 Penting:
-- **Segera ganti password `Admin123`.** Selama masih bawaan, panel menampilkan peringatan merah di setiap halaman.
 - Buka TCP **80** dan **443** di firewall provider.
 - Jika port 80/443 sudah dipakai program lain (misalnya nginx/apache), panel tetap berjalan di port 8088. `bash cek.sh` memberi tahu program mana yang memakainya.
 - **Port bisa diganti** di **Pengaturan → Umum → Alamat panel** (misalnya 8000/8443 bila 80/443 dipakai aplikasi lain). Alamat panel ikut memakai nomor port itu. **Kembalikan bawaan** = 80/443, **Matikan** = hanya port 8088.
@@ -348,6 +348,9 @@ Menu **GenieACS → Inform berkala ONT** menampilkan sebaran interval semua ONT.
 | Menu | Kegunaan |
 |---|---|
 | **Dashboard** | Jumlah router tersambung/terputus, uptime tiap router (24 jam, 7 hari, 30 hari), daftar **Perlu perhatian**, alamat GenieACS |
+
+Tampilan panel **realtime tanpa penyegaran berkala**: begitu router tersambung/putus, data diubah (juga dari browser lain), atau kesehatan VPS berubah, server mengirim tanda lewat koneksi Server-Sent Events dan hanya bagian yang berubah diperbarui. Posisi scroll, menu, dan isian tidak terganggu. Koneksi ini tidak dihitung sebagai aktivitas, jadi logout otomatis saat diam tetap berlaku.
+
 | **Router** | Daftar router. Detail router punya tab **Ringkasan**, **Port Forwarding**, **Script MikroTik**, dan **Riwayat** |
 | **GenieACS** | Status layanan, patch IP virtual, jumlah ONT per router, **Web ONT** (buka web ONT lewat internet), alamat GenieACS UI |
 | **ZeroTier** | Controller ZeroTier: jaringan, rentang IP, perangkat, rute |
@@ -377,7 +380,7 @@ Jalankan dulu `bash cek.sh`. Sebagian besar masalah langsung terlihat di sana.
 |---|---|---|
 | Install add-on gagal atau berhenti | Memori habis, internet VPS putus, atau apt sedang dipakai | Klik **Install** lagi (langkah yang sudah selesai dilewati), lalu **Periksa**. Log lengkap: `/opt/vpn-acs/jobs/` |
 | Panel/GenieACS tidak bisa dibuka dari HP/PC | Port belum dibuka di firewall provider | Buka port di [langkah 7](#7-firewall-provider). Jika `cek.sh` OK, masalahnya di firewall provider |
-| Lupa password panel | — | `bash install-vpn-acs.sh password` lalu Enter (kembali ke `Admin123`) |
+| Lupa password panel | — | `bash install-vpn-acs.sh password` lalu ketik password baru |
 | Router tetap **Menunggu pemasangan** / **Terputus** | UDP 1701 tertutup, Alamat VPS salah, atau script belum ditempel | Klik **Tes koneksi**. Di MikroTik cek **Interfaces → l2tp-acs** dan **Log** |
 | ONT tidak muncul di GenieACS | URL ACS salah, Periodic Inform mati, atau router belum tersambung | Cek [langkah 10](#10-atur-ont). Tes koneksi harus lolos langkah **Jaringan ONT** |
 | Summon gagal, `ConnectionRequestURL` berisi IP asli | Patch belum aktif, atau ONT belum Inform ulang setelah patch | `bash genieacs-virtualip.sh status`, tunggu Inform berikutnya (maks. 5 menit) |
@@ -427,7 +430,7 @@ Jika GenieACS di-update, jalankan ulang `bash genieacs-virtualip.sh`.
 ```bash
 bash ringkasan.sh                    # alamat web, port, dan status semua layanan
 bash cek.sh                          # tes apakah semua layanan benar-benar berjalan
-bash install-vpn-acs.sh password     # ganti/reset password admin panel (Enter = Admin123)
+bash install-vpn-acs.sh password     # ganti/reset password admin panel
 bash install-vpn-acs.sh uninstall    # hapus panel (akun VPN tetap)
 bash genieacs-virtualip.sh status    # cek patch IP virtual
 bash genieacs-virtualip.sh rollback  # kembali ke GenieACS asli

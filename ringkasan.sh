@@ -19,7 +19,6 @@ PANEL_DATA="$PANEL_DIR/data.json"
 PANEL_PORT="8088"
 GENIE_ENV="/opt/genieacs/genieacs.env"
 ZTNET_DIR="/opt/ztnet"
-DEFAULT_ADMIN_PW="Admin123"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 NODE_BIN="$(command -v node || true)"
@@ -66,12 +65,9 @@ panel_get() {
       const net = s.tunnelNet || "192.168.42.0/24";
       const p = net.split("/")[0].split(".").map(Number);
       v = p.length === 4 ? `${p[0]}.${p[1]}.${p[2]}.${p[3] + 1}` : "192.168.42.1";
-    } else if (k === "defaultPw") {
-      const a = d.admin, c = require("crypto");
-      v = a && a.salt && a.hash && c.scryptSync(process.argv[3], a.salt, 64).toString("hex") === a.hash ? "1" : "";
-    }
+    } else if (k === "hasAdmin") v = d.admin && d.admin.hash ? "1" : "";
     process.stdout.write(String(v));
-  ' "$PANEL_DATA" "$1" "$DEFAULT_ADMIN_PW" 2>/dev/null
+  ' "$PANEL_DATA" "$1" 2>/dev/null
 }
 
 # ---------- Alamat VPS ----------
@@ -116,10 +112,10 @@ if [ -f "$PANEL_DIR/server.js" ]; then
   fi
   line "Nama panel" "$(panel_get panelName)"
   line "Router" "$(panel_get sites) terdaftar"
-  if [ "$(panel_get defaultPw)" = "1" ]; then
-    line "Password" "${RED}${DEFAULT_ADMIN_PW}${NC} (bawaan! SEGERA ganti di Pengaturan → Umum)"
-  else
+  if [ "$(panel_get hasAdmin)" = "1" ]; then
     line "Password" "sesuai yang Anda buat"
+  else
+    line "Password" "${YELLOW}belum dibuat${NC} (buka alamat panel di browser untuk wizard)"
   fi
   TCP_OPEN+=("${SP_HTTP}|Panel (http)")
   TCP_OPEN+=("${SP_HTTPS}|Panel (https)")

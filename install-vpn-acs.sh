@@ -32,43 +32,35 @@ fail() { echo -e "${RED}[GAGAL]${NC} $*"; exit 1; }
 NODE_BIN="$(command -v node || true)"
 [ -n "$NODE_BIN" ] || fail "Node.js tidak ditemukan. Jalankan install.sh (memasang semua komponen)."
 
-DEFAULT_ADMIN_PW="Admin123"
+# Password admin panel. Tanpa password, panel membuka wizard pemasangan awal di browser
+# (password dibuat sendiri oleh pemilik saat panel pertama dibuka).
 ask_password() {
-  local p1 p2
-  # install.sh: password dibuat lewat wizard di panel, dilindungi kode pemasangan
-  if [ -n "${VPNACS_SETUP_CODE:-}" ]; then
-    "$NODE_BIN" "$APP_DIR/server.js" --setup-code "$VPNACS_SETUP_CODE"
-    return
-  fi
+  local p1 p2 force="${1:-}"
   # password admin langsung dari variabel ini (tanpa pertanyaan)
   if [ -n "${VPNACS_ADMIN_PASSWORD:-}" ]; then
     "$NODE_BIN" "$APP_DIR/server.js" --set-password "$VPNACS_ADMIN_PASSWORD"
     return
   fi
-  if [ ! -t 0 ]; then
-    p1="$(openssl rand -base64 18 2>/dev/null | tr -dc 'A-Za-z0-9' | head -c 12)"
-    [ ${#p1} -ge 8 ] || p1="$DEFAULT_ADMIN_PW"
-    "$NODE_BIN" "$APP_DIR/server.js" --set-password "$p1"
-    warn "Tidak ada terminal untuk bertanya: password admin dibuat acak: $p1"
+  # install.sh atau tanpa terminal: password dibuat lewat wizard di browser
+  if [ -z "$force" ] && { [ -n "${VPNACS_WIZARD:-}" ] || [ ! -t 0 ]; }; then
     return
   fi
   while true; do
-    read -r -s -p "Password admin panel (Enter = ${DEFAULT_ADMIN_PW}): " p1; echo
-    if [ -z "$p1" ]; then p1="$DEFAULT_ADMIN_PW"; break; fi
-    [ ${#p1} -ge 8 ] || { echo "Minimal 8 karakter, coba lagi (atau Enter untuk password bawaan)."; continue; }
+    if [ -n "$force" ]; then read -r -s -p "Password admin panel baru: " p1; echo
+    else read -r -s -p "Password admin panel (Enter = buat lewat browser): " p1; echo
+      [ -z "$p1" ] && return
+    fi
+    [ ${#p1} -ge 8 ] || { echo "Minimal 8 karakter, coba lagi."; continue; }
     read -r -s -p "Ulangi password: " p2; echo
     [ "$p1" = "$p2" ] || { echo "Tidak sama, coba lagi."; continue; }
     break
   done
   "$NODE_BIN" "$APP_DIR/server.js" --set-password "$p1"
-  if [ "$p1" = "$DEFAULT_ADMIN_PW" ]; then
-    warn "Memakai password bawaan ${DEFAULT_ADMIN_PW}. Segera ganti di Pengaturan panel."
-  fi
 }
 
 if [ "${1:-}" = "password" ]; then
   [ -f "$APP_DIR/server.js" ] || fail "Panel belum terpasang"
-  ask_password
+  ask_password force
   systemctl restart vpn-acs
   ok "Password admin diganti"
   exit 0
@@ -216,7 +208,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.17.0";
+const VERSION = "2.18.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -431,6 +423,29 @@ function saveData(d) {
   const tmp = DATA_FILE + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(d, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, DATA_FILE);
+  sseData();
+}
+// ---------- Data realtime ke browser (Server-Sent Events) ----------
+// Browser membuka satu koneksi /api/events. Server mengirim tanda saat ada perubahan
+// (router tersambung/putus, data panel berubah, kesehatan VPS), lalu halaman hanya
+// memperbarui bagian yang berubah. Tidak ada lagi penyegaran berkala.
+const SSE = new Set();
+let SSE_DATA_T = null;
+function sseSend(ev, data) {
+  if (!SSE.size) return;
+  const msg = `event: ${ev}\ndata: ${JSON.stringify(data || {})}\n\n`;
+  for (const c of SSE) {
+    try {
+      c.res.write(msg);
+    } catch (e) {
+      SSE.delete(c);
+    }
+  }
+}
+function sseData() {
+  if (!SSE.size) return;
+  clearTimeout(SSE_DATA_T);
+  SSE_DATA_T = setTimeout(() => sseSend("data"), 300);
 }
 function hashPassword(pw, salt) {
   salt = salt || crypto.randomBytes(16).toString("hex");
@@ -442,15 +457,6 @@ function checkPassword(pw, rec) {
   const h = crypto.scryptSync(String(pw), rec.salt, 64);
   const r = Buffer.from(rec.hash, "hex");
   return h.length === r.length && crypto.timingSafeEqual(h, r);
-}
-// Password bawaan saat instalasi (tinggal Enter). Panel menampilkan peringatan sampai diganti.
-const DEFAULT_ADMIN_PW = "Admin123";
-let DEFPW_CACHE = { hash: null, v: false };
-function isDefaultPw(d) {
-  const rec = d && d.admin;
-  if (!rec || !rec.hash) return false;
-  if (DEFPW_CACHE.hash !== rec.hash) DEFPW_CACHE = { hash: rec.hash, v: checkPassword(DEFAULT_ADMIN_PW, rec) };
-  return DEFPW_CACHE.v;
 }
 function randomPassword(len) {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
@@ -2502,6 +2508,7 @@ function msgRemind(list, now) {
 // =====================================================================
 let monitorBusy = false;
 let ztRefreshAt = 0;
+let SITES_SIG = null;
 async function monitorTick() {
   if (monitorBusy) return;
   monitorBusy = true;
@@ -2528,6 +2535,11 @@ async function monitorTick() {
     const remindList = [];
     const ids = new Set();
     const links = linksSync(d, peers);
+    const sig = d.sites.map((s) => s.id + (links[s.id] ? "1" : "0")).join(",");
+    if (sig !== SITES_SIG) {
+      if (SITES_SIG !== null) sseSend("sites");
+      SITES_SIG = sig;
+    }
     for (const s of d.sites) {
       ids.add(s.id);
       const online = !!links[s.id];
@@ -5238,6 +5250,31 @@ async function handleApi(req, res, url) {
     }
   }
 
+  // --- Data realtime (SSE). Tidak dihitung sebagai aktivitas, jadi logout otomatis tetap berlaku ---
+  if (p === "/api/events" && method === "GET") {
+    const k = tokHash(getCookie(req, "vpnacs") || "-");
+    const alive = () => {
+      const r = sessions.get(k);
+      return !!r && Date.now() - r.last <= IDLE_MS;
+    };
+    if (!alive()) return send(res, 401, { error: "Silakan login dulu." });
+    res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "X-Accel-Buffering": "no" });
+    res.write("retry: 5000\n\n");
+    const c = { res };
+    SSE.add(c);
+    const hb = setInterval(() => {
+      if (!alive()) {
+        res.write("event: logout\ndata: {}\n\n");
+        return res.end();
+      }
+      res.write(": hb\n\n");
+    }, 25000);
+    req.on("close", () => {
+      clearInterval(hb);
+      SSE.delete(c);
+    });
+    return;
+  }
   // --- Login ---
   if (p === "/api/login" && method === "POST") {
     const ip = clientIp(req);
@@ -5289,33 +5326,20 @@ async function handleApi(req, res, url) {
   }
   if (p === "/api/me" && method === "GET") {
     const d = loadData();
-    const setup = !d.admin && !!d.setupCode;
+    // Belum ada password admin (baru dipasang): panel membuka wizard pemasangan awal
+    const setup = !d.admin;
     const out = { loggedIn: authed(req), panelName: brandOf(d), setup };
-    if (setup) {
-      const st = settings(d);
-      out.defaults = { publicIp: st.publicIp || "", tunnelNet: tun(d).net, timezone: tzName(d), timezones: Object.entries(TIMEZONES).map(([id, v]) => ({ id, label: v.label })), panelName: brandOf(d) };
-    }
+    if (setup) out.defaults = { tunnelNet: tun(d).net, timezone: (d.settings && d.settings.timezone) || "Asia/Jakarta", timezones: Object.entries(TIMEZONES).map(([id, v]) => ({ id, label: v.label })), panelName: brandOf(d) };
     return send(res, 200, out);
   }
-  // --- Wizard pemasangan awal: kode dari installer, lalu password admin ---
+  // --- Wizard pemasangan awal: password admin dibuat sendiri saat panel pertama dibuka ---
+  // Sesi sementara dipakai wizard untuk menyimpan pengaturan, lalu wizard logout
+  // supaya pengguna masuk lagi dengan password yang baru dibuat.
   if (p === "/api/setup" && method === "POST") {
     const d = loadData();
-    if (d.admin || !d.setupCode) return send(res, 409, { error: "Panel sudah dipasang. Silakan login." });
-    const ip = clientIp(req), now = Date.now();
-    const f = loginFails.get(ip) || { n: 0, level: 0, until: 0, last: 0, total: 0 };
-    if (f.until > now) return send(res, 429, { error: `Terlalu banyak percobaan. Coba lagi dalam ${Math.ceil((f.until - now) / 60000)} menit.` });
-    const code = String(body.code || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
-    if (crypto.createHash("sha256").update(code).digest("hex") !== d.setupCode) {
-      f.n += 1; f.last = now;
-      if (f.n >= 5) { f.until = now + 15 * 60e3; f.n = 0; }
-      loginFails.set(ip, f);
-      await new Promise((r) => setTimeout(r, 800));
-      return send(res, 401, { error: "Kode pemasangan salah. Lihat kode di layar terminal atau di /root/acs-netmap-info.txt" });
-    }
-    if (body.password === undefined) return send(res, 200, { ok: true, codeOk: true });
+    if (d.admin) return send(res, 409, { error: "Panel sudah dipasang. Silakan login." });
     const pw = String(body.password || "");
     if (pw.length < 8) return send(res, 400, { error: "Password minimal 8 karakter." });
-    if (pw === DEFAULT_ADMIN_PW) return send(res, 400, { error: "Gunakan password selain password bawaan." });
     d.admin = hashPassword(pw);
     delete d.setupCode;
     saveData(d);
@@ -5482,7 +5506,6 @@ async function handleApi(req, res, url) {
         genieCidr: st.genieCidr,
         virtualPool: VIRTUAL_POOL,
         acsUrl: `http://${st.tun.local}:${ACS_PORT}`,
-        defaultPassword: isDefaultPw(d),
         genieUrl: genieUrl(d, st.publicIp),
         genieUrlManual: (d.settings && d.settings.genieUrl) || "",
         zt: st.zt ? { nwid: st.zt.nwid, name: st.zt.name, subnet: st.zt.subnet, vpsIp: st.zt.vpsIp, iface: st.zt.iface, checkError: st.zt.checkError || "" } : null,
@@ -6549,7 +6572,6 @@ async function handleApi(req, res, url) {
     if (body.newPassword !== undefined) {
       if (!checkPassword(body.oldPassword || "", d.admin)) return send(res, 400, { error: "Password lama salah." });
       if (String(body.newPassword).length < 8) return send(res, 400, { error: "Password baru minimal 8 karakter." });
-      if (String(body.newPassword) === DEFAULT_ADMIN_PW) return send(res, 400, { error: "Gunakan password selain password bawaan." });
       d.admin = hashPassword(body.newPassword);
       const out = sessionsDrop(req.sessKey);
       logs.push(["Password admin diganti", out ? `${out} sesi lain dikeluarkan` : ""]);
@@ -6606,16 +6628,6 @@ if (process.argv[2] === "--set-password") {
   saveData(d);
   console.log("Password admin disimpan.");
   process.exit(0);
-} else if (process.argv[2] === "--setup-code") {
-  // Dipakai install.sh: panel dibuka pertama kali lewat wizard, dilindungi kode ini
-  const code = String(process.argv[3] || "").trim().toUpperCase();
-  if (code.length < 6) { console.error("Kode minimal 6 karakter."); process.exit(1); }
-  const d = loadData();
-  if (d.admin) { console.log("Password admin sudah ada, kode pemasangan tidak dipakai."); process.exit(0); }
-  d.setupCode = crypto.createHash("sha256").update(code).digest("hex");
-  saveData(d);
-  console.log("Kode pemasangan disimpan.");
-  process.exit(0);
 } else if (process.argv[2] === "--genie-inform") {
   // Dipakai install.sh: pasang provision "inform berkala" ke GenieACS (dilewati bila sudah ada)
   (async () => {
@@ -6637,7 +6649,7 @@ if (process.argv[2] === "--set-password") {
   // Sinkronkan berkas saat panel dinyalakan
   (async () => {
     const d = loadData();
-    if (!d.admin) console.error("Password admin belum diset. Jalankan: node server.js --set-password PASSWORD");
+    if (!d.admin) console.log("Password admin belum dibuat: buka panel di browser untuk wizard pemasangan awal.");
     // Router dari versi lama dianggap sudah terpasang (bukan "menunggu pemasangan")
     if (!d.v2) {
       for (const s of d.sites || []) if (s.installedAt === undefined) s.installedAt = s.createdAt || new Date().toISOString();
@@ -6691,6 +6703,7 @@ if (process.argv[2] === "--set-password") {
     }
   }, 60 * 1000);
   setInterval(certReloadCheck, 3600 * 1000);
+  setInterval(() => sseSend("health"), 15 * 1000);
   setTimeout(healthTick, 90 * 1000);
   setInterval(healthTick, 60 * 1000);
   setTimeout(() => checkUpdates().catch(() => {}), 2 * 60 * 1000);
@@ -7804,6 +7817,17 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   [data-theme="dark"] .tab.on{background:var(--surface-3)}
   .subtabs{margin-bottom:14px}
   .tcnt{margin-left:2px}
+  /* menu di dalam halaman memenuhi lebar halaman */
+  .tabs{display:flex;width:100%}
+  .tabs>.tab{flex:1 0 auto;justify-content:center}
+  /* tombol mata di kolom password */
+  .pw-wrap{position:relative;display:block}
+  .pw-wrap>input{padding-right:42px!important}
+  .pw-eye{position:absolute;right:5px;top:50%;transform:translateY(-50%);width:32px;height:30px;display:grid;place-items:center;border:0;border-radius:8px;background:none;color:var(--muted);cursor:pointer;padding:0}
+  .pw-eye:hover{color:var(--text);background:var(--subtle)}
+  .pw-eye svg{width:18px;height:18px}
+  .login-ok{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;margin:0 0 12px;border-radius:10px;background:color-mix(in srgb,var(--ok) 12%,transparent);color:var(--text);font-size:13.5px;line-height:1.5}
+  .login-ok svg{width:18px;height:18px;flex:none;color:var(--ok);margin-top:1px}
   /* tab di kartu Dashboard ikut bergaya segmen */
   .dtabs{display:inline-flex;align-self:center;gap:2px;margin:0;padding:3px;background:var(--subtle);border:1px solid var(--line);border-radius:11px}
   .dtabs button{height:auto;padding:6px 12px;border:0;border-radius:8px;font-size:13.5px;font-weight:500;color:var(--muted);margin:0}
@@ -8203,8 +8227,8 @@ function setBrand(n) {
   BRAND = n || "VPN ACS";
   document.querySelectorAll(".brand-name").forEach((el) => (el.textContent = BRAND));
 }
-function showLogin() { $("#appView").classList.add("hidden"); $("#loginView").classList.remove("hidden"); document.title = `Masuk · ${BRAND}`; $("#lp").focus(); }
-function showApp() { $("#loginView").classList.add("hidden"); $("#appView").classList.remove("hidden"); }
+function showLogin() { liveStop(); $("#appView").classList.add("hidden"); $("#loginView").classList.remove("hidden"); document.title = `Masuk · ${BRAND}`; $("#lp").focus(); }
+function showApp() { $("#loginView").classList.add("hidden"); $("#appView").classList.remove("hidden"); const ok = $("#loginOk"); if (ok) ok.remove(); liveStart(); }
 $("#loginForm").addEventListener("submit", async (e) => {
   e.preventDefault(); $("#loginErr").textContent = "";
   const btn = $("#loginForm button"); busyBtn(btn, true);
@@ -8232,15 +8256,10 @@ const TRL = { l2tp: "L2TP", zt: "ZeroTier", wg: "WireGuard" };
 
 /* ================= Router ================= */
 let TEST = null; // tes koneksi yang sedang tampil
-// Peringatan di semua halaman selama password masih bawaan
-function topWarn(parts) {
+// Tempat peringatan di atas semua halaman (saat ini tidak ada peringatan tetap)
+function topWarn() {
   const el = $("#topWarn");
-  if (!el) return;
-  const st = STATE.settings || {};
-  if (!st.defaultPassword) { el.innerHTML = ""; return; }
-  const P = st.stdPorts || {};
-  const onSet = parts[0] === "pengaturan" && (!parts[1] || parts[1] === "umum");
-  el.innerHTML = `<div class="note bad">${ic("alert")}<div><b>Password admin masih bawaan (Admin123)</b>${P.active ? "Panel terbuka di port web standar sehingga mudah ditemukan orang. " : ""}Siapa pun yang mencoba Admin123 bisa masuk dan mengubah router Anda. Segera ganti password.</div>${onSet ? "" : `<a class="btn pri" href="#/pengaturan/umum">Ganti password</a>`}</div>`;
+  if (el && el.innerHTML) el.innerHTML = "";
 }
 /* ---------- Perbarui tampilan tanpa menggambar ulang halaman ----------
    Isi baru dibuat di luar layar lalu hanya bagian yang berubah yang disalin
@@ -8339,7 +8358,6 @@ window.addEventListener("hashchange", route);
 /* ================= Dashboard ================= */
 function issues() {
   const s = STATE.settings, list = [];
-  if (s.defaultPassword) list.push({ t: "Password admin masih bawaan", d: "Password Admin123 mudah ditebak. Ganti di Pengaturan → Umum → Password admin.", go: "#/pengaturan" });
   if (!s.publicIp) list.push({ t: "Alamat VPS belum diisi", d: "Script MikroTik membutuhkan alamat VPS.", go: "#/pengaturan" });
   if (s.genieCidr !== null && !genieOk(s.genieCidr)) list.push({ t: "Patch IP virtual GenieACS belum aktif", d: "Summon ke ONT akan gagal.", go: "#/genieacs" });
   const off = STATE.sites.filter((x) => x.state === "down");
@@ -9144,7 +9162,7 @@ function siteForm(x) {
 function siteFormRest(x) {
   return `
     <label for="fName">Nama router</label>
-    <input id="fName" type="text" maxlength="40" placeholder="contoh: Nangahale" value="${esc(x?.name || "")}">
+    <input id="fName" type="text" maxlength="40" placeholder="contoh: Kantor Pusat" value="${esc(x?.name || "")}">
     <label for="fSub">Subnet ONT di MikroTik</label>
     <input id="fSub" type="text" placeholder="10.0.0.0/24" value="${esc(x?.realSubnet || "10.0.0.0/24")}">
     <div class="help">Winbox → IP → DHCP Server → Networks. Boleh sama dengan router lain.</div>
@@ -9426,7 +9444,6 @@ function setGeneral(b) {
       </form></div>`;
     })()}
     <div class="card"><div class="ch"><h2>Password admin</h2></div><form class="cb" id="pwForm" style="padding-top:4px">
-      ${STATE.settings.defaultPassword ? `<div class="note warn" style="margin-bottom:12px">${ic("alert")}<div><b>Masih memakai password bawaan</b>Isi password lama dengan <code>Admin123</code>, lalu buat password baru.</div></div>` : ""}
       <div class="f2"><div><label for="pOld">Password lama</label><input id="pOld" type="password" autocomplete="current-password"></div>
         <div><label for="pNew">Password baru</label><input id="pNew" type="password" autocomplete="new-password" placeholder="Minimal 8 karakter"></div></div>
       <div class="err" id="pwErr"></div>
@@ -10218,7 +10235,7 @@ function ztCreateDialog(z, b) {
   modal("Buat jaringan ZeroTier", `
     <p class="help" style="margin-top:0">Jaringan dibuat di controller ZeroTier VPS ini. Router MikroTik bergabung dengan Network ID-nya lewat script dari panel.</p>
     <label for="zcName">Nama jaringan</label>
-    <input id="zcName" type="text" maxlength="64" value="${esc(first ? (STATE.settings.panelName || "ACS") + " ZeroTier" : "")}" placeholder="contoh: ACS Flores">
+    <input id="zcName" type="text" maxlength="64" value="${esc(first ? (STATE.settings.panelName || "ACS") + " ZeroTier" : "")}" placeholder="contoh: Jaringan ONT">
     <label for="zcSub">Rentang IP</label>
     <input id="zcSub" type="text" class="mono" value="${esc(z.suggest || "172.27.0.0/24")}" placeholder="172.27.0.0/24">
     <div class="help">IP private ukuran /16 sampai /29. Saran ${esc(z.suggest || "")} tidak bentrok dengan jaringan lain di panel. IP perangkat dibagikan otomatis dari rentang ini.</div>
@@ -10413,11 +10430,6 @@ async function setWireguard(b) {
   b.querySelectorAll("tr[data-go]").forEach((tr) => (tr.onclick = (e) => { if (!e.target.closest("a,button")) location.hash = tr.dataset.go; }));
   $("#wgSet").onclick = () => wgSettingsDialog(w, b);
   clearInterval(WGPOLL);
-  WGPOLL = setInterval(() => {
-    if (!location.hash.startsWith("#/wireguard") || !document.body.contains(b)) return clearInterval(WGPOLL);
-    if ($("#modalRoot").innerHTML || document.hidden) return;
-    setWireguard(b);
-  }, 30000);
 }
 function wgSettingsDialog(w, b) {
   modal("Pengaturan WireGuard", `
@@ -10882,8 +10894,9 @@ document.addEventListener("click", async (e) => {
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeModal(); document.querySelectorAll(".menu-list").forEach((m) => m.classList.add("hidden")); } });
 
 /* ================= Wizard pemasangan awal ================= */
-// Muncul sekali setelah install.sh: kode pemasangan → password admin → panel → VPS & VPN → ringkasan.
-const WZ = { step: 0, code: "", pw: "", done: false, d: {} };
+// Muncul sekali saat panel pertama dibuka (belum ada password admin): password → panel → VPN → ringkasan.
+// Setelah selesai, wizard keluar dan halaman login tampil, supaya password yang baru dibuat langsung dicoba.
+const WZ = { step: 0, pw: "", done: false, d: {} };
 function cidrInfo(c) {
   const m = String(c || "").trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/);
   if (!m) return null;
@@ -10897,31 +10910,29 @@ function cidrInfo(c) {
 function showSetup(me) {
   $("#loginView").classList.add("hidden"); $("#appView").classList.add("hidden");
   const D = me.defaults || {};
-  WZ.d = { panelName: D.panelName && D.panelName !== "VPN ACS" ? D.panelName : "", timezone: D.timezone || "Asia/Makassar", publicIp: D.publicIp || "", tunnelNet: D.tunnelNet || "192.168.42.0/24", useIpsec: false, timezones: D.timezones || [] };
+  WZ.d = { panelName: D.panelName && D.panelName !== "VPN ACS" ? D.panelName : "", timezone: D.timezone || "Asia/Jakarta", tunnelNet: D.tunnelNet || "192.168.42.0/24", useIpsec: false, timezones: D.timezones || [] };
   let el = $("#setupView");
   if (!el) { el = document.createElement("div"); el.id = "setupView"; el.className = "login wz"; document.body.appendChild(el); }
   document.title = "Pemasangan awal";
   wzRender();
 }
+const wzNetHtml = (c) => (c ? `<div><span>URL ACS untuk ONT</span><b class="mono">${c.acs}</b></div><div><span>IP tetap router</span><b class="mono">${c.fixed}</b></div><div><span>Pool dinamis</span><b class="mono">${c.pool}</b></div>` : `<div class="bad">Format salah. Contoh: 192.168.42.0/24</div>`);
 function wzRender() {
   const el = $("#setupView"), S = WZ.d, st = WZ.step;
-  const steps = ["Kode", "Password", "Panel", "VPS & VPN", "Selesai"];
+  const steps = ["Password", "Panel", "VPN", "Selesai"];
   const nav = `<ol class="wz-steps">${steps.map((t, i) => `<li class="${i < st ? "ok" : i === st ? "on" : ""}"><span>${i < st ? ic("check") : i + 1}</span><b>${t}</b></li>`).join("")}</ol>`;
   const ci = cidrInfo(S.tunnelNet);
   const body = [
-    `<h1>Selamat datang</h1><p>Panel baru saja dipasang. Isi <b>kode pemasangan</b> yang tampil di layar terminal setelah instalasi, atau lihat dengan perintah <code>cat /root/acs-netmap-info.txt</code>.</p>
-      <label for="wzCode">Kode pemasangan</label><input id="wzCode" type="text" class="mono wz-code" maxlength="12" autocomplete="off" placeholder="contoh: K7P2M9QX" value="${esc(WZ.code)}">`,
-    `<h1>Password admin panel</h1><p>Dipakai untuk masuk ke panel ini. Minimal 8 karakter.</p>
+    `<h1>Selamat datang</h1><p>Panel baru saja dipasang. Buat <b>password admin</b> untuk masuk ke panel ini. Minimal 8 karakter.</p>
       <label for="wzPw">Password</label><input id="wzPw" type="password" autocomplete="new-password" value="${esc(WZ.pw)}">
-      <label for="wzPw2">Ulangi password</label><input id="wzPw2" type="password" autocomplete="new-password" value="${esc(WZ.pw)}">`,
+      <label for="wzPw2">Ulangi password</label><input id="wzPw2" type="password" autocomplete="new-password" value="${esc(WZ.pw)}">
+      <div class="help">Tekan ikon mata untuk melihat password yang Anda ketik.</div>`,
     `<h1>Identitas panel</h1><p>Nama panel tampil di judul dan dipakai sebagai komentar aturan di script MikroTik.</p>
-      <label for="wzName">Nama panel</label><input id="wzName" type="text" maxlength="30" placeholder="contoh: INET WIFI" value="${esc(S.panelName)}">
+      <label for="wzName">Nama panel</label><input id="wzName" type="text" maxlength="30" placeholder="contoh: NetKu WiFi" value="${esc(S.panelName)}">
       <label for="wzTz">Zona waktu</label><select id="wzTz">${S.timezones.map((z) => `<option value="${esc(z.id)}" ${z.id === S.timezone ? "selected" : ""}>${esc(z.label)} (${esc(z.id)})</option>`).join("")}</select>`,
-    `<h1>VPS &amp; VPN L2TP</h1><p>Alamat VPS dipakai MikroTik untuk tersambung. Jaringan VPN menentukan URL ACS di semua ONT.</p>
-      <label for="wzIp">Alamat VPS</label><input id="wzIp" type="text" placeholder="IP publik atau domain" value="${esc(S.publicIp)}">
-      <div class="help">Terisi otomatis dari IP publik VPS. Boleh diganti dengan domain.</div>
+    `<h1>Jaringan VPN L2TP</h1><p>Jaringan VPN menentukan URL ACS di semua ONT. Biarkan bawaannya jika ragu.</p>
       <label for="wzNet">Jaringan VPN</label><input id="wzNet" type="text" class="mono" value="${esc(S.tunnelNet)}">
-      <div class="wz-net" id="wzNetInfo">${ci ? `<div><span>URL ACS untuk ONT</span><b class="mono">${ci.acs}</b></div><div><span>IP tetap router</span><b class="mono">${ci.fixed}</b></div><div><span>Pool dinamis</span><b class="mono">${ci.pool}</b></div>` : `<div class="bad">Format salah. Contoh: 192.168.42.0/24</div>`}</div>
+      <div class="wz-net" id="wzNetInfo">${wzNetHtml(ci)}</div>
       <div class="note warn wz-note">${ic("alert")}<div><b>Tentukan sekarang</b>Mengganti jaringan VPN setelah ONT terpasang berarti URL ACS di semua ONT harus diganti.</div></div>
       <label class="check"><input id="wzIpsec" type="checkbox" ${S.useIpsec ? "checked" : ""}>Pakai IPsec (enkripsi L2TP)</label>
       <div class="help">Biarkan mati kecuali memang dibutuhkan. Tanpa IPsec lebih ringan dan didukung semua MikroTik.</div>`,
@@ -10929,33 +10940,31 @@ function wzRender() {
       <div class="wz-sum">
         <div><span>Nama panel</span><b>${esc(S.panelName || "VPN ACS")}</b></div>
         <div><span>Zona waktu</span><b>${esc((S.timezones.find((z) => z.id === S.timezone) || {}).label || S.timezone)}</b></div>
-        <div><span>Alamat VPS</span><b class="mono">${esc(S.publicIp || "(otomatis)")}</b></div>
         <div><span>Jaringan VPN</span><b class="mono">${esc(S.tunnelNet)}</b></div>
         <div><span>URL ACS untuk ONT</span><b class="mono">${ci ? ci.acs : "—"}</b></div>
         <div><span>IPsec</span><b>${S.useIpsec ? "Aktif" : "Tidak"}</b></div>
       </div>
-      <div class="note info wz-note">${ic("info")}<div><b>Akun GenieACS terpisah dari panel</b>Akun admin GenieACS UI dibuat dan diatur di menu <b>GenieACS → Pengaturan</b> setelah ini, bukan di sini.</div></div>`,
+      <div class="note info wz-note">${ic("info")}<div><b>Setelah ini, masuk dengan password baru</b>Halaman login akan tampil. Masukkan password yang baru Anda buat untuk memastikan Anda mengingatnya. Akun GenieACS UI terpisah dan diatur di menu <b>GenieACS → Pengaturan</b>.</div></div>`,
   ][st];
   el.innerHTML = `<div class="wz-card">
     <div class="brand"><span class="brand-mark">${ic("shield")}</span><span><b>Pemasangan awal</b><small>${esc(S.panelName || "VPN ACS")}</small></span></div>
     ${nav}
     <form class="login-box wz-box" id="wzForm" novalidate>${body}
       <div class="err" id="wzErr"></div>
-      <div class="wz-acts">${st > 0 && !(st === 1 && false) ? `<button type="button" class="btn" id="wzBack">${ic("back")}Kembali</button>` : "<span></span>"}<button class="btn pri" id="wzNext">${st === 4 ? `${ic("check")}Selesai &amp; masuk` : `Lanjut${ic("chev")}`}</button></div>
+      <div class="wz-acts">${st > 0 ? `<button type="button" class="btn" id="wzBack">${ic("back")}Kembali</button>` : "<span></span>"}<button class="btn pri" id="wzNext">${st === 3 ? `${ic("check")}Selesai` : `Lanjut${ic("chev")}`}</button></div>
     </form></div>`;
+  pwEyes(el);
   const f = el.querySelector("input,select"); if (f) f.focus();
   const nt = $("#wzNet");
-  if (nt) nt.oninput = () => { const c = cidrInfo(nt.value); $("#wzNetInfo").innerHTML = c ? `<div><span>URL ACS untuk ONT</span><b class="mono">${c.acs}</b></div><div><span>IP tetap router</span><b class="mono">${c.fixed}</b></div><div><span>Pool dinamis</span><b class="mono">${c.pool}</b></div>` : `<div class="bad">Format salah. Contoh: 192.168.42.0/24</div>`; };
+  if (nt) nt.oninput = () => { $("#wzNetInfo").innerHTML = wzNetHtml(cidrInfo(nt.value)); };
   const back = $("#wzBack"); if (back) back.onclick = () => { wzSave(); WZ.step--; wzRender(); };
   $("#wzForm").onsubmit = (e) => { e.preventDefault(); wzNext(); };
 }
 function wzSave() {
   const v = (id) => ($(id) ? $(id).value.trim() : null);
-  if ($("#wzCode")) WZ.code = v("#wzCode").toUpperCase();
   if ($("#wzPw")) WZ.pw = $("#wzPw").value;
   if ($("#wzName")) WZ.d.panelName = v("#wzName");
   if ($("#wzTz")) WZ.d.timezone = v("#wzTz");
-  if ($("#wzIp")) WZ.d.publicIp = v("#wzIp");
   if ($("#wzNet")) WZ.d.tunnelNet = v("#wzNet");
   if ($("#wzIpsec")) WZ.d.useIpsec = $("#wzIpsec").checked;
 }
@@ -10965,30 +10974,93 @@ async function wzNext() {
   const btn = $("#wzNext");
   try {
     if (WZ.step === 0) {
-      if (WZ.code.length < 6) return err("Isi kode pemasangan.");
-      busyBtn(btn, true);
-      await api("/api/setup", { method: "POST", body: { code: WZ.code } });
-    } else if (WZ.step === 1) {
       if (WZ.pw.length < 8) return err("Password minimal 8 karakter.");
       if (WZ.pw !== $("#wzPw2").value) return err("Kedua password tidak sama.");
-    } else if (WZ.step === 2) {
+    } else if (WZ.step === 1) {
       if (WZ.d.panelName && !/^[A-Za-z0-9][A-Za-z0-9 _-]{1,29}$/.test(WZ.d.panelName)) return err("Nama panel 2-30 karakter: huruf, angka, spasi, - atau _.");
-    } else if (WZ.step === 3) {
+    } else if (WZ.step === 2) {
       if (!cidrInfo(WZ.d.tunnelNet)) return err("Jaringan VPN tidak valid. Contoh: 192.168.42.0/24");
-    } else if (WZ.step === 4) {
+    } else if (WZ.step === 3) {
       busyBtn(btn, true);
-      if (!WZ.done) { await api("/api/setup", { method: "POST", body: { code: WZ.code, password: WZ.pw } }); WZ.done = true; }
+      if (!WZ.done) { await api("/api/setup", { method: "POST", body: { password: WZ.pw } }); WZ.done = true; }
       try {
-        await api("/api/settings", { method: "PUT", body: { panelName: WZ.d.panelName || "VPN ACS", timezone: WZ.d.timezone, publicIp: WZ.d.publicIp, tunnelNet: WZ.d.tunnelNet, useIpsec: WZ.d.useIpsec } });
-      } catch (e2) { WZ.step = 3; wzRender(); $("#wzErr").textContent = e2.message + " (password admin sudah tersimpan; perbaiki lalu lanjutkan)"; return; }
+        await api("/api/settings", { method: "PUT", body: { panelName: WZ.d.panelName || "VPN ACS", timezone: WZ.d.timezone, tunnelNet: WZ.d.tunnelNet, useIpsec: WZ.d.useIpsec } });
+      } catch (e2) { WZ.step = 2; wzRender(); $("#wzErr").textContent = e2.message + " (password admin sudah tersimpan; perbaiki lalu lanjutkan)"; return; }
+      // Keluar dari sesi wizard, lalu minta login dengan password yang baru dibuat
+      await fetch("/api/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}", credentials: "same-origin" }).catch(() => {});
+      WZ.pw = "";
       $("#setupView").remove();
-      const me = await api("/api/me"); setBrand(me.panelName);
-      showApp(); await load(); location.hash = "#/"; route(); idleStart();
-      toast("Pemasangan selesai. Selamat datang!");
+      const me = await api("/api/me").catch(() => ({}));
+      setBrand(me.panelName);
+      showLogin();
+      $("#lp").value = "";
+      if (!$("#loginOk")) $("#loginForm").insertAdjacentHTML("afterbegin", `<div class="login-ok" id="loginOk">${ic("check")}<div><b>Pemasangan selesai.</b> Masuk dengan password admin yang baru Anda buat.</div></div>`);
       return;
     }
     WZ.step++; wzRender();
   } catch (e) { err(e.message); busyBtn(btn, false); }
+}
+
+/* ---------- Ikon mata di kolom password ---------- */
+const EYE_ON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 5.1A10.4 10.4 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6C3.9 8.4 2 12 2 12s3.6 7 10 7a9.7 9.7 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
+function pwEyes(root) {
+  (root || document).querySelectorAll('input[type="password"]:not([data-eye])').forEach((inp) => {
+    inp.dataset.eye = "1";
+    const w = document.createElement("span"); w.className = "pw-wrap";
+    inp.parentNode.insertBefore(w, inp); w.appendChild(inp);
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "pw-eye"; b.tabIndex = -1; b.title = "Tampilkan password"; b.setAttribute("aria-label", "Tampilkan password"); b.innerHTML = EYE_ON;
+    b.onmousedown = (e) => e.preventDefault();
+    b.onclick = () => {
+      const show = inp.type === "password";
+      inp.type = show ? "text" : "password";
+      b.innerHTML = show ? EYE_OFF : EYE_ON;
+      b.title = show ? "Sembunyikan password" : "Tampilkan password"; b.setAttribute("aria-label", b.title);
+      inp.focus();
+    };
+    w.appendChild(b);
+  });
+}
+new MutationObserver(() => pwEyes()).observe(document.body, { childList: true, subtree: true });
+
+/* ---------- Data realtime (tanpa penyegaran berkala) ----------
+   Server mengirim tanda lewat Server-Sent Events saat ada perubahan:
+   sites = router tersambung/putus, data = pengaturan/router diubah, health = kesehatan VPS.
+   Halaman hanya memperbarui bagian yang berubah; scroll, fokus, dan isian tetap. */
+let ES = null, ES_OPENED = false, LIVE_BUSY = false, LIVE_AGAIN = "";
+function liveStart() {
+  if (ES || !window.EventSource) return;
+  ES = new EventSource("/api/events");
+  let t = null, kind = "";
+  const kick = (k) => { kind = kind === "sites" ? kind : k; clearTimeout(t); t = setTimeout(() => { const x = kind; kind = ""; liveApply(x); }, 150); };
+  ES.addEventListener("sites", () => kick("sites"));
+  ES.addEventListener("data", () => kick("data"));
+  ES.addEventListener("health", () => { if ($("#dashHealth") && !document.hidden) dashHealth(); });
+  ES.addEventListener("logout", () => { liveStop(); idleLogout(true); });
+  ES.onopen = () => { if (ES_OPENED) kick("sites"); ES_OPENED = true; };
+  ES.onerror = () => {
+    if (!ES || ES.readyState !== 2) return; // 0 = browser sedang menyambung ulang sendiri
+    ES = null;
+    setTimeout(async () => { if ($("#appView").classList.contains("hidden")) return; try { const me = await api("/api/me"); if (me.loggedIn) liveStart(); else showLogin(); } catch (e) { liveStart(); } }, 5000);
+  };
+}
+function liveStop() { if (ES) { ES.close(); ES = null; } ES_OPENED = false; }
+async function liveApply(kind) {
+  if ($("#appView").classList.contains("hidden") || !LOADED) return;
+  if (LIVE_BUSY) { LIVE_AGAIN = LIVE_AGAIN === "sites" ? "sites" : kind; return; }
+  LIVE_BUSY = true;
+  try {
+    await load();
+    const h = location.hash || "#/";
+    const free = !$("#mbg") && !TEST && !(CF && CF.running) && !document.activeElement.matches("input,select,textarea");
+    if (free) {
+      if (h === "#/" || h === "#" || h === "#/router") liveRefresh();
+      else if (kind === "sites" && /^#\/(router\/[^/]+(\/(ringkasan|riwayat))?|wireguard|zerotier|l2tp)$/.test(h)) route();
+    }
+  } catch (e) {}
+  LIVE_BUSY = false;
+  if (LIVE_AGAIN) { const k = LIVE_AGAIN; LIVE_AGAIN = ""; liveApply(k); }
 }
 
 /* ================= Mulai ================= */
@@ -10999,12 +11071,7 @@ paintIcons();
     setBrand(me.panelName);
     if (me.loggedIn) { showApp(); await load(); route(); idleStart(); } else if (me.setup) showSetup(me); else showLogin();
   } catch (e) { showLogin(); }
-  setInterval(async () => {
-    if ($("#appView").classList.contains("hidden") || $("#mbg") || TEST) return;
-    const h = location.hash;
-    if (CF && CF.running) return;
-    try { await load(); if (!/\/(tes|port)$|^#\/(pengaturan|log|genieacs|zerotier|wireguard|l2tp)/.test(h) && !document.activeElement.matches("input,select")) liveRefresh(); } catch (e) {}
-  }, 30000);
+  pwEyes();
 })();
 </script>
 </body>
@@ -11113,7 +11180,7 @@ else
     echo -e "   Buka di browser: ${GREEN}http://${PUBIP}:${PANEL_PORT}${NC}"
     echo "   (Jika IP di atas bukan IP publik, pakai IP publik VPS Anda)"
   fi
-  if "$NODE_BIN" -e 'const c=require("crypto");const a=require(process.argv[1]).admin;process.exit(a&&c.scryptSync(process.argv[2],a.salt,64).toString("hex")===a.hash?0:1)' "$APP_DIR/data.json" "$DEFAULT_ADMIN_PW" 2>/dev/null; then
-    echo -e "   Password login: ${YELLOW}${DEFAULT_ADMIN_PW}${NC} (password bawaan, segera ganti di Pengaturan)"
+  if ! grep -q '"admin"' "$APP_DIR/data.json" 2>/dev/null; then
+    echo -e "   ${YELLOW}Buka alamat di atas untuk membuat password admin (wizard pemasangan awal).${NC}"
   fi
 fi

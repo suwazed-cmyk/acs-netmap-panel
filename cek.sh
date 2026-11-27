@@ -20,7 +20,6 @@ PANEL_PORT="8088"
 GENIE_ENV="/opt/genieacs/genieacs.env"
 GENIE_PATCH_DIR="/opt/genieacs-app"
 ZTNET_DIR="/opt/ztnet"
-DEFAULT_ADMIN_PW="Admin123"
 NODE_BIN="$(command -v node || true)"
 
 N_OK=0; N_WARN=0; N_FAIL=0; N_SKIP=0
@@ -80,12 +79,9 @@ panel_get() {
     else if (k === "sites") v = String((d.sites || []).length);
     else if (k === "stdHttp") v = String(s.stdHttp || 80);
     else if (k === "stdHttps") v = String(s.stdHttps || 443);
-    else if (k === "defaultPw") {
-      const a = d.admin, c = require("crypto");
-      v = a && a.salt && a.hash && c.scryptSync(process.argv[3], a.salt, 64).toString("hex") === a.hash ? "1" : "";
-    }
+    else if (k === "hasAdmin") v = d.admin && d.admin.hash ? "1" : "";
     process.stdout.write(String(v));
-  ' "$PANEL_DATA" "$1" "$DEFAULT_ADMIN_PW" 2>/dev/null
+  ' "$PANEL_DATA" "$1" 2>/dev/null
 }
 
 # IP publik VPS (untuk cek DNS domain)
@@ -165,8 +161,8 @@ if [ -f "$PANEL_DIR/server.js" ]; then
   if [ "$perm" = "600" ]; then ok "data.json terlindungi (izin 600)"
   elif [ -n "$perm" ]; then warn "Izin data.json $perm (seharusnya 600)" "chmod 600 $PANEL_DATA"
   else bad "data.json tidak ada" "bash install-vpn-acs.sh"; fi
-  if [ "$(panel_get defaultPw)" = "1" ]; then warn "Password admin masih bawaan ${DEFAULT_ADMIN_PW}" "Ganti di panel: Pengaturan → Umum → Password admin"
-  else ok "Password admin sudah diganti"; fi
+  if [ "$(panel_get hasAdmin)" = "1" ]; then ok "Password admin sudah dibuat"
+  else warn "Password admin belum dibuat" "Buka alamat panel di browser untuk wizard pemasangan awal"; fi
   miss=""
   for ch in "nat VPNACS_PRE" "nat VPNACS_POST" "filter VPNACS_FWD"; do
     set -- $ch

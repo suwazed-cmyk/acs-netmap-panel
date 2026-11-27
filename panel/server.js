@@ -52,7 +52,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.17.0";
+const VERSION = "2.18.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -267,6 +267,29 @@ function saveData(d) {
   const tmp = DATA_FILE + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(d, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, DATA_FILE);
+  sseData();
+}
+// ---------- Data realtime ke browser (Server-Sent Events) ----------
+// Browser membuka satu koneksi /api/events. Server mengirim tanda saat ada perubahan
+// (router tersambung/putus, data panel berubah, kesehatan VPS), lalu halaman hanya
+// memperbarui bagian yang berubah. Tidak ada lagi penyegaran berkala.
+const SSE = new Set();
+let SSE_DATA_T = null;
+function sseSend(ev, data) {
+  if (!SSE.size) return;
+  const msg = `event: ${ev}\ndata: ${JSON.stringify(data || {})}\n\n`;
+  for (const c of SSE) {
+    try {
+      c.res.write(msg);
+    } catch (e) {
+      SSE.delete(c);
+    }
+  }
+}
+function sseData() {
+  if (!SSE.size) return;
+  clearTimeout(SSE_DATA_T);
+  SSE_DATA_T = setTimeout(() => sseSend("data"), 300);
 }
 function hashPassword(pw, salt) {
   salt = salt || crypto.randomBytes(16).toString("hex");
@@ -278,15 +301,6 @@ function checkPassword(pw, rec) {
   const h = crypto.scryptSync(String(pw), rec.salt, 64);
   const r = Buffer.from(rec.hash, "hex");
   return h.length === r.length && crypto.timingSafeEqual(h, r);
-}
-// Password bawaan saat instalasi (tinggal Enter). Panel menampilkan peringatan sampai diganti.
-const DEFAULT_ADMIN_PW = "Admin123";
-let DEFPW_CACHE = { hash: null, v: false };
-function isDefaultPw(d) {
-  const rec = d && d.admin;
-  if (!rec || !rec.hash) return false;
-  if (DEFPW_CACHE.hash !== rec.hash) DEFPW_CACHE = { hash: rec.hash, v: checkPassword(DEFAULT_ADMIN_PW, rec) };
-  return DEFPW_CACHE.v;
 }
 function randomPassword(len) {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
@@ -2338,6 +2352,7 @@ function msgRemind(list, now) {
 // =====================================================================
 let monitorBusy = false;
 let ztRefreshAt = 0;
+let SITES_SIG = null;
 async function monitorTick() {
   if (monitorBusy) return;
   monitorBusy = true;
@@ -2364,6 +2379,11 @@ async function monitorTick() {
     const remindList = [];
     const ids = new Set();
     const links = linksSync(d, peers);
+    const sig = d.sites.map((s) => s.id + (links[s.id] ? "1" : "0")).join(",");
+    if (sig !== SITES_SIG) {
+      if (SITES_SIG !== null) sseSend("sites");
+      SITES_SIG = sig;
+    }
     for (const s of d.sites) {
       ids.add(s.id);
       const online = !!links[s.id];
@@ -5074,6 +5094,31 @@ async function handleApi(req, res, url) {
     }
   }
 
+  // --- Data realtime (SSE). Tidak dihitung sebagai aktivitas, jadi logout otomatis tetap berlaku ---
+  if (p === "/api/events" && method === "GET") {
+    const k = tokHash(getCookie(req, "vpnacs") || "-");
+    const alive = () => {
+      const r = sessions.get(k);
+      return !!r && Date.now() - r.last <= IDLE_MS;
+    };
+    if (!alive()) return send(res, 401, { error: "Silakan login dulu." });
+    res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "X-Accel-Buffering": "no" });
+    res.write("retry: 5000\n\n");
+    const c = { res };
+    SSE.add(c);
+    const hb = setInterval(() => {
+      if (!alive()) {
+        res.write("event: logout\ndata: {}\n\n");
+        return res.end();
+      }
+      res.write(": hb\n\n");
+    }, 25000);
+    req.on("close", () => {
+      clearInterval(hb);
+      SSE.delete(c);
+    });
+    return;
+  }
   // --- Login ---
   if (p === "/api/login" && method === "POST") {
     const ip = clientIp(req);
@@ -5125,33 +5170,20 @@ async function handleApi(req, res, url) {
   }
   if (p === "/api/me" && method === "GET") {
     const d = loadData();
-    const setup = !d.admin && !!d.setupCode;
+    // Belum ada password admin (baru dipasang): panel membuka wizard pemasangan awal
+    const setup = !d.admin;
     const out = { loggedIn: authed(req), panelName: brandOf(d), setup };
-    if (setup) {
-      const st = settings(d);
-      out.defaults = { publicIp: st.publicIp || "", tunnelNet: tun(d).net, timezone: tzName(d), timezones: Object.entries(TIMEZONES).map(([id, v]) => ({ id, label: v.label })), panelName: brandOf(d) };
-    }
+    if (setup) out.defaults = { tunnelNet: tun(d).net, timezone: (d.settings && d.settings.timezone) || "Asia/Jakarta", timezones: Object.entries(TIMEZONES).map(([id, v]) => ({ id, label: v.label })), panelName: brandOf(d) };
     return send(res, 200, out);
   }
-  // --- Wizard pemasangan awal: kode dari installer, lalu password admin ---
+  // --- Wizard pemasangan awal: password admin dibuat sendiri saat panel pertama dibuka ---
+  // Sesi sementara dipakai wizard untuk menyimpan pengaturan, lalu wizard logout
+  // supaya pengguna masuk lagi dengan password yang baru dibuat.
   if (p === "/api/setup" && method === "POST") {
     const d = loadData();
-    if (d.admin || !d.setupCode) return send(res, 409, { error: "Panel sudah dipasang. Silakan login." });
-    const ip = clientIp(req), now = Date.now();
-    const f = loginFails.get(ip) || { n: 0, level: 0, until: 0, last: 0, total: 0 };
-    if (f.until > now) return send(res, 429, { error: `Terlalu banyak percobaan. Coba lagi dalam ${Math.ceil((f.until - now) / 60000)} menit.` });
-    const code = String(body.code || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
-    if (crypto.createHash("sha256").update(code).digest("hex") !== d.setupCode) {
-      f.n += 1; f.last = now;
-      if (f.n >= 5) { f.until = now + 15 * 60e3; f.n = 0; }
-      loginFails.set(ip, f);
-      await new Promise((r) => setTimeout(r, 800));
-      return send(res, 401, { error: "Kode pemasangan salah. Lihat kode di layar terminal atau di /root/acs-netmap-info.txt" });
-    }
-    if (body.password === undefined) return send(res, 200, { ok: true, codeOk: true });
+    if (d.admin) return send(res, 409, { error: "Panel sudah dipasang. Silakan login." });
     const pw = String(body.password || "");
     if (pw.length < 8) return send(res, 400, { error: "Password minimal 8 karakter." });
-    if (pw === DEFAULT_ADMIN_PW) return send(res, 400, { error: "Gunakan password selain password bawaan." });
     d.admin = hashPassword(pw);
     delete d.setupCode;
     saveData(d);
@@ -5318,7 +5350,6 @@ async function handleApi(req, res, url) {
         genieCidr: st.genieCidr,
         virtualPool: VIRTUAL_POOL,
         acsUrl: `http://${st.tun.local}:${ACS_PORT}`,
-        defaultPassword: isDefaultPw(d),
         genieUrl: genieUrl(d, st.publicIp),
         genieUrlManual: (d.settings && d.settings.genieUrl) || "",
         zt: st.zt ? { nwid: st.zt.nwid, name: st.zt.name, subnet: st.zt.subnet, vpsIp: st.zt.vpsIp, iface: st.zt.iface, checkError: st.zt.checkError || "" } : null,
@@ -6385,7 +6416,6 @@ async function handleApi(req, res, url) {
     if (body.newPassword !== undefined) {
       if (!checkPassword(body.oldPassword || "", d.admin)) return send(res, 400, { error: "Password lama salah." });
       if (String(body.newPassword).length < 8) return send(res, 400, { error: "Password baru minimal 8 karakter." });
-      if (String(body.newPassword) === DEFAULT_ADMIN_PW) return send(res, 400, { error: "Gunakan password selain password bawaan." });
       d.admin = hashPassword(body.newPassword);
       const out = sessionsDrop(req.sessKey);
       logs.push(["Password admin diganti", out ? `${out} sesi lain dikeluarkan` : ""]);
@@ -6442,16 +6472,6 @@ if (process.argv[2] === "--set-password") {
   saveData(d);
   console.log("Password admin disimpan.");
   process.exit(0);
-} else if (process.argv[2] === "--setup-code") {
-  // Dipakai install.sh: panel dibuka pertama kali lewat wizard, dilindungi kode ini
-  const code = String(process.argv[3] || "").trim().toUpperCase();
-  if (code.length < 6) { console.error("Kode minimal 6 karakter."); process.exit(1); }
-  const d = loadData();
-  if (d.admin) { console.log("Password admin sudah ada, kode pemasangan tidak dipakai."); process.exit(0); }
-  d.setupCode = crypto.createHash("sha256").update(code).digest("hex");
-  saveData(d);
-  console.log("Kode pemasangan disimpan.");
-  process.exit(0);
 } else if (process.argv[2] === "--genie-inform") {
   // Dipakai install.sh: pasang provision "inform berkala" ke GenieACS (dilewati bila sudah ada)
   (async () => {
@@ -6473,7 +6493,7 @@ if (process.argv[2] === "--set-password") {
   // Sinkronkan berkas saat panel dinyalakan
   (async () => {
     const d = loadData();
-    if (!d.admin) console.error("Password admin belum diset. Jalankan: node server.js --set-password PASSWORD");
+    if (!d.admin) console.log("Password admin belum dibuat: buka panel di browser untuk wizard pemasangan awal.");
     // Router dari versi lama dianggap sudah terpasang (bukan "menunggu pemasangan")
     if (!d.v2) {
       for (const s of d.sites || []) if (s.installedAt === undefined) s.installedAt = s.createdAt || new Date().toISOString();
@@ -6527,6 +6547,7 @@ if (process.argv[2] === "--set-password") {
     }
   }, 60 * 1000);
   setInterval(certReloadCheck, 3600 * 1000);
+  setInterval(() => sseSend("health"), 15 * 1000);
   setTimeout(healthTick, 90 * 1000);
   setInterval(healthTick, 60 * 1000);
   setTimeout(() => checkUpdates().catch(() => {}), 2 * 60 * 1000);
