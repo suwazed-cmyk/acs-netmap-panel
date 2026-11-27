@@ -1089,9 +1089,13 @@
   [data-theme="dark"] .tab.on{background:var(--surface-3)}
   .subtabs{margin-bottom:14px}
   .tcnt{margin-left:2px}
-  /* menu di dalam halaman memenuhi lebar halaman */
-  .tabs{display:flex;width:100%}
-  .tabs>.tab{flex:1 0 auto;justify-content:center}
+  /* menu di dalam halaman: deretan teks rata kiri dengan garis bawah selebar halaman */
+  .tabs,[data-theme="dark"] .tabs{display:flex;width:100%;gap:30px;padding:0;margin-bottom:16px;background:none;border:0;border-bottom:1px solid var(--line);border-radius:0;box-shadow:none;overflow-x:auto}
+  .tabs>.tab,.tabs>button.tab{flex:0 0 auto;padding:10px 0 11px;margin-bottom:-1px;border:0;border-bottom:2px solid transparent;border-radius:0;background:none;box-shadow:none;font-size:14.5px;font-weight:500;color:var(--text-2)}
+  .tabs>.tab:hover{background:none;color:var(--head)}
+  .tabs>.tab.on,.tabs>button.tab.on,[data-theme="dark"] .tabs>.tab.on{background:none;box-shadow:none;color:var(--head);font-weight:600;border-bottom:2px solid var(--primary)}
+  .tabs>.tab svg{display:none}
+  @media (max-width:600px){.tabs{gap:20px}.tabs>.tab,.tabs>button.tab{font-size:14px;padding:9px 0 10px}}
   /* tombol mata di kolom password */
   .pw-wrap{position:relative;display:block}
   .pw-wrap>input{padding-right:42px!important}
