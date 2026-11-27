@@ -211,7 +211,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.12.2";
+const VERSION = "2.12.3";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -7331,6 +7331,10 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .zt-qrside{display:flex;flex-direction:column;align-items:center;gap:6px;padding-left:18px;border-left:1px solid var(--line)}
   .zt-qrside .zt-qrbig{width:124px;height:124px;margin:0;padding:8px}
   .zt-qrside .zt-small{font-size:11.5px}
+  .zt-qrpills{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:2px}
+  .zt-qrpills .pill svg{width:11px;height:11px;margin-right:3px;vertical-align:-1px}
+  .zt-nwplain{font-size:15px;font-weight:700;letter-spacing:.02em}
+  .zt-curqr .zt-hrow{min-height:34px}
   .zt-curc,.zt-hcard{margin-bottom:12px}
   .zt-cur .zt-hv b.mono{font-size:14px;font-weight:600}
   .zt-cur .zt-hv .zt-small{margin-left:8px}
@@ -9271,13 +9275,13 @@ async function setZerotier(b) {
         <div class="zt-selw" title="Pilih jaringan di controller"><select id="ztNetSel" aria-label="Pilih jaringan">${nets.map((n) => `<option value="${esc(n.current ? "" : n.nwid)}" ${n.nwid === cur.nwid ? "selected" : ""}>${esc(n.name || "(tanpa nama)")}${n.current ? " · dipakai panel" : ""}</option>`).join("")}</select></div></div>
       <div class="zt-curqr">
         <div class="zt-cur">
-            <div class="zt-hrow"><span class="zt-hl">Network ID</span><span class="zt-hv"><span class="zt-idbox"><span class="zt-nwid mono">${esc(cur.nwid)}</span><button class="zt-ib" data-copy="${esc(cur.nwid)}" data-msg="Network ID tersalin" title="Salin Network ID" aria-label="Salin Network ID">${ic("copy")}</button></span></span></div>
+            <div class="zt-hrow"><span class="zt-hl">Network ID</span><span class="zt-hv"><span class="mono zt-nwplain">${esc(cur.nwid)}</span><button class="zt-ib" data-copy="${esc(cur.nwid)}" data-msg="Network ID tersalin" title="Salin Network ID" aria-label="Salin Network ID">${ic("copy")}</button></span></div>
             <div class="zt-hrow"><span class="zt-hl">Nama jaringan</span><span class="zt-hv" id="ztNameBox"><span class="zt-nname">${esc(cur.name || "(tanpa nama)")}</span><button class="zt-ib" id="ztNameEdit" title="Ganti nama" aria-label="Ganti nama">${ic("edit")}</button></span></div>
-            <div class="zt-hrow"><span class="zt-hl">Rentang IP</span><span class="zt-hv"><b class="mono">${esc(cur.subnet || "—")}</b><span class="muted zt-small">${cur.poolStart && cur.poolEnd ? `pool ${esc(cur.poolStart)} – .${esc(cur.poolEnd.split(".").pop())}` : "pool otomatis"}</span></span></div>
-            <div class="zt-hrow"><span class="zt-hl">IP VPS (gateway)</span><span class="zt-hv"><b class="mono">${esc(act ? cur.vpsIp : "—")}</b><span class="muted zt-small">${act ? `${cur.sites || 0} router panel memakai jalur ini` : "VPS tidak bergabung"}</span></span></div>
-            <div class="zt-hmeta">${act ? (okNet ? `<span class="pill ok">VPS tersambung</span>` : `<span class="pill bad">VPS belum tersambung</span>`) : `<span class="pill wait">Tidak dipakai panel</span>`}${cur.private ? `<span class="pill ok">${ic("lock", "")}Private</span>` : `<span class="pill bad">Public</span>`}${act ? `<span class="muted">interface <span class="mono">${esc(cur.iface || "—")}</span></span>` : ""}</div>
+            <div class="zt-hrow"><span class="zt-hl">Rentang IP</span><span class="zt-hv"><b class="mono">${esc(cur.subnet || "—")}</b></span></div>
+            <div class="zt-hrow"><span class="zt-hl">IP VPS (gateway)</span><span class="zt-hv"><b class="mono">${esc(act ? cur.vpsIp : "—")}</b></span></div>
         </div>
-        <div class="zt-qrside"><button class="zt-qrbig" id="ztQr" title="Perbesar QR Network ID" aria-label="Perbesar QR Network ID">${(() => { try { const q = qrcode(0, "M"); q.addData(cur.nwid); q.make(); return q.createSvgTag({ cellSize: 4, margin: 0, scalable: true }); } catch (e) { return ic("qr"); } })()}</button><span class="muted zt-small">Pindai untuk menyalin Network ID</span></div>
+        <div class="zt-qrside"><span class="muted zt-small">Pindai untuk menyalin Network ID</span><button class="zt-qrbig" id="ztQr" title="Perbesar QR Network ID" aria-label="Perbesar QR Network ID">${(() => { try { const q = qrcode(0, "M"); q.addData(cur.nwid); q.make(); return q.createSvgTag({ cellSize: 4, margin: 0, scalable: true }); } catch (e) { return ic("qr"); } })()}</button>
+          <div class="zt-qrpills">${act ? (okNet ? `<span class="pill ok">VPS tersambung</span>` : `<span class="pill bad">VPS belum tersambung</span>`) : `<span class="pill wait">Tidak dipakai panel</span>`}${cur.private ? `<span class="pill ok">${ic("lock", "")}Private</span>` : `<span class="pill bad">Public</span>`}</div></div>
       </div>
     </div>
 
