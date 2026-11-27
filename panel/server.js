@@ -52,7 +52,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.22.2";
+const VERSION = "2.23.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -900,7 +900,7 @@ function validateForward(d, site, b) {
     publicPort = parseInt(b.publicPort, 10);
     if (!(publicPort >= 1024 && publicPort <= 65535)) return { error: "Port publik harus 1024-65535." };
     if (RESERVED_PORTS.has(publicPort)) return { error: `Port ${publicPort} sudah dipakai layanan VPS. Pilih port lain.` };
-    if (gwInRange(d, publicPort)) { const g = gwCfg(d); return { error: `Port ${publicPort} termasuk deret pintu web ONT (${g.from}-${g.to}). Pilih port lain.` }; }
+    if (gwInRange(d, publicPort)) return { error: `Port ${publicPort} dipakai web ONT (${GW_FROM}-${GW_TO}). Pilih port lain.` };
     if (!free(publicPort)) {
       const owner = d.sites.find((s) => (s.forwards || []).some((f) => f.publicPort === publicPort));
       return { error: `Port publik ${publicPort} sudah dipakai${owner ? ` di router "${owner.name}"` : ""}. Pilih port lain atau kosongkan untuk otomatis.` };
@@ -4361,39 +4361,29 @@ function onUpgrade(req, sock, head) {
 }
 // =====================================================================
 //  Pintu web ONT: buka web ONT dari internet tanpa tersambung VPN
-//  - Satu deret port di VPS (bawaan 8101-8120). Setiap ONT yang dibuka
-//    meminjam satu port selama dipakai, jadi beberapa ONT bisa dibuka bersamaan.
+//  - Deret port tetap 62000-62999. Setiap ONT yang dibuka meminjam satu port
+//    selama dipakai (dibuka saat perlu, ditutup saat sesi habis).
+//  - Port web ONT dideteksi otomatis (http 80, https 443, http 8080, https 8443);
+//    ONT yang memaksa HTTPS tetap dibuka lewat http://IP-VPS:port.
 //  - Port hanya bisa dipakai lewat tombol di panel / Panel ACS: tombol membuat
 //    tiket sekali pakai (60 detik) yang ditukar menjadi cookie kunci.
-//  - Kunci kedaluwarsa 1 jam sejak terakhir dipakai, atau saat logout panel.
+//  - Kunci kedaluwarsa 30 menit sejak terakhir dipakai, atau saat logout panel.
 //  - Cookie dari ONT diberi awalan per port (p8101_...) supaya login ONT yang
 //    berbeda tidak saling menimpa walaupun alamatnya sama-sama IP VPS.
 // =====================================================================
 const gwEsc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" })[c]);
 const GW_TICKET_MS = 60 * 1000;
-const GW_IDLE_MS = 3600 * 1000;
+const GW_IDLE_MS = 30 * 60 * 1000;
+const GW_FROM = 62000;
+const GW_TO = 62999;
+const GW_PROTO = new Map(); // ip ONT -> { proto, port } hasil deteksi
 const GW_SLOTS = new Map(); // port -> slot
 const GW_TICKETS = new Map(); // hash tiket -> { port, exp, sess, by }
-function gwCfg(d) {
-  const g = (d.settings && d.settings.ontGw) || {};
-  const from = parseInt(g.from, 10) || 8101;
-  const count = Math.min(100, Math.max(1, parseInt(g.count, 10) || 20));
-  return { enabled: g.enabled !== false, from, count, to: from + count - 1, tport: parseInt(g.tport, 10) || 80 };
+function gwCfg() {
+  return { enabled: true, from: GW_FROM, to: GW_TO, count: GW_TO - GW_FROM + 1 };
 }
 function gwInRange(d, port) {
-  const c = gwCfg(d);
-  return c.enabled && port >= c.from && port <= c.to;
-}
-// Deret port tidak boleh mengenai layanan VPS, add-on, atau port forwarding router
-function gwCheckRange(d, from, count) {
-  if (!(from >= 1024 && from + count - 1 <= 65535)) return "Deret port harus di antara 1024 dan 65535.";
-  const to = from + count - 1;
-  const busy = [...RESERVED_PORTS].concat(Object.values(ADDONS).map((a) => a.port).filter(Boolean));
-  const hit = busy.find((p) => p >= from && p <= to);
-  if (hit) return `Port ${hit} dipakai layanan VPS. Pilih deret lain.`;
-  for (const s of d.sites)
-    for (const f of s.forwards || []) if (f.publicPort >= from && f.publicPort <= to) return `Port ${f.publicPort} sudah dipakai port forwarding router "${s.name}". Pilih deret lain.`;
-  return "";
+  return port >= GW_FROM && port <= GW_TO;
 }
 function gwSiteOf(d, ip) {
   return d.sites.find((s) => {
@@ -4407,6 +4397,37 @@ function gwRealIp(site, ip) {
   const virt = parseCidr(site.virtualSubnet);
   if (!real || !virt) return "";
   return intToIp(real.net + (ipToInt(ip) - virt.net));
+}
+// Coba satu alamat web ONT: { ok, https: true bila ONT meminta pindah ke HTTPS }
+function gwProbe(ip, proto, port) {
+  return new Promise((resolve) => {
+    const mod = proto === "https" ? https : http;
+    const rq = mod.request({ host: ip, port, method: "GET", path: "/", timeout: 6000, rejectUnauthorized: false, headers: { Host: ip, "User-Agent": "Mozilla/5.0" } }, (r) => {
+      r.resume();
+      const loc = String(r.headers.location || "");
+      const m = loc.match(/^https:\/\/[^/:]+(?::(\d+))?/i);
+      if (proto === "http" && r.statusCode >= 300 && r.statusCode < 400 && m) return resolve({ ok: false, toHttps: parseInt(m[1], 10) || 443 });
+      resolve({ ok: true });
+    });
+    rq.on("timeout", () => rq.destroy(new Error("ETIMEDOUT")));
+    rq.on("error", () => resolve({ ok: false }));
+    rq.end();
+  });
+}
+async function gwDetect(ip, force) {
+  const c = GW_PROTO.get(ip);
+  if (c && !force) return c;
+  const tries = [["http", 80], ["https", 443], ["http", 8080], ["https", 8443]];
+  for (let i = 0; i < tries.length; i++) {
+    const [proto, port] = tries[i];
+    const r = await gwProbe(ip, proto, port);
+    if (r.ok) { const x = { proto, port }; GW_PROTO.set(ip, x); return x; }
+    if (r.toHttps) {
+      const h = await gwProbe(ip, "https", r.toHttps);
+      if (h.ok) { const x = { proto: "https", port: r.toHttps }; GW_PROTO.set(ip, x); return x; }
+    }
+  }
+  return null;
 }
 let GW_UFW = "";
 async function gwFirewall(c) {
@@ -4437,31 +4458,31 @@ function gwListen(slot) {
 }
 async function gwOpen(d, o) {
   const c = gwCfg(d);
-  if (!c.enabled) return { error: "Pintu web ONT dimatikan. Aktifkan di GenieACS → Pengaturan." };
   const ip = String(o.ip || "").trim();
   if (ipToInt(ip) === null) return { error: "IP ONT tidak valid." };
   const site = gwSiteOf(d, ip);
   if (!site) return { error: `IP ${ip} bukan IP virtual router mana pun di panel, jadi web-nya tidak bisa dibuka lewat VPS.` };
   const links = await siteLinks(d);
   if (!links[site.id]) return { error: `Router "${site.name}" sedang tidak tersambung ke VPS, web ONT tidak bisa dibuka.` };
-  const tport = parseInt(o.tport, 10) || c.tport;
-  if (!(tport >= 1 && tport <= 65535)) return { error: "Port web ONT harus 1-65535." };
-  const host = /^\d+\.\d+\.\d+\.\d+$/.test(o.host || "") && o.host !== "127.0.0.1" ? o.host : settings(d).publicIp;
-  if (!host) return { error: "IP publik VPS belum diketahui. Isi Alamat VPS di Pengaturan." };
+  // Alamat web ONT selalu memakai IP (domain bisa dialihkan browser ke https)
+  const host = /^\d+\.\d+\.\d+\.\d+$/.test(o.host || "") && o.host !== "127.0.0.1" ? o.host : (await realPublicIp()) || (ipToInt(settings(d).publicIp || "") !== null ? settings(d).publicIp : "");
+  if (!host) return { error: "IP publik VPS tidak terdeteksi." };
   gwSweep();
-  let slot = [...GW_SLOTS.values()].find((s) => s.ip === ip && s.tport === tport);
+  let slot = [...GW_SLOTS.values()].find((s) => s.ip === ip);
   if (!slot) {
+    const t = await gwDetect(ip);
+    if (!t) return { error: `Web ONT ${ip} tidak menjawab di port 80, 443, 8080, maupun 8443. Pastikan ONT menyala dan web-nya aktif.` };
     await gwFirewall(c);
     for (let p = c.from; p <= c.to && !slot; p++) {
       if (GW_SLOTS.has(p)) continue;
-      const s = { port: p, ip, tport, real: gwRealIp(site, ip), label: "", site: site.id, siteName: site.name, created: Date.now(), keys: new Map(), srv: null };
+      const s = { port: p, ip, proto: t.proto, tport: t.port, real: gwRealIp(site, ip), label: "", site: site.id, siteName: site.name, created: Date.now(), keys: new Map(), srv: null };
       const r = await gwListen(s);
       if (r.ok) {
         GW_SLOTS.set(p, s);
         slot = s;
       } else if (r.error !== "EADDRINUSE" && r.error !== "EACCES") return { error: `Port ${p} tidak bisa dibuka: ${r.error}` };
     }
-    if (!slot) return { error: `Semua ${c.count} pintu (port ${c.from}-${c.to}) sedang dipakai. Tutup web ONT yang tidak dipakai di GenieACS → Web ONT.` };
+    if (!slot) return { error: `Semua port ${c.from}-${c.to} sedang dipakai. Tutup web ONT yang tidak dipakai di GenieACS → Web ONT.` };
   }
   if (o.label) slot.label = String(o.label).slice(0, 80);
   const t = crypto.randomBytes(24).toString("hex");
@@ -4498,7 +4519,7 @@ function gwList() {
   gwSweep();
   return [...GW_SLOTS.values()].map((s) => {
     const last = Math.max(s.created, ...[...s.keys.values()].map((r) => r.last));
-    return { port: s.port, ip: s.ip, tport: s.tport, label: s.label, site: s.siteName, created: s.created, last, expires: last + GW_IDLE_MS, users: s.keys.size };
+    return { port: s.port, ip: s.ip, tport: s.tport, proto: s.proto, label: s.label, site: s.siteName, created: s.created, last, expires: last + GW_IDLE_MS, users: s.keys.size };
   }).sort((a, b) => a.port - b.port);
 }
 function gwPage(res, code, title, msg) {
@@ -4508,8 +4529,7 @@ function gwPage(res, code, title, msg) {
 // Tautan absolut ke ONT (http://IP-ONT/...) dijadikan tautan relatif ke pintu ini
 function gwStrip(s, slot) {
   for (const ip of [slot.ip, slot.real].filter(Boolean)) {
-    const port = slot.tport === 80 ? "(?::80)?" : `:${slot.tport}`;
-    const re = new RegExp(`https?://${ip.replace(/\./g, "\\.")}${port}(?![\\d.:])`, "g");
+    const re = new RegExp(`https?://${ip.replace(/\./g, "\\.")}(?::\\d+)?(?![\\d.:])`, "g");
     s = s.replace(re, (m, off, all) => (all[off + m.length] === "/" ? "" : "/"));
   }
   return s;
@@ -4554,7 +4574,7 @@ function gwHandle(slot, req, res) {
   const rec = v && slot.keys.get(tokHash(v));
   if (!rec || !gwKeyOk(rec, n)) {
     if (rec) slot.keys.delete(tokHash(v));
-    return gwPage(res, 403, "Sesi web ONT habis", "Alamat ini hanya bisa dibuka lewat panel, dan sesinya berlaku 1 jam sejak terakhir dipakai. Klik <b>Buka web ONT</b> lagi di panel untuk membuka ONT ini.");
+    return gwPage(res, 403, "Sesi web ONT habis", "Alamat ini hanya bisa dibuka lewat panel, dan sesinya berlaku 30 menit sejak terakhir dipakai. Klik <b>Buka web ONT</b> lagi di panel untuk membuka ONT ini.");
   }
   rec.last = n;
   gwProxy(slot, req, res);
@@ -4562,20 +4582,33 @@ function gwHandle(slot, req, res) {
 function gwProxy(slot, req, res) {
   const P = `p${slot.port}_`;
   const self = req.headers.host || "";
-  const tgt = slot.tport === 80 ? slot.ip : `${slot.ip}:${slot.tport}`;
+  const sch = slot.proto || "http";
+  const tgt = (sch === "http" && slot.tport === 80) || (sch === "https" && slot.tport === 443) ? slot.ip : `${slot.ip}:${slot.tport}`;
   const skip = new Set(["host", "cookie", "accept-encoding", "connection", "keep-alive", "proxy-connection", "upgrade", "x-forwarded-for", "x-forwarded-proto", "x-forwarded-host", "x-real-ip"]);
   const headers = {};
   for (const [k, val] of Object.entries(req.headers)) if (!skip.has(k)) headers[k] = val;
   headers.host = tgt;
   headers["accept-encoding"] = "identity";
-  for (const h of ["origin", "referer"]) if (headers[h]) headers[h] = String(headers[h]).split(`http://${self}`).join(`http://${tgt}`);
+  for (const h of ["origin", "referer"]) if (headers[h]) headers[h] = String(headers[h]).split(`http://${self}`).join(`${sch}://${tgt}`);
   const ck = [];
   for (const part of String(req.headers.cookie || "").split(";")) {
     const s = part.trim();
     if (s.startsWith(P)) ck.push(s.slice(P.length));
   }
   if (ck.length) headers.cookie = ck.join("; ");
-  const up = http.request({ host: slot.ip, port: slot.tport, method: req.method, path: req.url, headers, timeout: 30000 }, (r) => {
+  const mod = sch === "https" ? https : http;
+  const up = mod.request({ host: slot.ip, port: slot.tport, method: req.method, path: req.url, headers, timeout: 30000, rejectUnauthorized: false }, (r) => {
+    // ONT tiba-tiba meminta HTTPS: pintu pindah ke HTTPS, browser tetap di http://IP-VPS:port
+    const loc0 = String(r.headers.location || "");
+    const hm = sch === "http" && r.statusCode >= 300 && r.statusCode < 400 && loc0.match(/^https:\/\/([^/:]+)(?::(\d+))?(\/[^]*)?$/i);
+    if (hm && (hm[1] === slot.ip || hm[1] === slot.real)) {
+      r.resume();
+      slot.proto = "https";
+      slot.tport = parseInt(hm[2], 10) || 443;
+      GW_PROTO.set(slot.ip, { proto: slot.proto, port: slot.tport });
+      res.writeHead(302, { Location: hm[3] || "/", "Cache-Control": "no-store" });
+      return res.end();
+    }
     const drop = new Set(["content-security-policy", "content-security-policy-report-only", "strict-transport-security", "connection", "keep-alive", "transfer-encoding", "content-length"]);
     const h = {};
     for (const [k, val] of Object.entries(r.headers)) if (!drop.has(k)) h[k] = val;
@@ -4611,7 +4644,8 @@ function gwProxy(slot, req, res) {
   up.on("timeout", () => up.destroy(new Error("ETIMEDOUT")));
   up.on("error", (e) => {
     if (res.headersSent) return res.destroy();
-    gwPage(res, 502, "ONT tidak menjawab", `Web ONT di ${gwEsc(tgt)} (router ${gwEsc(slot.siteName)}) tidak menjawab: ${gwEsc(String(e.code || e.message))}. Pastikan ONT menyala dan web-nya memakai port ${slot.tport}.`);
+    GW_PROTO.delete(slot.ip);
+    gwPage(res, 502, "ONT tidak menjawab", `Web ONT di ${gwEsc(tgt)} (router ${gwEsc(slot.siteName)}) tidak menjawab: ${gwEsc(String(e.code || e.message))}. Pastikan ONT menyala, lalu buka lagi dari panel.`);
   });
   req.pipe(up);
 }
@@ -5399,26 +5433,6 @@ async function handleApi(req, res, url) {
     if (!s) return send(res, 404, { error: "Pintu ini sudah tertutup." });
     gwClose(port);
     logActivity(req, "Web ONT ditutup", `${s.label || s.ip} (${s.ip}) · port ${port}`);
-    return send(res, 200, { ok: true });
-  }
-  if (p === "/api/ontgw/settings" && method === "PUT") {
-    const d = loadData();
-    const cur = gwCfg(d);
-    const enabled = body.enabled !== undefined ? !!body.enabled : cur.enabled;
-    const from = body.from !== undefined ? parseInt(body.from, 10) : cur.from;
-    const count = body.count !== undefined ? parseInt(body.count, 10) : cur.count;
-    const tport = body.tport !== undefined ? parseInt(body.tport, 10) : cur.tport;
-    if (!(count >= 1 && count <= 100)) return send(res, 400, { error: "Jumlah pintu 1-100." });
-    if (!(tport >= 1 && tport <= 65535)) return send(res, 400, { error: "Port web ONT 1-65535." });
-    if (enabled) {
-      const e = gwCheckRange(d, from, count);
-      if (e) return send(res, 400, { error: e });
-    }
-    d.settings = d.settings || {};
-    d.settings.ontGw = { enabled, from, count, tport };
-    saveData(d);
-    if (!enabled || from !== cur.from || count !== cur.count) for (const port of [...GW_SLOTS.keys()]) gwClose(port);
-    logActivity(req, "Pintu web ONT diubah", enabled ? `port ${from}-${from + count - 1}, web ONT port ${tport}` : "dimatikan");
     return send(res, 200, { ok: true });
   }
   // Daftar ONT (untuk tombol Buka web ONT)

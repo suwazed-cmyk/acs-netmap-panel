@@ -3144,6 +3144,7 @@ async function fillGenieUsers() {
 }
 
 // ---------- Web ONT: buka web ONT lewat internet tanpa VPN (GenieACS → Web ONT) ----------
+const GW_RANGE = "62000–62999";
 const ONTW = { q: "", list: null, gw: null, show: 50 };
 // Tab baru dibuka dulu saat diklik (supaya tidak diblokir browser), alamatnya diisi setelah tiket didapat
 async function openOntWeb(ip, label, btn) {
@@ -3169,7 +3170,7 @@ async function fillOntOpen() {
   ONTW.gw = r;
   const L = r.list || [];
   box.hidden = !L.length;
-  box.innerHTML = `<div class="ch"><h2>Sedang terbuka</h2><span class="muted" style="font-size:12.5px">${L.length} dari ${r.cfg.count} pintu dipakai</span></div>
+  box.innerHTML = `<div class="ch"><h2>Sedang terbuka</h2><span class="muted" style="font-size:12.5px">${L.length} ONT</span></div>
     <table class="t"><thead><tr><th>ONT</th><th class="hide-sm">Router</th><th>Alamat</th><th class="hide-md">Berakhir</th><th class="r"></th></tr></thead><tbody>
     ${L.map((x) => `<tr><td><b>${esc(x.label || x.ip)}</b><div class="muted mono" style="font-size:12px">${esc(x.ip)}</div></td><td class="hide-sm">${esc(x.site)}</td>
       <td class="mono">:${x.port}</td><td class="hide-md">${x.users ? `${esc(fmtDur(Math.max(0, x.expires - Date.now())))} lagi` : `<span class="muted">menunggu dibuka</span>`}</td>
@@ -3213,7 +3214,7 @@ async function fillOntWeb() {
         <table class="t"><thead><tr><th>ONT</th><th class="hide-sm">Router</th><th>IP virtual</th><th class="hide-md">Terakhir lapor</th><th class="r"></th></tr></thead><tbody id="gOntRows"><tr><td colspan="5" class="muted">Membaca daftar ONT…</td></tr></tbody></table>
         <div class="cb" style="border-top:1px solid var(--line);padding:10px 20px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
           <button class="btn sm" id="gOntMore" hidden></button>
-          <span class="help" style="margin:0">Berlaku 1 jam sejak terakhir dipakai.</span>
+          <span class="help" style="margin:0">Berlaku 30 menit sejak terakhir dipakai. Port ${GW_RANGE} (TCP) harus terbuka di firewall provider.</span>
         </div>
       </div>`;
     paintIcons(box);
@@ -3227,29 +3228,6 @@ async function fillOntWeb() {
   if (r.error) { $("#gOntRows").innerHTML = `<tr><td colspan="5"><div class="note warn" style="margin:0">${ic("alert")}<div><b>Daftar ONT tidak bisa dibaca</b>${esc(r.error)}</div></div></td></tr>`; paintIcons($("#gOntRows")); return; }
   ONTW.list = r.devices.sort((a, b) => (b.siteOnline - a.siteOnline) || String(a.site).localeCompare(String(b.site), "id") || a.serial.localeCompare(b.serial));
   ontRows();
-}
-async function fillGwSettings() {
-  const box = $("#gGw"); if (!box) return;
-  let r;
-  try { r = await api("/api/ontgw"); } catch (e) { box.innerHTML = `<div class="ch"><h2>Pintu web ONT</h2></div><div class="cb muted">${esc(e.message)}</div>`; return; }
-  if (!$("#gGw")) return;
-  const c = r.cfg;
-  box.innerHTML = `<div class="ch"><h2>Pintu web ONT</h2>${c.enabled ? `<span class="pill ok">Aktif</span>` : `<span class="pill">Mati</span>`}</div>
-    <form class="cb" id="gwForm">
-      <label class="check" style="margin:0 0 6px"><input type="checkbox" id="gwOn"${c.enabled ? " checked" : ""}> Izinkan membuka web ONT lewat IP VPS</label>
-      <div class="f2"><div><label for="gwFrom">Port awal</label><input id="gwFrom" type="number" min="1024" max="65535" value="${c.from}"></div>
-        <div><label for="gwCount">Jumlah pintu</label><input id="gwCount" type="number" min="1" max="100" value="${c.count}"></div></div>
-      <label for="gwT">Port web ONT</label><input id="gwT" type="number" min="1" max="65535" value="${c.tport}">
-      <div class="help">Port <b class="mono">${c.from}-${c.to}</b>, satu port per ONT. Buka juga di firewall provider.</div>
-      <div class="err" id="gwErr"></div>
-      <div class="form-actions"><button class="btn pri">Simpan</button></div>
-    </form>`;
-  $("#gwForm").onsubmit = async (e) => {
-    e.preventDefault(); $("#gwErr").textContent = "";
-    const b = $("#gwForm button:not(.pw-eye)"); busyBtn(b, true);
-    try { await api("/api/ontgw/settings", { method: "PUT", body: { enabled: $("#gwOn").checked, from: +$("#gwFrom").value, count: +$("#gwCount").value, tport: +$("#gwT").value } }); toast("Pintu web ONT disimpan"); fillGwSettings(); }
-    catch (err) { $("#gwErr").textContent = err.message; busyBtn(b, false); }
-  };
 }
 
 /* ================= GenieACS ================= */
@@ -3375,7 +3353,6 @@ async function fillGenie(refresh) {
             <div class="form-actions"><button class="btn pri">Simpan</button></div>
           </form>`}
         </div>
-    <div class="card" id="gGw"><div class="ch"><h2>Pintu web ONT</h2></div><div class="cb muted">Membaca…</div></div>
       </div>
     </div>
     </div>
@@ -3401,7 +3378,6 @@ async function fillGenie(refresh) {
   paintIcons(b);
   bindInform(g);
   fillGenieUsers();
-  fillGwSettings();
   if (GTAB === "ont") fillOntWeb();
   $("#gRefresh") && ($("#gRefresh").onclick = async () => { busyBtn($("#gRefresh"), true); await fillGenie(true); });
   $("#gExtraForm") && ($("#gExtraForm").onsubmit = async (e) => {

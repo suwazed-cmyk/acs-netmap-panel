@@ -362,12 +362,13 @@ Tampilan panel **realtime tanpa penyegaran berkala**: begitu router tersambung/p
 
 **Remote router / ONT (port forwarding):** buka router → tab **Port Forwarding** → **Tambah** → pilih layanan (Winbox, WebFig, SSH, Web ONT, atau lainnya). Untuk Winbox, isi **Connect To** dengan `IP_VPS:20001` (port sesuai yang tampil). Layanan web bisa langsung diklik dan terbuka di tab baru. Port ini terbuka ke internet, jadi pastikan password perangkat kuat.
 
-**Buka web ONT tanpa VPN:** menu **GenieACS → Web ONT** → cari ONT (serial, IP, atau router) → **Buka web ONT**. Web ONT terbuka di tab baru lewat `http://IP_VPS:8101` (port berikutnya untuk ONT lain, sampai 8120), lalu login ke ONT seperti biasa.
+**Buka web ONT tanpa VPN:** menu **GenieACS → Web ONT** → cari ONT (serial, IP, atau router) → **Buka web ONT**. Web ONT terbuka di tab baru lewat `http://IP_VPS:62000` (ONT berikutnya memakai 62001, dan seterusnya sampai 62999), lalu login ke ONT seperti biasa.
 - Alamat itu **hanya bisa dibuka lewat tombol di panel**. Tombol memberi tiket sekali pakai; orang yang mengetik alamatnya langsung akan ditolak.
-- Akses berlaku **1 jam sejak terakhir dipakai**, dan langsung berakhir saat Anda logout dari panel. Kalau habis, klik **Buka web ONT** lagi.
+- Akses berlaku **30 menit sejak terakhir dipakai**, dan langsung berakhir saat Anda logout dari panel. Kalau habis, klik **Buka web ONT** lagi.
 - Beberapa ONT bisa dibuka bersamaan, masing-masing di port sendiri. Login ONT yang satu tidak menimpa yang lain.
 - Yang sedang terbuka tampil di kartu **Sedang terbuka** dan bisa ditutup kapan saja. Setiap pembukaan tercatat di **Log aktivitas**.
-- Deret port, jumlah pintu, dan port web ONT (bawaan 80) diatur di **GenieACS → Pengaturan → Pintu web ONT**. Jika VPS memakai firewall dari penyedia (security group), buka juga port `8101-8120/tcp` di sana.
+- Port web ONT dideteksi otomatis (http 80, https 443, http 8080, https 8443). ONT yang memaksa HTTPS tetap dibuka lewat `http://IP_VPS:620xx`, tanpa peringatan sertifikat. Alamatnya selalu memakai IP VPS, walaupun panel memakai domain.
+- Buka port **`62000-62999/tcp`** di firewall provider VPS (security group). Port hanya aktif selama ada ONT yang dibuka.
 - Syaratnya, ONT sudah melapor ke GenieACS (IP virtualnya diketahui) dan router-nya sedang tersambung.
 
 **Riwayat:** tab **Riwayat** mencatat setiap putus (kapan dan berapa lama) serta grafik 30 hari, disimpan 90 hari. Router baru berstatus **Menunggu pemasangan** sampai MikroTik tersambung pertama kali.

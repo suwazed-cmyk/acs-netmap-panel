@@ -2,6 +2,11 @@
 
 Garis besar setiap versi. Panel menampilkan poin-poin ini di Pengaturan → Pembaruan.
 
+## 2.23.0
+- Web ONT memakai port 62000–62999 tanpa perlu diatur
+- Port web ONT dideteksi otomatis, termasuk ONT yang memakai HTTPS
+- Sesi web ONT berlaku 30 menit sejak terakhir dipakai
+
 ## 2.22.2
 - Pilihan notifikasi VPN putus dan tersambung lagi dibuat bersebelahan
 
