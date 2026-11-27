@@ -1335,9 +1335,12 @@ function topWarn(parts) {
   const onSet = parts[0] === "pengaturan" && (!parts[1] || parts[1] === "umum");
   el.innerHTML = `<div class="note bad">${ic("alert")}<div><b>Password admin masih bawaan (Admin123)</b>${P.active ? "Panel terbuka di port web standar sehingga mudah ditemukan orang. " : ""}Siapa pun yang mencoba Admin123 bisa masuk dan mengubah router Anda. Segera ganti password.</div>${onSet ? "" : `<a class="btn pri" href="#/pengaturan/umum">Ganti password</a>`}</div>`;
 }
+let LAST_HASH = "";
 function route() {
   if (!LOADED) return;
   let h = location.hash || "#/";
+  const same = h === LAST_HASH, keepY = same ? window.scrollY : 0;
+  LAST_HASH = h;
   if (/^#\/(lokasi|server)(\/|$)/.test(h)) { h = h.replace(/^#\/(lokasi|server)/, "#/router"); history.replaceState(null, "", h); }
   if (/^#\/pengaturan\/zerotier/.test(h)) { h = "#/zerotier"; history.replaceState(null, "", h); }
   const parts = h.replace(/^#\/?/, "").split("/").filter(Boolean);
@@ -1345,9 +1348,11 @@ function route() {
     const g = n.dataset.go.replace(/^#\/?/, "");
     n.classList.toggle("on", (g === "" && parts.length === 0) || (g && parts[0] === g));
   });
-  document.body.classList.remove("nav-open");
-  document.querySelectorAll(".menu-list").forEach((m) => m.classList.add("hidden"));
-  closeModal();
+  if (!same) {
+    document.body.classList.remove("nav-open");
+    document.querySelectorAll(".menu-list").forEach((m) => m.classList.add("hidden"));
+    closeModal();
+  }
   const v = $("#view");
   topWarn(parts);
   let title = "Dashboard";
@@ -1373,7 +1378,7 @@ function route() {
   else { viewDashboard(v); }
   document.title = `${title} · ${BRAND}`;
   paintIcons(v);
-  window.scrollTo(0, 0);
+  window.scrollTo(0, keepY);
 }
 function crumb(items) {
   if (items[0][0] !== "Dashboard") items = [["Dashboard", "#/"]].concat(items);
@@ -1446,7 +1451,7 @@ function viewDashboard(v) {
         </div>
       </div>
       <div class="stack">
-        <div id="dashHealth"></div>
+        <div id="dashHealth">${HEALTH_HTML}</div>
         ${dashApps()}
         <div class="card">
           <div class="ch"><h2>VPS</h2><a href="#/pengaturan">Pengaturan</a></div>
@@ -1464,16 +1469,13 @@ function viewDashboard(v) {
 }
 // Add-on yang terpasang, dibuka langsung dari Dashboard
 function dashApps() {
-  const all = Object.entries(STATE.settings.addons || {}).map(([id, a]) => Object.assign({ id }, a));
-  const ord = (x, y) => (x.kind === y.kind ? x.name.localeCompare(y.name) : x.kind === "aplikasi" ? -1 : 1);
-  const inst = all.filter((a) => a.installed).sort(ord), avail = all.filter((a) => !a.installed).sort(ord);
-  const li = (a) => `<li>${adIcon(a, "sm")}<span class="grow"><b>${esc(a.name)}</b><small>${esc(a.tagline || "")}</small></span>${!a.installed
-    ? `<a class="btn sm" href="#/addon">${ic("plus")}Pasang</a>`
-    : a.kind === "aplikasi" ? `<a class="btn sm" href="${esc(adHref(a))}" target="_blank" rel="noopener">${ic("ext")}Buka</a>` : `<a class="btn sm" href="#/${esc(a.id)}">Buka</a>`}</li>`;
+  const A = Object.entries(STATE.settings.addons || {}).filter(([, a]) => a.installed).map(([id, a]) => Object.assign({ id }, a));
+  if (!A.length) return "";
+  A.sort((x, y) => (x.kind === y.kind ? x.name.localeCompare(y.name) : x.kind === "aplikasi" ? -1 : 1));
   return `<div class="card"><div class="ch"><h2>Aplikasi</h2><a href="#/addon">Kelola</a></div>
-    ${inst.length ? `<ul class="dapps">${inst.map(li).join("")}</ul>` : ""}
-    ${avail.length ? `${inst.length ? `<div class="dsec">Belum dipasang</div>` : ""}<ul class="dapps">${avail.map(li).join("")}</ul>` : ""}
-    ${!all.length ? `<div class="empty" style="padding:28px 20px"><p>Belum ada add-on.</p></div>` : ""}</div>`;
+    <ul class="dapps">${A.map((a) => `<li>${adIcon(a, "sm")}<span class="grow"><b>${esc(a.name)}</b><small>${esc(a.tagline || "")}</small></span>${a.kind === "aplikasi"
+      ? `<a class="btn sm" href="${esc(adHref(a))}" target="_blank" rel="noopener">${ic("ext")}Buka</a>`
+      : `<a class="btn sm" href="#/${esc(a.id)}">Buka</a>`}</li>`).join("")}</ul></div>`;
 }
 function uptimeTable(S) {
   const order = { down: 0, up: 1, pending: 2 };
@@ -3420,6 +3422,7 @@ async function healthSettings(el) {
   $("#hlTest").onclick = async () => { const btn = $("#hlTest"); busyBtn(btn, true); try { await api("/api/health/send", { method: "POST" }); toast("Laporan dikirim ke Telegram"); } catch (err) { $("#hlErr").textContent = err.message; } busyBtn(btn, false); };
 }
 // ---------- Kartu Kesehatan VPS (Dashboard) ----------
+let HEALTH_HTML = "";
 async function dashHealth() {
   const el = $("#dashHealth"); if (!el) return;
   let x;
@@ -3440,6 +3443,7 @@ async function dashHealth() {
       ${down.length ? `<div class="zt-small" style="color:var(--bad)">${down.map((v) => esc(v.label)).join(", ")}</div>` : ""}
       <div class="vh-l"><a href="#/pengaturan/telegram">Laporan kesehatan ke Telegram</a></div>
     </div></div>`;
+  HEALTH_HTML = el.innerHTML;
   const cb = $("#vpsCopy");
   if (cb) cb.onclick = () => { try { navigator.clipboard.writeText(ip).then(() => toast("Alamat VPS disalin"), () => toast(ip)); } catch (e) { toast(ip); } };
 }
