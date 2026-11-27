@@ -1070,6 +1070,13 @@
   .zt-acth{display:flex;align-items:center;justify-content:space-between;font-size:14px}
   @media (max-width:1024px){.zt-hcard .zt-health{grid-template-columns:1fr 1fr}.zt-hcard .zt-hc:nth-child(2n){border-right:0}.zt-hcard .zt-hc:nth-child(-n+2){border-bottom:1px solid var(--line)}.zt-setgrid,.g-setgrid{grid-template-columns:1fr}}
   @media (max-width:720px){.zt-curqr{grid-template-columns:1fr}.zt-qrside{border-left:0;padding-left:0;border-top:1px solid var(--line);padding-top:12px}.zt-hcard .zt-health{grid-template-columns:1fr}.zt-hcard .zt-hc{border-right:0;border-bottom:1px solid var(--line)}.zt-hcard .zt-hc:last-child{border-bottom:0}}
+
+  .l2-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 24px;padding:4px 16px 4px}
+  .l2-grid .zt-cur{padding:4px 0 8px}
+  .l2-grid .zt-hv b.mono{font-size:14px;font-weight:600}
+  .l2-set{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
+  .l2-set>.card{margin:0!important}
+  @media (max-width:900px){.l2-grid,.l2-set{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -1098,9 +1105,10 @@
     <button class="nav" data-go="#/"><span data-ic="home"></span>Dashboard</button>
     <div class="nav-sec">Jaringan</div>
     <button class="nav" data-go="#/router"><span data-ic="router"></span>Router</button>
-    <button class="nav" data-go="#/genieacs"><span data-ic="box"></span>GenieACS</button>
+    <button class="nav" data-go="#/l2tp"><span data-ic="lock"></span>L2TP</button>
     <button class="nav hidden" id="navZt" data-go="#/zerotier"><span data-ic="hub"></span>ZeroTier</button>
     <button class="nav hidden" id="navWg" data-go="#/wireguard"><span data-ic="bolt"></span>WireGuard</button>
+    <button class="nav" data-go="#/genieacs"><span data-ic="box"></span>GenieACS</button>
     <div class="nav-sec">Aplikasi</div>
     <button class="nav" data-go="#/addon"><span data-ic="puzzle"></span>Add-on</button>
     <div class="nav-sec">Sistem</div>
@@ -1505,6 +1513,7 @@ function route() {
   LAST_HASH = h;
   if (/^#\/(lokasi|server)(\/|$)/.test(h)) { h = h.replace(/^#\/(lokasi|server)/, "#/router"); history.replaceState(null, "", h); }
   if (/^#\/pengaturan\/zerotier/.test(h)) { h = "#/zerotier"; history.replaceState(null, "", h); }
+  if (/^#\/pengaturan\/vpn/.test(h)) { L2TAB = "pengaturan"; h = "#/l2tp"; history.replaceState(null, "", h); }
   const parts = h.replace(/^#\/?/, "").split("/").filter(Boolean);
   document.querySelectorAll(".nav[data-go]").forEach((n) => {
     const g = n.dataset.go.replace(/^#\/?/, "");
@@ -1531,6 +1540,7 @@ function route() {
   else if (parts[0] === "panduan") { viewGuide(v); title = "Panduan"; }
   else if (parts[0] === "pengaturan") { viewSettings(v, parts[1] || "umum"); title = "Pengaturan"; }
   else if (parts[0] === "genieacs") { viewGenie(v); title = "GenieACS"; }
+  else if (parts[0] === "l2tp") { viewL2tp(v); title = "L2TP"; }
   else if (parts[0] === "zerotier" && !ztOn()) { location.hash = "#/addon"; return; }
   else if (parts[0] === "zerotier") { viewZerotier(v); title = "ZeroTier"; }
   else if (parts[0] === "wireguard" && !wgOn()) { location.hash = "#/addon"; return; }
@@ -2533,7 +2543,7 @@ ${wgOn() ? `    <div class="card"><div class="ch"><h2>Router lewat WireGuard (op
 }
 
 /* ================= Pengaturan ================= */
-const SET_TABS = [["umum", "Umum", "sliders"], ["keamanan", "Keamanan", "shield"], ["vpn", "VPN L2TP", "lock"], ["telegram", "Notifikasi Telegram", "send"], ["domain", "Domain & HTTPS", "globe"], ["pembaruan", "Pembaruan", "dl"]];
+const SET_TABS = [["umum", "Umum", "sliders"], ["keamanan", "Keamanan", "shield"], ["telegram", "Notifikasi Telegram", "send"], ["domain", "Domain & HTTPS", "globe"], ["pembaruan", "Pembaruan", "dl"]];
 function viewSettings(v, tab) {
   if (!SET_TABS.some(([k]) => k === tab)) tab = "umum";
   crumb([["Pengaturan", "#/pengaturan"], [SET_TABS.find(([k]) => k === tab)[1]]]);
@@ -2684,7 +2694,74 @@ function setGeneral(b) {
   };
 }
 
-// Tab VPN L2TP: enkripsi IPsec dan jaringan VPN
+/* ================= L2TP ================= */
+let L2TAB = "ringkasan"; // tab yang terbuka di halaman L2TP
+function viewL2tp(v) {
+  crumb([["L2TP"]]);
+  const s = STATE.settings;
+  const R = STATE.sites.filter((x) => x.transport === "l2tp");
+  const on = R.filter((x) => x.state === "up").length, off = R.filter((x) => x.state === "down").length, wait = R.filter((x) => x.state === "pending").length;
+  const order = { down: 0, up: 1, pending: 2 };
+  const rows = [...R].sort((a, b) => order[a.state] - order[b.state] || a.name.localeCompare(b.name, "id"));
+  const T = [["ringkasan", "Ringkasan", "lock", off || ""], ["pengaturan", "Pengaturan", "sliders"]];
+  if (!T.some(([k]) => k === L2TAB)) L2TAB = "ringkasan";
+  v.innerHTML = `
+    <div class="ph"><div><h1>L2TP</h1></div><div class="acts"><button class="btn pri" data-act="add">${ic("plus")}Tambah router</button></div></div>
+    <div id="l2Body">${subTabs(T, L2TAB)}
+    <div data-pane="ringkasan"${L2TAB === "ringkasan" ? "" : " hidden"}>
+      <div class="kpis">
+        <div class="kpi"><span><i class="kico blue">${ic("router")}</i>Router L2TP</span><b>${R.length}</b><small>${wait ? `${wait} menunggu pemasangan` : "memakai jalur L2TP"}</small></div>
+        <div class="kpi"><span><i class="kico green">${ic("check")}</i>Tersambung</span><b>${on}</b><small>${R.length - wait ? Math.round((on / (R.length - wait)) * 100) : 0}% dari router terpasang</small></div>
+        <div class="kpi"><span><i class="kico red">${ic("x")}</i>Terputus</span><b>${off}</b><small>${off ? "perlu dicek" : "tidak ada"}</small></div>
+        <div class="kpi"><span><i class="kico amber">${ic("pulse")}</i>Layanan</span><b id="l2Svc">—</b><small id="l2SvcSub">memeriksa…</small></div>
+      </div>
+      <div class="card">
+        <div class="ch"><h2>Server L2TP</h2>${s.useIpsec ? `<span class="pill ok">${ic("lock", "")}IPsec aktif</span>` : `<span class="pill wait">Tanpa IPsec</span>`}</div>
+        <div class="l2-grid">
+          <div class="zt-cur">
+            <div class="zt-hrow"><span class="zt-hl">Alamat VPS</span><span class="zt-hv"><b class="mono">${esc(s.publicIp || "—")}</b>${s.publicIp ? copyBtn(s.publicIp, "Alamat VPS tersalin") : ""}</span></div>
+            <div class="zt-hrow"><span class="zt-hl">Jaringan VPN</span><span class="zt-hv"><b class="mono">${esc(s.tunnelNet || "—")}</b></span></div>
+            <div class="zt-hrow"><span class="zt-hl">IP VPS</span><span class="zt-hv"><b class="mono">${esc(s.tunnelLocal || "—")}</b></span></div>
+            <div class="zt-hrow"><span class="zt-hl">URL ACS ONT</span><span class="zt-hv"><b class="mono">${esc(s.acsUrl || "—")}</b>${s.acsUrl ? copyBtn(s.acsUrl, "URL ACS tersalin") : ""}</span></div>
+          </div>
+          <div class="zt-cur">
+            <div class="zt-hrow"><span class="zt-hl">IP tetap router</span><span class="zt-hv"><b class="mono">${esc(s.tunnelStatic || "—")}</b></span></div>
+            <div class="zt-hrow"><span class="zt-hl">Pool dinamis</span><span class="zt-hv"><b class="mono">${esc(s.tunnelPool || "—")}</b></span></div>
+            <div class="zt-hrow"><span class="zt-hl">Kapasitas</span><span class="zt-hv"><b>${R.length} <span class="muted" style="font-weight:500">dari ${s.tunnelMax || 0} router</span></b></span></div>
+            <div class="zt-hrow"><span class="zt-hl">PSK IPsec</span><span class="zt-hv">${s.psk ? `<b class="mono l2-psk" data-psk="${esc(s.psk)}">••••••••••</b><button class="zt-ib" id="l2PskEye" title="Tampilkan PSK" aria-label="Tampilkan PSK">${ic("eye")}</button>${copyBtn(s.psk, "PSK tersalin")}` : `<span class="muted">—</span>`}</span></div>
+          </div>
+        </div>
+        <p class="help" style="margin:0 16px 12px">Port yang dibuka di firewall provider: <b>UDP 1701</b>${s.useIpsec ? ", <b>UDP 500</b> dan <b>UDP 4500</b> (IPsec)" : ""}.</p>
+      </div>
+      <div class="card" style="margin-top:12px">
+        <div class="ch"><h2>Router L2TP</h2><span class="muted" style="font-size:12.5px">${R.length} router · ${on} tersambung${off ? ` · <b style="color:var(--bad)">${off} terputus</b>` : ""}</span></div>
+        ${R.length ? `<div class="zt-tw"><table class="t"><thead><tr><th>Router</th><th>IP VPN</th><th class="hide-sm">User L2TP</th><th class="hide-md">Interface</th><th class="r hide-sm">Uptime 7 hari</th><th>Status</th></tr></thead><tbody>
+          ${rows.map((x) => {
+            const st = x.state === "up" ? `<span class="pill ok">Tersambung</span>` : x.state === "down" ? `<span class="pill bad">Terputus${x.downSince ? " · " + esc(fmtDur(Date.now() - x.downSince)) : ""}</span>` : `<span class="pill wait">Menunggu</span>`;
+            return `<tr class="click" data-go="#/router/${esc(x.id)}"><td><div class="zt-dev"><span class="zt-av router">${ic("router")}</span><div style="min-width:0"><div class="zt-nm">${esc(x.name)}</div><div class="muted zt-small mono">${esc(x.virtualSubnet)}</div></div></div></td>
+              <td class="mono">${esc(x.tunnelIp)}</td><td class="hide-sm mono">${esc(x.username)}</td><td class="hide-md mono muted">${esc(x.iface || "—")}</td>
+              <td class="r hide-sm pc ${pctCls(x.uptime7)}">${x.uptime7 == null ? "—" : pct(x.uptime7)}</td><td>${st}</td></tr>`;
+          }).join("")}
+        </tbody></table></div>` : `<div class="empty"><h3>Belum ada router L2TP</h3><p>Tambah router dan pilih jalur L2TP.</p><button class="btn pri" style="margin-top:10px" data-act="add">${ic("plus")}Tambah router</button></div>`}
+      </div>
+    </div>
+    <div data-pane="pengaturan"${L2TAB === "pengaturan" ? "" : " hidden"}><div class="l2-set" id="l2Set"></div></div>
+    </div>`;
+  setVpn($("#l2Set"));
+  bindSubTabs($("#l2Body"), (k) => (L2TAB = k));
+  const eye = $("#l2PskEye");
+  if (eye) eye.onclick = () => { const el = $(".l2-psk"); const show = el.textContent.startsWith("•"); el.textContent = show ? el.dataset.psk : "••••••••••"; };
+  api("/api/health").then((x) => {
+    const el = $("#l2Svc"); if (!el) return;
+    const sv = x.services.filter((u) => u.unit === "xl2tpd" || u.label === "IPsec");
+    const down = sv.filter((u) => !u.active);
+    el.textContent = !sv.length ? "—" : down.length ? "Mati" : "Berjalan";
+    el.style.color = !sv.length ? "" : down.length ? "var(--bad)" : "var(--ok)";
+    $("#l2SvcSub").textContent = sv.map((u) => `${u.unit} ${u.active ? "berjalan" : "mati"}`).join(" · ") || "xl2tpd tidak ditemukan";
+  }).catch(() => { const el = $("#l2SvcSub"); if (el) el.textContent = "tidak bisa memeriksa layanan"; });
+}
+
+// Tab Pengaturan di halaman L2TP: enkripsi IPsec dan jaringan VPN
 function setVpn(b) {
   const s = STATE.settings;
   b.innerHTML = `
@@ -3871,7 +3948,7 @@ paintIcons();
     if ($("#appView").classList.contains("hidden") || $("#mbg") || TEST) return;
     const h = location.hash;
     if (CF && CF.running) return;
-    try { await load(); if (!/\/(tes|port)$|^#\/(pengaturan|log|genieacs|zerotier|wireguard)/.test(h) && !document.activeElement.matches("input,select")) liveRefresh(); } catch (e) {}
+    try { await load(); if (!/\/(tes|port)$|^#\/(pengaturan|log|genieacs|zerotier|wireguard|l2tp)/.test(h) && !document.activeElement.matches("input,select")) liveRefresh(); } catch (e) {}
   }, 30000);
 })();
 </script>

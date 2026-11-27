@@ -168,11 +168,15 @@ Buka `http://IP_VPS` lalu login dengan **password admin dari ringkasan instalasi
 Menu **Pengaturan → Umum**:
 1. **Nama panel** (opsional), misalnya `INET WIFI`. Dipakai di judul panel dan sebagai komentar aturan di MikroTik (`INET WIFI - ONT ke IP virtual`). Bisa diganti kapan saja; script baru otomatis membersihkan aturan dengan nama lama.
 2. **Alamat VPS**: IP publik VPS (atau domain). Alamat ini dipakai di script MikroTik.
-3. **Pakai IPsec**: biarkan mati (L2TP biasa), kecuali Anda memang butuh.
-4. **Jaringan VPN (L2TP)**: tentukan **sekarang** (bawaan `192.168.42.0/24`). Mengganti belakangan berarti URL ACS di semua ONT ikut berubah.
-5. **Password admin**: bisa diganti dengan password Anda sendiri. Instalasi lama yang masih memakai `Admin123` mendapat peringatan di dashboard sampai diganti.
+3. **Password admin**: bisa diganti dengan password Anda sendiri. Instalasi lama yang masih memakai `Admin123` mendapat peringatan di dashboard sampai diganti.
 
-Menu **GenieACS**: pastikan **Patch IP virtual** berstatus **Aktif** dan keempat layanan **Berjalan**. Kartu ini juga menampilkan rentang IP virtual yang dipakai GenieACS. Kolom **Rentang tambahan** hanya perlu diisi jika Anda punya ONT dengan IP virtual buatan sendiri di luar panel.
+Menu **L2TP → Pengaturan**:
+1. **Pakai IPsec**: biarkan mati (L2TP biasa), kecuali Anda memang butuh.
+2. **Jaringan VPN**: tentukan **sekarang** (bawaan `192.168.42.0/24`). Mengganti belakangan berarti URL ACS di semua ONT ikut berubah.
+
+Tab **L2TP → Ringkasan** menampilkan alamat VPS, jaringan VPN, URL ACS, PSK, status layanan xl2tpd, dan daftar router L2TP beserta IP VPN dan statusnya.
+
+Menu **GenieACS → Pengaturan**: pastikan **Patch IP virtual** berstatus **Aktif**, dan di tab **Layanan & alamat** keempat layanan **Berjalan**. Kartu patch juga menampilkan rentang IP virtual yang dipakai GenieACS. Kolom **Rentang tambahan** hanya perlu diisi jika Anda punya ONT dengan IP virtual buatan sendiri di luar panel.
 
 Buka **GenieACS UI** di `http://IP_VPS:3000`. Pada pemasangan baru muncul *initialization wizard*: buat akun admin dan biarkan semua pilihan dicentang (Users, Presets, Provisions, Overview, Device page). Pada VPS lama yang dipasang dengan `genie.sh`, centang **Users saja** agar konfigurasi yang sudah ada tidak tertimpa.
 
