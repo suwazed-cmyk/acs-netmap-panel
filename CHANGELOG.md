@@ -2,6 +2,9 @@
 
 Garis besar setiap versi. Panel menampilkan poin-poin ini di Pengaturan → Pembaruan.
 
+## 2.22.2
+- Pilihan notifikasi VPN putus dan tersambung lagi dibuat bersebelahan
+
 ## 2.22.1
 - Ringkasan pembaruan add-on lebih akurat
 

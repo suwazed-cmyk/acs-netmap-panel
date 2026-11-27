@@ -208,7 +208,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.22.1";
+const VERSION = "2.22.2";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -10826,12 +10826,12 @@ function setTelegram(b) {
     </div></div>
     <div class="card"><div class="ch"><h2>Aturan notifikasi</h2></div><div class="cb" style="padding-top:6px">
       <div class="tg-h" style="margin-top:6px">VPN</div>
-      <label class="check" style="margin:0"><input id="tgOn" type="checkbox" ${t.enabled !== false ? "checked" : ""}>Aktifkan notifikasi VPN terputus</label>
+      <div class="tg-ev" style="margin-top:0"><label class="check"><input id="tgOn" type="checkbox" ${t.enabled !== false ? "checked" : ""}>Kirim saat VPN terputus</label>
+        <label class="check"><input id="tgRec" type="checkbox" ${t.notifyRecovery !== false ? "checked" : ""}>Kirim saat tersambung lagi</label></div>
       <div class="f2">
         <div><label for="tgDelay">Lapor setelah putus (menit)</label><input id="tgDelay" type="number" min="1" max="1440" value="${t.delayMin || 3}"></div>
         <div><label for="tgRemind">Ingatkan lagi tiap (menit, 0 = mati)</label><input id="tgRemind" type="number" min="0" max="1440" value="${t.remindMin ?? 60}"></div>
       </div>
-      <label class="check" style="margin-top:14px"><input id="tgRec" type="checkbox" ${t.notifyRecovery !== false ? "checked" : ""}>Kirim juga saat tersambung lagi</label>
       <div class="tg-h">Kejadian lain</div>
       <div class="tg-ev">${(t.eventList || []).map(([k, lbl]) => `<label class="check"><input type="checkbox" data-tgev="${k}" ${(t.events || {})[k] ? "checked" : ""}>${esc(lbl)}</label>`).join("")}
         <label class="check"><input type="checkbox" id="tgBlockEv">IP diblokir karena salah password</label></div>
