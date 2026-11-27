@@ -211,7 +211,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.12.0";
+const VERSION = "2.12.1";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -9312,18 +9312,18 @@ async function setZerotier(b) {
           <p class="muted zt-small">${cur.conflict ? esc(cur.conflict) : `${actNet ? `Jaringan panel sekarang: <b>${esc(actNet.name || actNet.nwid)}</b>. ` : ""}VPS bergabung ke jaringan ini dan router ZeroTier memakainya.`}</p>`
             : `<button class="btn ghost danger" id="ztLeave">${ic("trash")}Lepas VPS dari jaringan</button>`}
         </div>
+      <div class="card"><div class="ch"><h2>Rute jaringan</h2><span class="muted" style="font-size:12.5px">dibagikan ke semua perangkat</span></div>
+        <ul class="zt-routes">${(cur.routes || []).map((r) => `<li><span class="mono zt-rt">${esc(r.target)}</span>
+          ${r.via ? `<span class="zt-arrow">→</span><span class="mono">${esc(r.via)}</span><span class="muted zt-rv">${esc(ipOwner(r.via))}</span>` : `<span class="muted zt-rv">langsung (jaringan ZeroTier)</span>`}
+          <span class="tag ${r.via ? (r.panel ? "" : "gray") : "gray"}">${r.via ? (r.panel ? "otomatis" : "manual") : "jaringan"}</span></li>`).join("") || `<li class="muted">Belum ada rute</li>`}</ul>
+        <p class="help" style="margin:0 16px 12px">Rute IP virtual tiap router dan URL ACS dibuat otomatis oleh panel. Rentang jaringan diatur di Pengaturan.</p>
+      </div>
       <div class="card"><div class="ch"><h2>Jaringan di controller</h2><span class="muted" style="font-size:12.5px">${nets.length} jaringan</span></div>
         <ul class="zt-nets">${nets.map((n) => ztNetRow(n, { canUse: false, open: true })).join("")}</ul>
 
       </div>
       </div>
     </div>
-      <div class="card"><div class="ch"><h2>Rute jaringan</h2><span class="muted" style="font-size:12.5px">dibagikan ke semua perangkat</span></div>
-        <ul class="zt-routes">${(cur.routes || []).map((r) => `<li><span class="mono zt-rt">${esc(r.target)}</span>
-          ${r.via ? `<span class="zt-arrow">→</span><span class="mono">${esc(r.via)}</span><span class="muted zt-rv">${esc(ipOwner(r.via))}</span>` : `<span class="muted zt-rv">langsung (jaringan ZeroTier)</span>`}
-          <span class="tag ${r.via ? (r.panel ? "" : "gray") : "gray"}">${r.via ? (r.panel ? "otomatis" : "manual") : "jaringan"}</span></li>`).join("") || `<li class="muted">Belum ada rute</li>`}</ul>
-        <p class="help" style="margin:0 20px 16px">Rute IP virtual tiap router dan URL ACS dibuat otomatis oleh panel. Rentang jaringan diatur di Pengaturan.</p>
-      </div>
 
     <p class="help" style="margin-top:12px">${act ? "" : "Rute IP virtual router dan URL ACS hanya dibuat otomatis di jaringan panel. "}Rentang IP ZeroTier tidak boleh bentrok dengan ${esc(s.tunnelNet || "")} (L2TP), ${esc(s.virtualPool || "")} (IP virtual), subnet ONT, dan 172.17.0.0/16 (Docker). URL ACS untuk ONT tetap ${esc(s.acsUrl || "")}.</p>
     </div>`;
