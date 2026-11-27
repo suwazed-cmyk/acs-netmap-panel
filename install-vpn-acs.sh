@@ -208,7 +208,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.20.0";
+const VERSION = "2.20.1";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -7866,6 +7866,9 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .mh-acts{margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
   .mh .mh-acts~.x{margin-left:10px}
   @media (max-width:600px){.mh{flex-wrap:wrap;row-gap:10px}.mh-acts{order:3;width:100%;justify-content:flex-start;margin-left:0}.mh .mh-acts~.x{margin-left:auto}}
+  /* tombol aksi detail add-on sejajar dengan status */
+  .ad-dh{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+  .ad-dacts{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
   /* pita "versi baru terpasang" */
   .upd-bar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:12px;padding:9px 16px;background:var(--primary);color:#fff;font-size:13.5px;font-weight:500}
   .upd-bar svg{width:17px;height:17px;flex:none}
@@ -9054,13 +9057,13 @@ function adDetail(a) {
     : `<button class="btn pri" data-add="install">${ic("dl")}Install</button>`;
   const foot = a.installed ? `<div class="ad-mf"><button class="btn ghost danger" data-add="remove">${ic("trash")}Lepas</button><span class="sp"></span><button class="btn" data-add="check">${ic("check")}Periksa</button></div>` : "";
   modal(`<span class="ad-mh">${adIcon(a, "sm")}${esc(a.name)}</span>`, `
-    <div class="ad-dh"><span class="pill ${st.c}">${esc(st.t)}</span><span class="tag gray">${adCat(a)}</span></div>
+    <div class="ad-dh"><span class="pill ${st.c}">${esc(st.t)}</span><span class="tag gray">${adCat(a)}</span><span class="ad-dacts">${head}</span></div>
     <p class="ad-lead">${esc(a.tagline || "")}</p>
     <p class="ad-desc">${esc(a.desc)}</p>
     ${(a.features || []).length ? `<h3 class="ad-h3">Fitur</h3><ul class="ad-feat">${a.features.map((f) => `<li>${ic("check")}<span>${esc(f)}</span></li>`).join("")}</ul>` : ""}
     <h3 class="ad-h3">Informasi</h3>
     <dl class="ad-info">${info.map(([k, val]) => `<div><dt>${k}</dt><dd>${val}</dd></div>`).join("")}</dl>`,
-    foot, { size: "md", head });
+    foot, { size: "md" });
   document.querySelectorAll("#modalRoot [data-add]").forEach((btn) => (btn.onclick = () => {
     const act = btn.dataset.add;
     if (act !== "remove") closeModal();

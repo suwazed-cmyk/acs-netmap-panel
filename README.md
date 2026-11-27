@@ -268,7 +268,7 @@ Penting:
 - **Port bisa diganti** di **Pengaturan → Umum → Alamat panel** (misalnya 8000/8443 bila 80/443 dipakai aplikasi lain). Alamat panel ikut memakai nomor port itu. **Kembalikan bawaan** = 80/443, **Matikan** = hanya port 8088.
 
 ### D. Menu Add-on
-Menu **Add-on**: cari add-on, klik untuk melihat detail dan fiturnya, lalu **Install** (tombolnya di kanan atas jendela detail). Panel menampilkan progres langkah demi langkah (0–100%) beserta log. Add-on yang terpasang tampil di bagian **Terpasang** (dan kartu **Aplikasi** di Dashboard) dengan tombol **Buka**; Perbarui, Periksa, Ubah alamat, dan Lepas ada di menu ⋯. Aplikasi (Panel ACS, Bilingku) tidak lagi ditaruh di menu samping.
+Menu **Add-on**: cari add-on, klik untuk melihat detail dan fiturnya, lalu **Install** (tombolnya sejajar dengan status di jendela detail). Panel menampilkan progres langkah demi langkah (0–100%) beserta log. Add-on yang terpasang tampil di bagian **Terpasang** (dan kartu **Aplikasi** di Dashboard) dengan tombol **Buka**; Perbarui, Periksa, Ubah alamat, dan Lepas ada di menu ⋯. Aplikasi (Panel ACS, Bilingku) tidak lagi ditaruh di menu samping.
 
 | Add-on | Isi | Dibuka di |
 |---|---|---|
