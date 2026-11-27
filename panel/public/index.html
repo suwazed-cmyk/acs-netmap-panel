@@ -1335,6 +1335,37 @@ function topWarn(parts) {
   const onSet = parts[0] === "pengaturan" && (!parts[1] || parts[1] === "umum");
   el.innerHTML = `<div class="note bad">${ic("alert")}<div><b>Password admin masih bawaan (Admin123)</b>${P.active ? "Panel terbuka di port web standar sehingga mudah ditemukan orang. " : ""}Siapa pun yang mencoba Admin123 bisa masuk dan mengubah router Anda. Segera ganti password.</div>${onSet ? "" : `<a class="btn pri" href="#/pengaturan/umum">Ganti password</a>`}</div>`;
 }
+/* ---------- Perbarui tampilan tanpa menggambar ulang halaman ----------
+   Isi baru dibuat di luar layar lalu hanya bagian yang berubah yang disalin
+   ke halaman (angka, teks, baris). Scroll, menu terbuka, fokus, dan tab tetap. */
+function morph(a, b, inner = true) {
+  // inner = true (panggilan luar): hanya isi yang disamakan, atribut wadah (id, class) tidak disentuh
+  if (!inner && (a.nodeType !== b.nodeType || a.nodeName !== b.nodeName)) { a.replaceWith(b.cloneNode(true)); return; }
+  if (a.nodeType === 3 || a.nodeType === 8) { if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue; return; }
+  if (a.nodeType !== 1) return;
+  if (a === document.activeElement && /^(INPUT|SELECT|TEXTAREA)$/.test(a.nodeName)) return;
+  if (!inner) {
+    const wasOpen = a.nodeName === "DETAILS" && a.open;
+    for (const at of [...a.attributes]) if (!b.hasAttribute(at.name) && !(at.name === "open" && wasOpen)) a.removeAttribute(at.name);
+    for (const at of [...b.attributes]) if (a.getAttribute(at.name) !== at.value) a.setAttribute(at.name, at.value);
+  }
+  const ac = [...a.childNodes], bc = [...b.childNodes];
+  for (let i = 0; i < bc.length; i++) { if (i < ac.length) morph(ac[i], bc[i], false); else a.appendChild(bc[i].cloneNode(true)); }
+  for (let i = bc.length; i < ac.length; i++) ac[i].remove();
+}
+function liveRefresh() {
+  const h = location.hash || "#/";
+  const v = $("#view");
+  if ((h === "#/" || h === "#") && v.querySelector(".grid-dash")) {
+    const tmp = document.createElement("div");
+    viewDashboard(tmp, true);
+    paintIcons(tmp);
+    morph(v, tmp);
+    return;
+  }
+  if (h === "#/router" && $("#q")) { fillList(); return; }
+  route();
+}
 let LAST_HASH = "";
 function route() {
   if (!LOADED) return;
@@ -1419,7 +1450,7 @@ function issues() {
   return list;
 }
 let DASH_TAB = "uptime"; // tab yang terbuka di kartu kiri Dashboard
-function viewDashboard(v) {
+function viewDashboard(v, live) {
   crumb([["Dashboard"]]);
   const S = STATE.sites, inst = S.filter((x) => x.state !== "pending"), on = S.filter((x) => x.state === "up").length;
   const off = S.filter((x) => x.state === "down").length, pend = S.length - inst.length;
@@ -1459,6 +1490,7 @@ function viewDashboard(v) {
         </div>
       </div>
     </div>`;
+  if (live) { dashHealth(); return; }
   v.querySelectorAll("[data-dtab]").forEach((b) => (b.onclick = () => {
     DASH_TAB = b.dataset.dtab;
     v.querySelectorAll("[data-dtab]").forEach((x) => { x.classList.toggle("on", x === b); x.setAttribute("aria-selected", x === b); });
@@ -3433,7 +3465,7 @@ async function dashHealth() {
   const fb = (n) => (n >= 1024 ** 3 ? (n / 1024 ** 3).toFixed(1).replace(".", ",") + " GB" : Math.round(n / 1024 ** 2) + " MB");
   const down = x.services.filter((v) => !v.active);
   const ip = STATE.settings.publicIp || "";
-  el.innerHTML = `<div class="card"><div class="ch"><h2>Kesehatan VPS</h2><span class="live${down.length ? " bad" : ""}"><i></i>${down.length ? "Ada layanan mati" : "Online"}</span></div>
+  const html = `<div class="card"><div class="ch"><h2>Kesehatan VPS</h2><span class="live${down.length ? " bad" : ""}"><i></i>${down.length ? "Ada layanan mati" : "Online"}</span></div>
     <div class="vh">
       ${ip ? `<div class="vps-ip">${ic("monitor")}<b>${esc(ip)}</b><button type="button" id="vpsCopy">${ic("copy")}Salin</button></div>` : ""}
       ${bar("CPU", x.cpu == null ? null : Math.round(x.cpu), `beban ${x.load[0].toFixed(2).replace(".", ",")} · ${x.cores} inti`)}
@@ -3443,6 +3475,7 @@ async function dashHealth() {
       ${down.length ? `<div class="zt-small" style="color:var(--bad)">${down.map((v) => esc(v.label)).join(", ")}</div>` : ""}
       <div class="vh-l"><a href="#/pengaturan/telegram">Laporan kesehatan ke Telegram</a></div>
     </div></div>`;
+  if (el.firstElementChild) { const t = document.createElement("div"); t.innerHTML = html; paintIcons(t); morph(el, t); } else { el.innerHTML = html; paintIcons(el); }
   HEALTH_HTML = el.innerHTML;
   const cb = $("#vpsCopy");
   if (cb) cb.onclick = () => { try { navigator.clipboard.writeText(ip).then(() => toast("Alamat VPS disalin"), () => toast(ip)); } catch (e) { toast(ip); } };
@@ -3649,7 +3682,7 @@ document.addEventListener("click", async (e) => {
     confirmDialog({ title: "Keluar dari panel?", icon: "logout", ok: "Keluar", text: "Anda perlu login lagi untuk membuka panel.",
       onOk: async () => { await api("/api/logout", { method: "POST" }).catch(() => {}); LOADED = false; closeModal(); showLogin(); } });
   }
-  else if (act === "refresh") { const b = a; b.classList.add("spinning"); try { await load(); route(); toast("Status diperbarui"); } finally { b.classList.remove("spinning"); } }
+  else if (act === "refresh") { const b = a; b.classList.add("spinning"); try { await load(); liveRefresh(); toast("Status diperbarui"); } finally { b.classList.remove("spinning"); } }
   else if (act === "add") openAdd();
   else if (act === "menu") $("#menuList").classList.toggle("hidden");
   else if (act === "edit") { $("#menuList").classList.add("hidden"); openEdit(a.dataset.id); }
@@ -3692,7 +3725,7 @@ paintIcons();
     if ($("#appView").classList.contains("hidden") || $("#mbg") || TEST) return;
     const h = location.hash;
     if (CF && CF.running) return;
-    try { await load(); if (!/\/(tes|port)$|^#\/(pengaturan|log|genieacs|zerotier|wireguard)/.test(h) && !document.activeElement.matches("input,select")) route(); } catch (e) {}
+    try { await load(); if (!/\/(tes|port)$|^#\/(pengaturan|log|genieacs|zerotier|wireguard)/.test(h) && !document.activeElement.matches("input,select")) liveRefresh(); } catch (e) {}
   }, 30000);
 })();
 </script>
