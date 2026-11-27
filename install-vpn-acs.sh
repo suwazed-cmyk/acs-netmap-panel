@@ -208,7 +208,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.18.1";
+const VERSION = "2.18.2";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -7817,13 +7817,9 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   [data-theme="dark"] .tab.on{background:var(--surface-3)}
   .subtabs{margin-bottom:14px}
   .tcnt{margin-left:2px}
-  /* menu di dalam halaman: deretan teks rata kiri dengan garis bawah selebar halaman */
-  .tabs,[data-theme="dark"] .tabs{display:flex;width:100%;gap:30px;padding:0;margin-bottom:16px;background:none;border:0;border-bottom:1px solid var(--line);border-radius:0;box-shadow:none;overflow-x:auto}
-  .tabs>.tab,.tabs>button.tab{flex:0 0 auto;padding:10px 0 11px;margin-bottom:-1px;border:0;border-bottom:2px solid transparent;border-radius:0;background:none;box-shadow:none;font-size:14.5px;font-weight:500;color:var(--text-2)}
-  .tabs>.tab:hover{background:none;color:var(--head)}
-  .tabs>.tab.on,.tabs>button.tab.on,[data-theme="dark"] .tabs>.tab.on{background:none;box-shadow:none;color:var(--head);font-weight:600;border-bottom:2px solid var(--primary)}
-  .tabs>.tab svg{display:none}
-  @media (max-width:600px){.tabs{gap:20px}.tabs>.tab,.tabs>button.tab{font-size:14px;padding:9px 0 10px}}
+  /* menu di dalam halaman: gaya segmen tetap, latar abunya memanjang selebar halaman; menu rata kiri seukuran isinya */
+  .tabs{display:flex;width:100%}
+  .tabs>.tab,.tabs>button.tab{flex:0 0 auto}
   /* tombol mata di kolom password */
   .pw-wrap{position:relative;display:block}
   .pw-wrap>input{padding-right:42px!important}
