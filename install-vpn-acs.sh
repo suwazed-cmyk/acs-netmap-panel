@@ -211,7 +211,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.9.2";
+const VERSION = "2.9.3";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -6389,7 +6389,8 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .kpi small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
   .grid2{display:grid;grid-template-columns:1.35fr 1fr;gap:16px;align-items:start}
   .grid2 .card+.card{margin-top:0}
-  .stack>.card+.card{margin-top:16px}
+  .stack{display:flex;flex-direction:column;gap:24px}
+  .stack>*{margin:0!important}
 
   /* Status */
   .dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none;display:inline-block}
@@ -6527,7 +6528,6 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .vh-r .zt-bar{margin-top:5px}.vh-r small{display:block;font-size:12px;color:var(--muted);margin-top:3px}
   .vh-f{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px}
   #dashHealth:empty{display:none}
-  .stack>#dashHealth,.stack>#dashHealth+.card{margin-top:16px}
   .sec-steps{list-style:none;padding:0;display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:6px 0 10px;counter-reset:st}
   .sec-steps li{border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 12px;counter-increment:st;display:grid;gap:2px}
   .sec-steps li b{font-size:13px}.sec-steps li b::before{content:counter(st) ". ";color:var(--muted)}
@@ -6920,7 +6920,7 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .modal.lg .mb{max-height:calc(100vh - 230px);overflow:auto}
   .modal.lg .mf{border-top:1px solid var(--line)}
   .step.skip .sres{color:var(--muted)}
-  .grid-dash{display:grid;grid-template-columns:minmax(0,1.75fr) minmax(300px,1fr);gap:16px;align-items:start}
+  .grid-dash{display:grid;grid-template-columns:minmax(0,1.75fr) minmax(300px,1fr);gap:24px;align-items:start}
   .modal .steps{padding:4px 22px 8px}
   .modal .prog{margin:0}
   .tst-top{padding:0 22px 14px;color:var(--muted);font-size:13px}
@@ -7029,10 +7029,21 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .menu-list button{border-radius:var(--r)}
   .main{padding:24px;max-width:none;margin:0}
   #topWarn{max-width:none;margin:0;padding:24px 24px 0}
-  .pbar{display:flex;align-items:center;justify-content:space-between;gap:10px 16px;flex-wrap:wrap;margin:0 0 6px}
-  .pbar h1{font-size:18px;font-weight:600;color:var(--head)}
-  .main:has(.dh) .pbar h1{display:none}
-  .main:has(.dh) .pbar{justify-content:flex-end}
+  .pbar{display:flex;align-items:center;justify-content:space-between;gap:10px 16px;flex-wrap:wrap;margin:0 0 18px;min-height:40px}
+  .pbar .crumb{font-size:15px;gap:8px}
+  .pbar .crumb>a:first-child{width:34px;height:34px;border-radius:var(--r);background:var(--surface);box-shadow:var(--shadow);display:grid;place-items:center;color:var(--primary)}
+  .pbar .crumb>a:first-child svg{width:17px;height:17px;color:var(--primary)}
+  .pbar .crumb b{font-size:18px;font-weight:600;color:var(--head)}
+  .pacts{display:flex;gap:8px;align-items:center}
+  .pacts:empty{display:none}
+  /* Dashboard: tab Uptime router / Perlu perhatian */
+  .dtabs{display:flex;gap:4px;align-self:stretch;margin:-16px 0 -16px -6px}
+  .dtabs button{display:flex;align-items:center;gap:8px;border:0;background:none;padding:0 14px;font-size:15px;font-weight:600;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px}
+  .dtabs button:hover{color:var(--head)}
+  .dtabs button.on{color:var(--primary);border-bottom-color:var(--primary)}
+  .dtabs .n{min-width:21px;height:21px;padding:0 6px;border-radius:11px;font-size:12px;font-weight:700;display:inline-grid;place-items:center;background:var(--bad);color:#fff}
+  .dtabs .n.warn{background:var(--warn)}
+  .dtabs .n.info{background:var(--primary)}
   .dh h1{font-size:20px;font-weight:600}
   .crumb{font-size:14px;color:var(--text-2);gap:6px}
   .crumb a{color:var(--text-2);display:inline-flex}.crumb a:hover{color:var(--primary)}
@@ -7065,8 +7076,9 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
     .tsearch input{padding-left:32px!important}.tsearch>span{left:10px}
     .user-btn .who,.user-btn>span:last-child{display:none}
     .main{padding:14px 12px}#topWarn{padding:14px 12px 0}
-    .pbar .crumb{display:none}.pbar h1{font-size:17px}
-    .kpis,.grid2{gap:12px}.kpis{margin-bottom:12px}.card+.card{margin-top:12px}
+    .pbar .crumb>a:first-child{width:30px;height:30px}.pbar .crumb b{font-size:16px}
+    .dtabs button{padding:0 9px;font-size:14px;white-space:nowrap}.dtabs~.muted{display:none}
+    .kpis,.grid2{gap:12px}.kpis{margin-bottom:12px}.card+.card{margin-top:12px}.stack,.grid-dash{gap:12px}
   }
   /* kontras teks lebih tinggi */
   body{color:var(--text)}
@@ -7132,7 +7144,7 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
       </div>
     </header>
     <div id="topWarn"></div>
-    <main class="main"><div class="pbar"><h1 id="pTitle"></h1><nav class="crumb" id="crumb" aria-label="Breadcrumb"></nav></div><div id="view"></div></main>
+    <main class="main"><div class="pbar"><nav class="crumb" id="crumb" aria-label="Breadcrumb"></nav><div class="pacts" id="pActs"></div></div><div id="view"></div></main>
   </div>
 </div>
 
@@ -7503,7 +7515,7 @@ function route() {
 }
 function crumb(items) {
   if (items[0][0] !== "Dashboard") items = [["Dashboard", "#/"]].concat(items);
-  $("#pTitle").textContent = items[items.length - 1][0];
+  const pa = $("#pActs"); if (pa) pa.innerHTML = "";
   $("#crumb").innerHTML = `<a href="#/" aria-label="Dashboard">${ic("home")}</a>` + items.slice(1).map((x, i, a) => ic("chev") + (i < a.length - 1 ? `<a href="${x[1]}">${esc(x[0])}</a>` : `<b>${esc(x[0])}</b>`)).join("") + (items.length === 1 ? ic("chev") + `<b>Dashboard</b>` : "");
 }
 window.addEventListener("hashchange", route);
@@ -7539,6 +7551,7 @@ function issues() {
   else if (pend.length > 1) list.push({ k: "info", t: `${pend.length} router menunggu pemasangan`, d: pend.map((x) => x.name).slice(0, 4).join(", ") + (pend.length > 4 ? ` dan ${pend.length - 4} lainnya` : ""), go: "#/router/menunggu" });
   return list;
 }
+let DASH_TAB = "uptime"; // tab yang terbuka di kartu kiri Dashboard
 function viewDashboard(v) {
   crumb([["Dashboard"]]);
   const S = STATE.sites, inst = S.filter((x) => x.state !== "pending"), on = S.filter((x) => x.state === "up").length;
@@ -7546,9 +7559,10 @@ function viewDashboard(v) {
   const u7 = inst.map((x) => x.uptime && x.uptime.d7).filter((x) => x != null);
   const avg = u7.length ? u7.reduce((a, b) => a + b, 0) / u7.length : null;
   const iss = issues();
+  const issK = iss.some((x) => (x.k || "warn") === "bad") ? "" : iss.some((x) => (x.k || "warn") === "warn") ? "warn" : "info";
+  if (DASH_TAB === "issues" && !iss.length) DASH_TAB = "uptime";
+  $("#pActs").innerHTML = `<button class="btn pri" data-act="add">${ic("plus")}Tambah router</button>`;
   v.innerHTML = `
-    <div class="ph"><div><h1>Dashboard</h1><p>Ringkasan koneksi VPN dan uptime setiap router.</p></div>
-      <div class="acts"><button class="btn pri" data-act="add">${ic("plus")}Tambah router</button></div></div>
     <div class="kpis">
       <div class="kpi"><span>Total router</span><b>${S.length}</b><small>${pend ? `${pend} menunggu pemasangan` : "MikroTik terdaftar"}</small></div>
       <div class="kpi"><span><i class="dot ok"></i>Tersambung</span><b>${on}</b><small>${inst.length ? Math.round((on / inst.length) * 100) : 0}% dari router terpasang</small></div>
@@ -7557,23 +7571,33 @@ function viewDashboard(v) {
     </div>
     <div class="grid-dash">
       <div class="card">
-        <div class="ch"><h2>Uptime router</h2><span class="muted" style="font-size:12.5px">Klik baris untuk riwayat lengkap</span></div>
-        ${S.length ? uptimeTable(S) : `<div class="empty"><h3>Belum ada router</h3><p>Tambahkan MikroTik pertama untuk mulai.</p><button class="btn pri" style="margin-top:12px" data-act="add">${ic("plus")}Tambah router</button></div>`}
-      </div>
-      <div class="stack">
-        ${dashApps()}
-        <div class="card">
-          <div class="ch"><h2>Perlu perhatian</h2>${iss.length ? `<span class="muted">${iss.length}</span>` : ""}</div>
-          ${iss.length ? `<ul class="rows">${iss.slice(0, 6).map((x) => `<li><a class="row ${x.k || "warn"}" href="${x.go}"><span class="ic">${ic(x.k === "info" ? "clock" : "alert")}</span><span class="grow"><span class="nm">${esc(x.t)}</span><span class="sb" style="display:block">${esc(x.d)}</span></span><span class="chev">${ic("chev")}</span></a></li>`).join("")}</ul>`
+        <div class="ch"><div class="dtabs" role="tablist">
+          <button type="button" role="tab" data-dtab="uptime" class="${DASH_TAB === "uptime" ? "on" : ""}" aria-selected="${DASH_TAB === "uptime"}">Uptime router</button>
+          <button type="button" role="tab" data-dtab="issues" class="${DASH_TAB === "issues" ? "on" : ""}" aria-selected="${DASH_TAB === "issues"}">Perlu perhatian${iss.length ? `<span class="n ${issK}">${iss.length}</span>` : ""}</button>
+        </div>${DASH_TAB === "uptime" && S.length ? `<span class="muted hide-sm" style="font-size:12.5px">Klik baris untuk riwayat lengkap</span>` : ""}</div>
+        <div data-dpane="uptime"${DASH_TAB === "uptime" ? "" : " hidden"}>
+          ${S.length ? uptimeTable(S) : `<div class="empty"><h3>Belum ada router</h3><p>Tambahkan MikroTik pertama untuk mulai.</p><button class="btn pri" style="margin-top:12px" data-act="add">${ic("plus")}Tambah router</button></div>`}
+        </div>
+        <div data-dpane="issues"${DASH_TAB === "issues" ? "" : " hidden"}>
+          ${iss.length ? `<ul class="rows">${iss.map((x) => `<li><a class="row ${x.k || "warn"}" href="${x.go}"><span class="ic">${ic(x.k === "info" ? "clock" : "alert")}</span><span class="grow"><span class="nm">${esc(x.t)}</span><span class="sb" style="display:block">${esc(x.d)}</span></span><span class="chev">${ic("chev")}</span></a></li>`).join("")}</ul>`
             : `<div class="empty"><div class="big">${ic("check")}</div><h3>Semua normal</h3><p>Semua router tersambung dan pengaturan lengkap.</p></div>`}
         </div>
+      </div>
+      <div class="stack">
         <div id="dashHealth"></div>
+        ${dashApps()}
         <div class="card">
           <div class="ch"><h2>VPS</h2><a href="#/pengaturan">Pengaturan</a></div>
           ${serverKv()}
         </div>
       </div>
     </div>`;
+  v.querySelectorAll("[data-dtab]").forEach((b) => (b.onclick = () => {
+    DASH_TAB = b.dataset.dtab;
+    v.querySelectorAll("[data-dtab]").forEach((x) => { x.classList.toggle("on", x === b); x.setAttribute("aria-selected", x === b); });
+    v.querySelectorAll("[data-dpane]").forEach((p) => (p.hidden = p.dataset.dpane !== DASH_TAB));
+    const hint = b.closest(".ch").querySelector(".muted"); if (hint) hint.hidden = DASH_TAB !== "uptime";
+  }));
   dashHealth();
 }
 // Add-on yang terpasang, dibuka langsung dari Dashboard
