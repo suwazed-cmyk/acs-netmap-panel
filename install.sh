@@ -485,8 +485,11 @@ EOF
 
 st_patch() {
   export PATH="/usr/local/bin:$PATH" VPNACS_NO_SUMMARY=1
-  bash "$(repo_dir)/genieacs-virtualip.sh" install
-  grep -q '/opt/genieacs-app/' /etc/systemd/system/genieacs-cwmp.service
+  # Keberhasilan dinilai dari hasilnya (service memakai versi patch dan berjalan), bukan kode keluar skrip
+  bash "$(repo_dir)/genieacs-virtualip.sh" install || echo "genieacs-virtualip.sh keluar dengan kode $?"
+  grep -q '/opt/genieacs-app/' /etc/systemd/system/genieacs-cwmp.service || { echo "Service GenieACS belum memakai versi patch"; return 1; }
+  grep -q 'GENIEACS_CR_USE_REMOTE_ADDRESS' /opt/genieacs-app/bin/genieacs-cwmp || { echo "Hasil build tidak berisi patch"; return 1; }
+  local s; for s in cwmp nbi fs ui; do systemctl is-active --quiet "genieacs-$s" || { echo "genieacs-$s tidak berjalan"; return 1; }; done
   wait_port 7557 60
 }
 

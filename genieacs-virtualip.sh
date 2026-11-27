@@ -268,7 +268,8 @@ PYEOF
   echo "Cek: journalctl -u genieacs-cwmp -n 20 | grep version  (harus ada '+' di versi)"
   local summary
   summary="$SCRIPT_DIR/ringkasan.sh"
-  [ -f "$summary" ] && [ -z "${VPNACS_NO_SUMMARY:-}" ] && bash "$summary"
+  if [ -f "$summary" ] && [ -z "${VPNACS_NO_SUMMARY:-}" ]; then bash "$summary" || true; fi
+  return 0
 }
 
 case "${1:-install}" in
