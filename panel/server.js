@@ -52,7 +52,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.21.0";
+const VERSION = "2.22.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -2551,6 +2551,42 @@ function cfErr(r) {
 function cfPermErr(r) {
   return r.status === 403 || (r.errors || []).some((x) => [10000, 9109, 1000].includes(x.code));
 }
+// IP publik asli VPS (dari luar), disimpan sementara 10 menit
+let REAL_IP = { ip: "", at: 0 };
+async function realPublicIp(force) {
+  if (!force && REAL_IP.ip && Date.now() - REAL_IP.at < 10 * 60e3) return REAL_IP.ip;
+  const r = await httpJson("GET", IP_TRACE, null, { Accept: "text/plain" }, 10000);
+  const m = (r.text || "").match(/^ip=(\d+\.\d+\.\d+\.\d+)$/m);
+  const ip = m ? m[1] : detectPublicIp();
+  if (ip) REAL_IP = { ip, at: Date.now() };
+  return ip || "";
+}
+// Domain alamat VPS (custom atau Cloudflare) harus mengarah ke IP VPS ini
+let VPS_DOM = null; // { domain, ok, ips, ip, at, error }
+async function vpsDomainCheck(domain) {
+  const ip = await realPublicIp();
+  const r = await dohLookup(domain);
+  const out = { domain, ip, ips: r.ips || [], at: Date.now(), ok: false, error: "" };
+  if (!r.ok) out.error = "DNS domain tidak bisa dibaca" + (r.error ? ` (${r.error})` : "");
+  else if (!out.ips.length) out.error = `${domain} belum punya record A`;
+  else if (!ip) out.error = "IP publik VPS tidak terdeteksi";
+  else if (!out.ips.includes(ip)) out.error = `${domain} mengarah ke ${out.ips.join(", ")}, bukan ke IP VPS ini (${ip})`;
+  else out.ok = true;
+  return out;
+}
+async function vpsDomainTick() {
+  try {
+    const d = loadData();
+    const v = String((d.settings && d.settings.publicIp) || "");
+    if (!v || ipToInt(v) !== null) { VPS_DOM = null; return; }
+    const prev = VPS_DOM;
+    VPS_DOM = await vpsDomainCheck(v);
+    if (prev && prev.ok && !VPS_DOM.ok) logActivity(null, "Domain VPS tidak mengarah ke VPS", VPS_DOM.error);
+    if (!prev || prev.ok !== VPS_DOM.ok) sseSend("data");
+  } catch (e) {
+    // abaikan
+  }
+}
 async function dohLookup(domain) {
   const r = await httpJson("GET", `${DOH_URL}?name=${encodeURIComponent(domain)}&type=A`, null, { Accept: "application/dns-json" }, 10000);
   const ans = ((r.json && r.json.Answer) || []).filter((a) => a.type === 1).map((a) => a.data);
@@ -2902,6 +2938,18 @@ function sourceDir() {
     return "";
   }
 }
+// CHANGELOG.md: "## 2.22.0" lalu poin "- ..." (garis besar per versi)
+function parseChangelog(text) {
+  const out = [];
+  let cur = null;
+  for (const line of String(text || "").split("\n")) {
+    const h = line.match(/^##\s*v?([\d.]+)/);
+    if (h) { cur = { v: h[1], items: [] }; out.push(cur); continue; }
+    const b = line.match(/^\s*[-*]\s+(.+)/);
+    if (b && cur && cur.items.length < 6) cur.items.push(b[1].trim().slice(0, 140));
+  }
+  return out;
+}
 async function checkPanelUpdate() {
   const out = { current: VERSION, latest: "", available: false, error: "", notes: "", date: "" };
   // raw.githubusercontent.com menyimpan salinan /main sampai ±5 menit. Ambil dulu commit terbaru lewat API,
@@ -2924,6 +2972,10 @@ async function checkPanelUpdate() {
   out.latest = m[1];
   out.available = verCmp(out.latest, VERSION) > 0;
   if (out.available) {
+    const cl = await httpJson("GET", rawUrl.replace(/(panel\/)?server\.js$/, "CHANGELOG.md"), null, { Accept: "text/plain" }, 15000);
+    if (cl.status === 200) out.changes = parseChangelog(cl.text).filter((x) => verCmp(x.v, VERSION) > 0 && verCmp(x.v, out.latest) <= 0).slice(0, 10);
+  }
+  if (out.available) {
     const c = commit ? { json: commit } : await httpJson("GET", `https://api.github.com/repos/${UPDATE_REPO}/commits/main`, null, {}, 15000);
     if (c.json && c.json.commit) {
       out.notes = String(c.json.commit.message || "").split("\n")[0].slice(0, 160);
@@ -2944,7 +2996,11 @@ async function checkAddonUpdate(id) {
     const cur = (await run("git", ["-C", dir, "log", "-1", "--format=%h %cs"])).out.trim();
     if (!behind) return { available: false, current: cur };
     const up = (await run("git", ["-C", dir, "log", "-1", "--format=%h %cs|%s", "@{u}"])).out.trim().split("|");
-    return { available: true, behind, current: cur, latest: up[0] || "", notes: (up[1] || "").slice(0, 160) };
+    // Ringkasan dari CHANGELOG.md: versi yang ada di GitHub tetapi belum ada di versi terpasang
+    const rem = parseChangelog((await run("git", ["-C", dir, "show", "@{u}:CHANGELOG.md"])).out);
+    const loc = new Set(parseChangelog((await run("git", ["-C", dir, "show", "HEAD:CHANGELOG.md"])).out).map((x) => x.v));
+    const changes = rem.filter((x) => !loc.has(x.v)).slice(0, 10);
+    return { available: true, behind, current: cur, latest: up[0] || "", notes: (up[1] || "").slice(0, 160), changes };
   }
   // Add-on sistem: versi paket terpasang vs versi yang tersedia di apt
   const pol = await run("apt-cache", ["policy", id === "wireguard" ? "wireguard-tools" : "zerotier-one"]);
@@ -4205,7 +4261,7 @@ async function addonList(d) {
       x.routers = d.sites.filter(id === "wireguard" ? isWg : isZt).length;
     }
     const up = UPDATES && UPDATES.addons && UPDATES.addons[id];
-    if (st.installed && up && up.available) x.update = { latest: up.latest || "", behind: up.behind || 0, notes: up.notes || "" };
+    if (st.installed && up && up.available) x.update = { latest: up.latest || "", behind: up.behind || 0, notes: up.notes || "", changes: up.changes || [] };
     out.push(x);
   }
   return out;
@@ -5301,6 +5357,31 @@ async function handleApi(req, res, url) {
 
   if (!authed(req)) return send(res, 401, { error: "Silakan login dulu." });
 
+  // --- Alamat VPS: IP otomatis, atau domain custom yang sudah mengarah ke VPS ini ---
+  if (p === "/api/vps-address" && method === "POST") {
+    const d = loadData();
+    d.settings = d.settings || {};
+    if (d.settings.cloudflare) return send(res, 400, { error: "Alamat VPS sedang diatur lewat Domain & HTTPS (Cloudflare)." });
+    const before = d.settings.publicIp || "";
+    if (body.detect) {
+      if (before && ipToInt(before) === null) return send(res, 400, { error: "Alamat VPS memakai domain." });
+      const ip = await realPublicIp(true);
+      if (!ip) return send(res, 400, { error: "IP publik VPS tidak terdeteksi. Pastikan VPS terhubung ke internet." });
+      d.settings.publicIp = ip;
+      saveData(d);
+      if (ip !== before) logActivity(req, "Alamat VPS diubah", `${before || "(otomatis)"} → ${ip}`);
+      return send(res, 200, { ok: true, publicIp: ip, changed: ip !== before });
+    }
+    const dom = String(body.domain || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/[/:].*$/, "");
+    if (!isHostname(dom)) return send(res, 400, { error: "Domain tidak valid. Contoh: vpn.domainanda.com" });
+    const c = await vpsDomainCheck(dom);
+    if (!c.ok) return send(res, 400, { error: `Gagal: ${c.error}. Ubah record A domain ke ${c.ip || "IP VPS ini"}, tunggu beberapa menit, lalu coba lagi.` });
+    d.settings.publicIp = dom;
+    saveData(d);
+    VPS_DOM = c;
+    logActivity(req, "Alamat VPS diubah", `${before || "(otomatis)"} → ${dom}`);
+    return send(res, 200, { ok: true, publicIp: dom, ip: c.ip });
+  }
   // --- Pintu web ONT ---
   if (p === "/api/ontgw" && method === "GET") {
     const d = loadData();
@@ -5383,6 +5464,8 @@ async function handleApi(req, res, url) {
     return send(res, 200, {
       settings: {
         publicIp: st.publicIp,
+        vpsRealIp: REAL_IP.ip,
+        vpsDomain: VPS_DOM && VPS_DOM.domain === st.publicIp ? { ok: VPS_DOM.ok, error: VPS_DOM.error, ips: VPS_DOM.ips } : null,
         pskSet: !!st.psk,
         psk: st.psk,
         useIpsec: st.useIpsec,
@@ -6390,8 +6473,7 @@ async function handleApi(req, res, url) {
     const logs = [];
     if (body.publicIp !== undefined) {
       const v = String(body.publicIp).trim().toLowerCase();
-      if (v && ipToInt(v) === null && !isHostname(v))
-        return send(res, 400, { error: "Alamat VPS tidak valid. Isi IP publik (103.20.30.40) atau domain (vpn.domain.com)." });
+      if (v !== (d.settings.publicIp || "")) return send(res, 400, { error: "Alamat VPS hanya bisa diubah lewat Pengaturan → Umum → Pakai domain." });
       if (v !== (d.settings.publicIp || "")) logs.push(["Alamat VPS diubah", `${d.settings.publicIp || "(otomatis)"} → ${v || "(otomatis)"}`]);
       d.settings.publicIp = v;
     }
@@ -6596,6 +6678,8 @@ if (process.argv[2] === "--set-password") {
   }, 60 * 1000);
   setInterval(certReloadCheck, 3600 * 1000);
   setInterval(() => sseSend("health"), 15 * 1000);
+  setTimeout(() => { realPublicIp().then(vpsDomainTick).catch(() => {}); }, 3 * 1000);
+  setInterval(vpsDomainTick, 30 * 60 * 1000);
   setTimeout(healthTick, 90 * 1000);
   setInterval(healthTick, 60 * 1000);
   setTimeout(() => checkUpdates().catch(() => {}), 2 * 60 * 1000);

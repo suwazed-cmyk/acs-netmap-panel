@@ -208,7 +208,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.21.0";
+const VERSION = "2.22.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -2707,6 +2707,42 @@ function cfErr(r) {
 function cfPermErr(r) {
   return r.status === 403 || (r.errors || []).some((x) => [10000, 9109, 1000].includes(x.code));
 }
+// IP publik asli VPS (dari luar), disimpan sementara 10 menit
+let REAL_IP = { ip: "", at: 0 };
+async function realPublicIp(force) {
+  if (!force && REAL_IP.ip && Date.now() - REAL_IP.at < 10 * 60e3) return REAL_IP.ip;
+  const r = await httpJson("GET", IP_TRACE, null, { Accept: "text/plain" }, 10000);
+  const m = (r.text || "").match(/^ip=(\d+\.\d+\.\d+\.\d+)$/m);
+  const ip = m ? m[1] : detectPublicIp();
+  if (ip) REAL_IP = { ip, at: Date.now() };
+  return ip || "";
+}
+// Domain alamat VPS (custom atau Cloudflare) harus mengarah ke IP VPS ini
+let VPS_DOM = null; // { domain, ok, ips, ip, at, error }
+async function vpsDomainCheck(domain) {
+  const ip = await realPublicIp();
+  const r = await dohLookup(domain);
+  const out = { domain, ip, ips: r.ips || [], at: Date.now(), ok: false, error: "" };
+  if (!r.ok) out.error = "DNS domain tidak bisa dibaca" + (r.error ? ` (${r.error})` : "");
+  else if (!out.ips.length) out.error = `${domain} belum punya record A`;
+  else if (!ip) out.error = "IP publik VPS tidak terdeteksi";
+  else if (!out.ips.includes(ip)) out.error = `${domain} mengarah ke ${out.ips.join(", ")}, bukan ke IP VPS ini (${ip})`;
+  else out.ok = true;
+  return out;
+}
+async function vpsDomainTick() {
+  try {
+    const d = loadData();
+    const v = String((d.settings && d.settings.publicIp) || "");
+    if (!v || ipToInt(v) !== null) { VPS_DOM = null; return; }
+    const prev = VPS_DOM;
+    VPS_DOM = await vpsDomainCheck(v);
+    if (prev && prev.ok && !VPS_DOM.ok) logActivity(null, "Domain VPS tidak mengarah ke VPS", VPS_DOM.error);
+    if (!prev || prev.ok !== VPS_DOM.ok) sseSend("data");
+  } catch (e) {
+    // abaikan
+  }
+}
 async function dohLookup(domain) {
   const r = await httpJson("GET", `${DOH_URL}?name=${encodeURIComponent(domain)}&type=A`, null, { Accept: "application/dns-json" }, 10000);
   const ans = ((r.json && r.json.Answer) || []).filter((a) => a.type === 1).map((a) => a.data);
@@ -3058,6 +3094,18 @@ function sourceDir() {
     return "";
   }
 }
+// CHANGELOG.md: "## 2.22.0" lalu poin "- ..." (garis besar per versi)
+function parseChangelog(text) {
+  const out = [];
+  let cur = null;
+  for (const line of String(text || "").split("\n")) {
+    const h = line.match(/^##\s*v?([\d.]+)/);
+    if (h) { cur = { v: h[1], items: [] }; out.push(cur); continue; }
+    const b = line.match(/^\s*[-*]\s+(.+)/);
+    if (b && cur && cur.items.length < 6) cur.items.push(b[1].trim().slice(0, 140));
+  }
+  return out;
+}
 async function checkPanelUpdate() {
   const out = { current: VERSION, latest: "", available: false, error: "", notes: "", date: "" };
   // raw.githubusercontent.com menyimpan salinan /main sampai ±5 menit. Ambil dulu commit terbaru lewat API,
@@ -3080,6 +3128,10 @@ async function checkPanelUpdate() {
   out.latest = m[1];
   out.available = verCmp(out.latest, VERSION) > 0;
   if (out.available) {
+    const cl = await httpJson("GET", rawUrl.replace(/(panel\/)?server\.js$/, "CHANGELOG.md"), null, { Accept: "text/plain" }, 15000);
+    if (cl.status === 200) out.changes = parseChangelog(cl.text).filter((x) => verCmp(x.v, VERSION) > 0 && verCmp(x.v, out.latest) <= 0).slice(0, 10);
+  }
+  if (out.available) {
     const c = commit ? { json: commit } : await httpJson("GET", `https://api.github.com/repos/${UPDATE_REPO}/commits/main`, null, {}, 15000);
     if (c.json && c.json.commit) {
       out.notes = String(c.json.commit.message || "").split("\n")[0].slice(0, 160);
@@ -3100,7 +3152,11 @@ async function checkAddonUpdate(id) {
     const cur = (await run("git", ["-C", dir, "log", "-1", "--format=%h %cs"])).out.trim();
     if (!behind) return { available: false, current: cur };
     const up = (await run("git", ["-C", dir, "log", "-1", "--format=%h %cs|%s", "@{u}"])).out.trim().split("|");
-    return { available: true, behind, current: cur, latest: up[0] || "", notes: (up[1] || "").slice(0, 160) };
+    // Ringkasan dari CHANGELOG.md: versi yang ada di GitHub tetapi belum ada di versi terpasang
+    const rem = parseChangelog((await run("git", ["-C", dir, "show", "@{u}:CHANGELOG.md"])).out);
+    const loc = new Set(parseChangelog((await run("git", ["-C", dir, "show", "HEAD:CHANGELOG.md"])).out).map((x) => x.v));
+    const changes = rem.filter((x) => !loc.has(x.v)).slice(0, 10);
+    return { available: true, behind, current: cur, latest: up[0] || "", notes: (up[1] || "").slice(0, 160), changes };
   }
   // Add-on sistem: versi paket terpasang vs versi yang tersedia di apt
   const pol = await run("apt-cache", ["policy", id === "wireguard" ? "wireguard-tools" : "zerotier-one"]);
@@ -4361,7 +4417,7 @@ async function addonList(d) {
       x.routers = d.sites.filter(id === "wireguard" ? isWg : isZt).length;
     }
     const up = UPDATES && UPDATES.addons && UPDATES.addons[id];
-    if (st.installed && up && up.available) x.update = { latest: up.latest || "", behind: up.behind || 0, notes: up.notes || "" };
+    if (st.installed && up && up.available) x.update = { latest: up.latest || "", behind: up.behind || 0, notes: up.notes || "", changes: up.changes || [] };
     out.push(x);
   }
   return out;
@@ -5457,6 +5513,31 @@ async function handleApi(req, res, url) {
 
   if (!authed(req)) return send(res, 401, { error: "Silakan login dulu." });
 
+  // --- Alamat VPS: IP otomatis, atau domain custom yang sudah mengarah ke VPS ini ---
+  if (p === "/api/vps-address" && method === "POST") {
+    const d = loadData();
+    d.settings = d.settings || {};
+    if (d.settings.cloudflare) return send(res, 400, { error: "Alamat VPS sedang diatur lewat Domain & HTTPS (Cloudflare)." });
+    const before = d.settings.publicIp || "";
+    if (body.detect) {
+      if (before && ipToInt(before) === null) return send(res, 400, { error: "Alamat VPS memakai domain." });
+      const ip = await realPublicIp(true);
+      if (!ip) return send(res, 400, { error: "IP publik VPS tidak terdeteksi. Pastikan VPS terhubung ke internet." });
+      d.settings.publicIp = ip;
+      saveData(d);
+      if (ip !== before) logActivity(req, "Alamat VPS diubah", `${before || "(otomatis)"} → ${ip}`);
+      return send(res, 200, { ok: true, publicIp: ip, changed: ip !== before });
+    }
+    const dom = String(body.domain || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/[/:].*$/, "");
+    if (!isHostname(dom)) return send(res, 400, { error: "Domain tidak valid. Contoh: vpn.domainanda.com" });
+    const c = await vpsDomainCheck(dom);
+    if (!c.ok) return send(res, 400, { error: `Gagal: ${c.error}. Ubah record A domain ke ${c.ip || "IP VPS ini"}, tunggu beberapa menit, lalu coba lagi.` });
+    d.settings.publicIp = dom;
+    saveData(d);
+    VPS_DOM = c;
+    logActivity(req, "Alamat VPS diubah", `${before || "(otomatis)"} → ${dom}`);
+    return send(res, 200, { ok: true, publicIp: dom, ip: c.ip });
+  }
   // --- Pintu web ONT ---
   if (p === "/api/ontgw" && method === "GET") {
     const d = loadData();
@@ -5539,6 +5620,8 @@ async function handleApi(req, res, url) {
     return send(res, 200, {
       settings: {
         publicIp: st.publicIp,
+        vpsRealIp: REAL_IP.ip,
+        vpsDomain: VPS_DOM && VPS_DOM.domain === st.publicIp ? { ok: VPS_DOM.ok, error: VPS_DOM.error, ips: VPS_DOM.ips } : null,
         pskSet: !!st.psk,
         psk: st.psk,
         useIpsec: st.useIpsec,
@@ -6546,8 +6629,7 @@ async function handleApi(req, res, url) {
     const logs = [];
     if (body.publicIp !== undefined) {
       const v = String(body.publicIp).trim().toLowerCase();
-      if (v && ipToInt(v) === null && !isHostname(v))
-        return send(res, 400, { error: "Alamat VPS tidak valid. Isi IP publik (103.20.30.40) atau domain (vpn.domain.com)." });
+      if (v !== (d.settings.publicIp || "")) return send(res, 400, { error: "Alamat VPS hanya bisa diubah lewat Pengaturan → Umum → Pakai domain." });
       if (v !== (d.settings.publicIp || "")) logs.push(["Alamat VPS diubah", `${d.settings.publicIp || "(otomatis)"} → ${v || "(otomatis)"}`]);
       d.settings.publicIp = v;
     }
@@ -6752,6 +6834,8 @@ if (process.argv[2] === "--set-password") {
   }, 60 * 1000);
   setInterval(certReloadCheck, 3600 * 1000);
   setInterval(() => sseSend("health"), 15 * 1000);
+  setTimeout(() => { realPublicIp().then(vpsDomainTick).catch(() => {}); }, 3 * 1000);
+  setInterval(vpsDomainTick, 30 * 60 * 1000);
   setTimeout(healthTick, 90 * 1000);
   setInterval(healthTick, 60 * 1000);
   setTimeout(() => checkUpdates().catch(() => {}), 2 * 60 * 1000);
@@ -7927,6 +8011,16 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .tg-ev .check{margin:0}
   .tg-h{font-size:12.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:18px 0 8px}
   @media (max-width:700px){.tg-ev{grid-template-columns:1fr}}
+  .vps-addr{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;background:var(--subtle);border:1px solid var(--line)}
+  .vps-addr b{flex:1;font-size:14.5px;color:var(--head);word-break:break-all}
+  .vps-lock{display:flex;color:var(--muted)}.vps-lock svg{width:16px;height:16px}
+  .vps-addr .btn.icon{width:30px;height:30px;min-height:30px}
+  .vps-dom{display:flex;gap:8px}.vps-dom input{flex:1;min-width:0}
+  /* ringkasan isi pembaruan */
+  .chg{margin:4px 0 0}
+  .chg-v{font-size:12.5px;font-weight:700;color:var(--muted);margin:10px 0 4px}
+  .chg ul{margin:0;padding-left:18px;font-size:13.5px;line-height:1.55;color:var(--text)}
+  .chg-box{border:1px solid var(--line);border-radius:10px;padding:2px 14px 10px;margin:12px 0 4px;max-height:260px;overflow:auto}
   /* pita "versi baru terpasang" */
   .upd-bar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:12px;padding:9px 16px;background:var(--primary);color:#fff;font-size:13.5px;font-weight:500}
   .upd-bar svg{width:17px;height:17px;flex:none}
@@ -8474,6 +8568,7 @@ window.addEventListener("hashchange", route);
 function issues() {
   const s = STATE.settings, list = [];
   if (!s.publicIp) list.push({ t: "Alamat VPS belum diisi", d: "Script MikroTik membutuhkan alamat VPS.", go: "#/pengaturan" });
+  if (s.vpsDomain && !s.vpsDomain.ok) list.push({ t: "Domain VPS tidak mengarah ke VPS ini", d: s.vpsDomain.error || "", go: "#/pengaturan/umum" });
   if (s.genieCidr !== null && !genieOk(s.genieCidr)) list.push({ t: "Patch IP virtual GenieACS belum aktif", d: "Summon ke ONT akan gagal.", go: "#/genieacs" });
   const off = STATE.sites.filter((x) => x.state === "down");
   if (off.length === 1) list.push({ t: `${off[0].name} terputus`, d: off[0].downSince ? `Sejak ${fmtT(off[0].downSince, true)} (${fmtDur(Date.now() - off[0].downSince)}). Klik untuk tes koneksi.` : "Klik untuk tes koneksi.", go: `#/router/${off[0].id}/tes` });
@@ -9044,7 +9139,7 @@ function paintAddons() {
           </div></div>
       </div>
       <p class="ad-tg">${esc(a.tagline || a.desc)}</p>
-      ${a.update ? `<div class="ad-upd">${ic("dl")}<span>Pembaruan tersedia${a.update.latest ? ` · <span class="mono">${esc(a.update.latest.split(" ")[0])}</span>` : ""}${a.update.notes ? ` — ${esc(a.update.notes)}` : ""}</span></div>` : ""}
+      ${a.update ? `<div class="ad-upd">${ic("dl")}<span>Pembaruan tersedia${a.update.changes && a.update.changes.length ? ` — ${esc(a.update.changes[0].items.join("; "))}` : a.update.notes ? ` — ${esc(a.update.notes.replace(/^v[\d.]+:\s*/, ""))}` : ""}</span></div>` : ""}
       <div class="ad-tf">${a.update ? `<button class="btn" data-ad="update" data-id="${esc(a.id)}">${ic("dl")}Perbarui</button>` : `<button class="btn" data-ad="detail" data-id="${esc(a.id)}">Detail</button>`}${adOpen(a)}</div>
     </div>`;
   };
@@ -9089,12 +9184,16 @@ function adAction(act, a, btn) {
       onOk: async () => { const purge = !!($("#adPurge") && $("#adPurge").checked); await api(`/api/addons/${a.id}/remove`, { method: "POST", body: { purge } }); openJob(); },
     });
   }
-  // install / update
-  (async () => {
-    if (btn) busyBtn(btn, true);
-    try { await api(`/api/addons/${a.id}/${act}`, { method: "POST", body: {} }); openJob(); }
-    catch (e) { if (btn) busyBtn(btn, false); toast(e.message); }
-  })();
+  // install / update: minta persetujuan dulu
+  const est = a.kind === "aplikasi" ? (act === "install" ? "1–3 menit" : "sekitar 1 menit") : "kurang dari 1 menit";
+  const U = a.update || {};
+  confirmDialog({
+    title: act === "install" ? `Pasang ${esc(a.name)}?` : `Perbarui ${esc(a.name)}?`, icon: "dl", ok: act === "install" ? "Pasang" : "Perbarui", wide: true,
+    text: act === "install"
+      ? `<p>${esc(a.tagline || a.desc || "")}</p><p class="muted">Perkiraan waktu ${est}. Panel dan router tetap berjalan selama proses.</p>`
+      : `${U.changes && U.changes.length ? `<p>Yang baru:</p>${chgHtml(U.changes, true)}` : U.notes ? `<p>${esc(U.notes)}</p>` : ""}<p class="muted">Perkiraan waktu ${est}.${a.kind === "aplikasi" ? ` ${esc(a.name)} berhenti sebentar saat diperbarui; datanya tetap aman.` : ""}</p>`,
+    onOk: async () => { await api(`/api/addons/${a.id}/${act}`, { method: "POST", body: {} }); closeModal(); openJob(); },
+  });
 }
 function adDetail(a) {
   const st = adState(a);
@@ -9201,6 +9300,12 @@ function openJob(after, opts = {}) {
     }
   };
   tick(); JOBPOLL = setInterval(tick, 1000);
+}
+// Ringkasan isi pembaruan dari CHANGELOG (per versi, garis besar)
+function chgHtml(list, box) {
+  if (!list || !list.length) return "";
+  const h = list.map((x) => `<div class="chg-v">v${esc(x.v)}</div><ul>${x.items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>`).join("");
+  return box ? `<div class="chg-box chg">${h}</div>` : `<div class="chg">${h}</div>`;
 }
 /* ---------- Pemberitahuan proses selesai ----------
    Muncul saat install/pembaruan/lepas add-on atau pembaruan panel selesai, juga bila
@@ -9619,13 +9724,22 @@ function setGeneral(b) {
         </form></div>
       </div>
       <div class="set-col">
-        <div class="card"><div class="ch"><h2>Alamat VPS</h2></div><form class="cb set-form" id="vpsForm">
-          <label for="sIp" style="margin-top:0">IP publik atau domain</label>
-          <input id="sIp" type="text" placeholder="contoh: 103.20.30.40 atau vpn.domain.com" value="${esc(s.publicIp || "")}">
-          ${s.cloudflare ? `<div class="help">Diatur lewat <a href="#/pengaturan/domain">Domain &amp; HTTPS</a>.</div>` : ""}
-          <div class="err" id="vpsErr"></div>
-          <div class="form-actions"><button class="btn pri" id="vpsSave">Simpan</button></div>
-        </form></div>
+        ${(() => {
+          const isDom = !!s.publicIp && !/^\d+\.\d+\.\d+\.\d+$/.test(s.publicIp);
+          const D = s.vpsDomain;
+          const pill = s.cloudflare ? `<span class="pill info">Cloudflare</span>` : isDom ? (D && !D.ok ? `<span class="pill bad">Tidak mengarah ke VPS</span>` : `<span class="pill ok">Domain</span>`) : `<span class="pill wait">IP otomatis</span>`;
+          return `<div class="card"><div class="ch"><h2>Alamat VPS</h2>${pill}</div><div class="cb set-form">
+          <div class="vps-addr"><span class="vps-lock">${ic("lock")}</span><b class="mono">${esc(s.publicIp || "—")}</b>${!s.cloudflare && !isDom ? `<button class="btn ghost icon sm" id="vpsDetect" type="button" title="Deteksi ulang IP publik" aria-label="Deteksi ulang IP publik">${ic("refresh")}</button>` : ""}</div>
+          ${isDom && D && !D.ok ? `<div class="note bad" style="margin:10px 0 0">${ic("alert")}<div><b>Domain tidak mengarah ke VPS ini</b>${esc(D.error || "")}</div></div>` : ""}
+          ${s.cloudflare ? `<div class="help">Diatur lewat <a href="#/pengaturan/domain">Domain &amp; HTTPS</a>.</div>` : `
+          <form id="vpsDomForm">
+            <label for="vDom">${isDom ? "Ganti domain" : "Pakai domain"}</label>
+            <div class="vps-dom"><input id="vDom" type="text" placeholder="contoh: vpn.domainanda.com" autocomplete="off"><button class="btn pri" id="vDomGo">Cek &amp; pakai</button></div>
+            <div class="help">Record A domain harus mengarah ke <b class="mono">${esc(s.vpsRealIp || "IP publik VPS ini")}</b>.</div>
+            <div class="err" id="vpsErr"></div>
+          </form>`}
+          </div></div>`;
+        })()}
         <div class="card"><div class="ch"><h2>Alamat panel</h2>${pill}</div><form class="cb set-form" id="portForm">
           ${P.enabled && P.active && url ? `<div class="set-url"><span>Panel dibuka di</span><a href="${esc(url)}" target="_blank" rel="noopener">${esc(url.replace(/^https?:\/\//, ""))}</a></div>` : ""}
           ${P.error ? `<div class="note bad" style="margin:0 0 10px">${ic("alert")}<div><b>Port tidak bisa dipakai</b>${esc(P.error)}. Panel tetap di port ${bp}.</div></div>` : ""}
@@ -9649,24 +9763,34 @@ function setGeneral(b) {
       else toast("Pengaturan disimpan");
     } catch (err) { $("#brandErr").textContent = err.message; busyBtn(btn, false); }
   };
-  $("#vpsForm").onsubmit = async (e) => {
+  const vf = $("#vpsDomForm");
+  if (vf) vf.onsubmit = async (e) => {
     e.preventDefault(); $("#vpsErr").textContent = "";
-    const btn = $("#vpsSave"); busyBtn(btn, true);
-    try { await api("/api/settings", { method: "PUT", body: { publicIp: $("#sIp").value } }); await load(); route(); toast("Alamat VPS disimpan"); }
+    const btn = $("#vDomGo"); busyBtn(btn, true);
+    try { const r = await api("/api/vps-address", { method: "POST", body: { domain: $("#vDom").value } }); await load(); route(); doneDialog("Domain dipakai", `<p><b>${esc(r.publicIp)}</b> mengarah ke VPS ini (${esc(r.ip)}). Script MikroTik baru memakai domain ini.</p>`); }
     catch (err) { $("#vpsErr").textContent = err.message; busyBtn(btn, false); }
   };
-  const off = $("#stdOff");
-  if (off) off.onclick = async () => {
-    busyBtn(off, true);
-    try { await api("/api/stdports", { method: "POST", body: { enable: false } }); openJob(); }
-    catch (err) { busyBtn(off, false); toast(err.message); }
+  const vd = $("#vpsDetect");
+  if (vd) vd.onclick = async () => {
+    vd.classList.add("spinning");
+    try { const r = await api("/api/vps-address", { method: "POST", body: { detect: true } }); await load(); route(); toast(r.changed ? `IP publik diperbarui: ${r.publicIp}` : "IP publik tidak berubah"); }
+    catch (err) { toast(err.message); vd.classList.remove("spinning"); }
   };
+  const off = $("#stdOff");
+  if (off) off.onclick = () => confirmDialog({
+    title: "Matikan port web standar?", icon: "globe", ok: "Matikan", danger: true,
+    text: `<p>Panel hanya bisa dibuka lewat port ${bp}, misalnya <code>http://${esc(s.publicIp || "IP-VPS")}:${bp}</code>.</p>`,
+    onOk: async () => { await api("/api/stdports", { method: "POST", body: { enable: false } }); closeModal(); openJob(); },
+  });
   $("#portDef").onclick = () => { $("#pHttp").value = P.defHttp || 80; $("#pHttps").value = P.defHttps || 443; };
-  $("#portForm").onsubmit = async (e) => {
+  $("#portForm").onsubmit = (e) => {
     e.preventDefault(); $("#portErr").textContent = "";
-    const btn = $("#portSave"); busyBtn(btn, true);
-    try { await api("/api/stdports", { method: "POST", body: { enable: true, http: $("#pHttp").value.trim(), https: $("#pHttps").value.trim() } }); openJob(); }
-    catch (err) { $("#portErr").textContent = err.message; busyBtn(btn, false); }
+    const h = $("#pHttp").value.trim(), hs = $("#pHttps").value.trim();
+    confirmDialog({
+      title: P.enabled ? "Simpan port web?" : "Aktifkan port web?", icon: "globe", ok: P.enabled ? "Simpan" : "Aktifkan",
+      text: `<p>Panel dibuka lewat port <b>${esc(h)}</b> (http) dan <b>${esc(hs)}</b> (https). Panel menyala ulang beberapa detik; VPN dan router tidak terganggu.</p>`,
+      onOk: async () => { try { await api("/api/stdports", { method: "POST", body: { enable: true, http: h, https: hs } }); closeModal(); openJob(); } catch (err) { closeModal(); $("#portErr").textContent = err.message; } },
+    });
   };
   $("#pwForm").onsubmit = async (e) => {
     e.preventDefault(); $("#pwErr").textContent = "";
@@ -9799,13 +9923,14 @@ async function fillUpdate(refresh) {
   const P = u.panel || {};
   $("#updPill").innerHTML = P.available ? `<span class="pill info">Versi ${esc(P.latest)} tersedia</span>` : P.error ? `<span class="pill wait">Tidak bisa dicek</span>` : `<span class="pill ok">Terbaru</span>`;
   b.innerHTML = `
-    ${P.available ? `<div class="note info" style="margin:0 0 12px">${ic("dl")}<div><b>Versi ${esc(P.latest)} tersedia</b>${P.notes ? esc(P.notes) : "Ada pembaruan panel di GitHub."}${P.date ? ` <span class="muted">· ${esc(fmtT(Date.parse(P.date), true))}</span>` : ""}</div></div>` : ""}
+    ${P.available && !(P.changes && P.changes.length) && P.notes ? `<div class="note info" style="margin:0 0 12px">${ic("dl")}<div><b>Versi ${esc(P.latest)} tersedia</b>${esc(P.notes)}</div></div>` : ""}
     ${P.error ? `<div class="note warn" style="margin:0 0 12px">${ic("alert")}<div><b>Tidak bisa menghubungi GitHub</b>${esc(P.error)}</div></div>` : ""}
     <div class="upd-hero">
       <div class="upd-v"><small>Terpasang</small><b>v${esc(u.version || "")}</b></div>
       ${P.available ? `<span class="upd-arrow">${ic("chev")}</span><div class="upd-v"><small>Terbaru</small><b style="color:var(--primary)">v${esc(P.latest)}</b></div>` : ""}
     </div>
-    <div class="kv" style="padding:0;border:0"><span>Terakhir diperiksa</span><b>${u.checkedAt ? esc(fmtT(u.checkedAt, true)) : "—"}</b></div>
+    ${P.available && P.changes && P.changes.length ? `<div class="tg-h" style="margin-top:4px">Yang baru</div>${chgHtml(P.changes, true)}` : ""}
+    <div class="kv" style="padding:8px 0 0;border:0"><span>Terakhir diperiksa</span><b>${u.checkedAt ? esc(fmtT(u.checkedAt, true)) : "—"}</b></div>
     ${u.canSelfUpdate ? "" : `<div class="help">Perbarui sekali lewat SSH: <code>cd /root/acs-netmap-panel &amp;&amp; git pull &amp;&amp; bash install-vpn-acs.sh</code></div>`}
     <div class="form-actions"><button class="btn" id="updCheck" type="button">${ic("refresh")}Periksa sekarang</button>${P.available && u.canSelfUpdate ? `<button class="btn pri" id="updGo" type="button">${ic("dl")}Perbarui ke v${esc(P.latest)}</button>` : ""}</div>`;
   paintIcons(b);
@@ -9814,14 +9939,14 @@ async function fillUpdate(refresh) {
     const NM = { "panel-acs": "Panel ACS", bilingku: "Bilingku", zerotier: "ZeroTier", wireguard: "WireGuard" };
     const A = Object.entries(u.addons || {});
     ab.innerHTML = `<div class="ch"><h2>Add-on</h2><a class="btn sm" href="#/addon">Buka Add-on</a></div>` + (A.length
-      ? `<ul class="upd-list">${A.map(([id, x]) => `<li><b>${esc(NM[id] || id)}</b>${x.available ? `<span class="pill info">${x.latest ? "v" + esc(x.latest) + " tersedia" : "Ada pembaruan"}</span>` : x.error ? `<span class="pill wait">Tidak bisa dicek</span>` : `<span class="pill ok">Terbaru</span>`}</li>`).join("")}</ul>`
+      ? `<ul class="upd-list">${A.map(([id, x]) => `<li style="flex-wrap:wrap"><b>${esc(NM[id] || id)}</b>${x.available ? `<span class="pill info">Ada pembaruan</span>` : x.error ? `<span class="pill wait">Tidak bisa dicek</span>` : `<span class="pill ok">Terbaru</span>`}${x.available && x.changes && x.changes.length ? `<div style="flex-basis:100%">${chgHtml(x.changes.slice(0, 2))}</div>` : ""}</li>`).join("")}</ul>`
       : `<div class="cb muted">Belum ada add-on terpasang.</div>`);
   }
   $("#updCheck").onclick = async () => { busyBtn($("#updCheck"), true); await fillUpdate(true); await load().catch(() => {}); };
   const go = $("#updGo");
   if (go) go.onclick = () => confirmDialog({
-    title: `Perbarui panel ke v${esc(P.latest)}?`, icon: "dl", ok: "Perbarui",
-    text: `<p>Panel menjalankan <code>git pull</code> lalu installer. Panel menyala ulang beberapa detik; VPN, GenieACS, dan data router tidak terganggu.</p>`,
+    title: `Perbarui panel ke v${esc(P.latest)}?`, icon: "dl", ok: "Perbarui", wide: true,
+    text: `${P.changes && P.changes.length ? `<p>Yang baru:</p>${chgHtml(P.changes, true)}` : ""}<p class="muted">Perkiraan waktu sekitar 1 menit. Panel menyala ulang beberapa detik; VPN, GenieACS, dan data router tidak terganggu.</p>`,
     onOk: async () => { await api("/api/updates/panel", { method: "POST", body: {} }); openJob(); },
   });
 }

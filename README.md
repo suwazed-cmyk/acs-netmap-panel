@@ -178,7 +178,7 @@ Buka `http://IP_VPS`. Pada pemasangan baru, selesaikan dulu wizard pemasangan (l
 
 Menu **Pengaturan → Umum**:
 1. **Nama panel** (opsional), misalnya `NetKu WiFi`. Dipakai di judul panel dan sebagai komentar aturan di MikroTik (`NetKu WiFi - ONT ke IP virtual`). Bisa diganti kapan saja; script baru otomatis membersihkan aturan dengan nama lama.
-2. **Alamat VPS**: IP publik VPS (atau domain). Alamat ini dipakai di script MikroTik.
+2. **Alamat VPS** (dipakai di script MikroTik) terkunci: berisi IP publik VPS yang dideteksi otomatis (tombol ⟳ untuk deteksi ulang). Untuk memakai domain sendiri, isi kolom **Pakai domain**; panel mengecek record A domain itu dan hanya menyimpannya bila benar mengarah ke IP VPS ini. Domain Cloudflare diatur di **Domain & HTTPS**. Bila suatu saat domain tidak lagi mengarah ke VPS, muncul peringatan di Dashboard.
 3. **Password admin**: bisa diganti kapan saja (minimal 8 karakter).
 
 Menu **L2TP → Pengaturan**:
@@ -404,7 +404,7 @@ journalctl -u zerotier-one -n 50 --no-pager
 ---
 
 ## Update dari GitHub
-Setelah add-on atau panel selesai dipasang/diperbarui, muncul dialog **selesai** dengan pilihan **Muat ulang** atau **Nanti**, walaupun jendela progres sudah ditutup. Jika memilih Nanti setelah pembaruan panel, pita biru "Versi baru panel sudah terpasang" tampil di atas halaman sampai halaman dimuat ulang.
+Sebelum memasang, memperbarui, atau mengganti port, panel meminta persetujuan dan menampilkan perkiraan waktu. Pembaruan juga menampilkan **ringkasan isi pembaruan** (garis besar per versi, dari `CHANGELOG.md`). Setelah add-on atau panel selesai dipasang/diperbarui, muncul dialog **selesai** dengan pilihan **Muat ulang** atau **Nanti**, walaupun jendela progres sudah ditutup. Jika memilih Nanti setelah pembaruan panel, pita biru "Versi baru panel sudah terpasang" tampil di atas halaman sampai halaman dimuat ulang.
 
 Panel memeriksa pembaruan otomatis tiap 12 jam. Jika ada versi baru, muncul tanda **pembaruan** di bawah menu samping dan di Dashboard:
 - **Panel:** Pengaturan → **Pembaruan** → **Perbarui**. Panel menjalankan `git pull` dan installer di folder repo, menyala ulang beberapa detik, lalu muat ulang halaman. (Tombol ini tersedia setelah sekali update lewat SSH dengan installer versi terbaru.)
