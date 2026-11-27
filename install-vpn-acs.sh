@@ -211,7 +211,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.10.2";
+const VERSION = "2.10.3";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -7227,6 +7227,94 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
     .user-btn{padding:4px}
   }
   @media (max-width:600px){.kpi{padding:16px}.kpi b{font-size:28px}.pacts .btn.pri{min-height:40px;padding:0 14px}}
+
+  /* ===== v2.10.3: tampilan lebih rapat (compact), tanpa deskripsi halaman ===== */
+  .ph{display:none!important}
+  body{font-size:14px}
+  .side{width:244px}
+  .wrap{margin-left:244px}
+  .side>.brand{padding:16px 18px 8px;gap:10px}
+  .brand-mark{width:38px;height:38px;border-radius:10px}
+  .brand-mark svg{width:20px;height:20px}
+  .side .brand b{font-size:16.5px}
+  .side .brand small{font-size:12px}
+  .nav-sec{padding:12px 22px 4px;font-size:10.5px}
+  .nav{width:calc(100% - 20px);margin:1px 10px;padding:8px 12px;min-height:38px;font-size:14px;border-radius:9px}
+  .nav svg{width:18px;height:18px}
+  .side-foot{padding:10px 18px}
+  .top{height:58px;padding:0 20px;gap:8px}
+  .tsearch{width:380px}
+  .tsearch input{height:38px;border-radius:10px}
+  .top .btn.ghost.icon{width:36px;height:36px;border-radius:10px}
+  .top .btn.ghost.icon svg{width:18px;height:18px}
+  .user-btn{height:38px;padding:3px 10px 3px 3px;gap:8px}
+  .user-btn .uic{width:30px;height:30px}
+  .user-btn .who{font-size:13.5px}
+  .main{padding:14px 20px 32px}
+  #topWarn{padding:14px 20px 0}
+  #topWarn .note{padding:10px 14px}
+  .pbar{margin:0 0 12px;min-height:34px}
+  .pbar .crumb{gap:6px;font-size:14px}
+  .pbar .crumb>a:first-child{width:30px;height:30px;border-radius:9px}
+  .pbar .crumb>a:first-child svg{width:16px;height:16px}
+  .pbar .crumb b{font-size:17px;font-weight:700;letter-spacing:-.01em}
+  .pupd{font-size:12.5px}
+  .pacts{gap:6px}
+  .pacts .btn.pri,.btn{min-height:34px;padding:0 13px;border-radius:9px;font-size:13.5px;gap:6px}
+  .btn svg{width:16px;height:16px}
+  .btn.pri{box-shadow:0 6px 14px -8px var(--primary)}
+  .btn.sm{min-height:30px;padding:0 10px;font-size:12.5px;border-radius:8px}
+  .btn.icon{width:34px;padding:0}
+  .pacts .search input,.pacts input{height:34px}
+  .card{border-radius:12px}
+  .card+.card{margin-top:14px}
+  .ch{padding:11px 16px;min-height:48px;gap:8px}
+  .ch h2{font-size:15px}
+  .ch .muted,.ch a{font-size:12.5px}
+  .cb{padding:14px 16px}
+  .kpis{gap:12px;margin-bottom:12px}
+  .kpi{padding:12px 14px;border-radius:12px}
+  .kpi:hover{transform:translateY(-1px)}
+  .kpi>span{font-size:13px;gap:8px}
+  .kico{width:28px;height:28px;border-radius:8px}
+  .kico svg{width:16px;height:16px}
+  .kpi b{font-size:24px;margin:6px 0 0;line-height:1.15}
+  .kpi small{font-size:12.5px}
+  .grid-dash{gap:12px;grid-template-columns:minmax(0,1fr) 340px}
+  .stack{gap:12px}
+  .dtabs{margin:-11px 0 -11px -6px}
+  .dtabs button{font-size:14.5px;padding:0 11px}
+  .dtabs .n{min-width:19px;height:19px;font-size:11px}
+  table.t th{padding:8px 16px;font-size:11px}
+  table.t td{padding:9px 16px}
+  table.t th:first-child,table.t td:first-child{padding-left:16px}
+  .srv small{font-size:12px}
+  .row{padding:10px 16px;gap:12px}
+  .row .ic{width:32px;height:32px}
+  .dapps li{padding:9px 16px;gap:10px}
+  .dapps b{font-size:13.5px}
+  .kv{padding:8px 16px;font-size:13px}
+  .vh{padding:12px 16px 14px;gap:10px}
+  .vps-ip{padding:7px 10px;border-radius:9px}
+  .vh-r .zt-bar{height:6px;margin-top:5px}
+  .vh-f{padding-top:10px}
+  .empty{padding:30px 20px}
+  .empty .big{width:46px;height:46px;border-radius:12px}
+  .toolbar{padding:10px 16px}
+  input:not([type=checkbox]):not([type=radio]),select{height:36px;border-radius:9px}
+  textarea{border-radius:9px}
+  .chip{height:28px;padding:0 11px}
+  .dh{margin-bottom:12px}
+  .dh h1{font-size:18px}
+  .pacts .acts{display:flex;align-items:center;gap:6px;flex-wrap:nowrap}
+  .pacts .ad-search{width:230px}
+  .side-foot{align-items:center;gap:8px}
+  .side-foot>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .side-foot #ver{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;flex:none}
+  @media (max-width:720px){.pacts .ad-search{width:150px}}
+  @media (max-width:1080px){.grid-dash{grid-template-columns:minmax(0,1fr)}}
+  @media (max-width:900px){.wrap{margin-left:0}.top{height:56px;padding:0 10px}.main{padding:12px 10px 32px}#topWarn{padding:10px 10px 0}.pbar .crumb b{font-size:16px}}
+  @media (max-width:600px){.kpi b{font-size:22px}.kpis{gap:8px}}
 </style>
 </head>
 <body>
@@ -7646,6 +7734,14 @@ function liveRefresh() {
   if (h === "#/router" && $("#q")) { fillList(); return; }
   route();
 }
+// Tombol aksi halaman (.ph .acts) dipindah ke baris breadcrumb, karena judul dan deskripsi halaman disembunyikan
+function hoistActs() {
+  const ph = document.querySelector("#view > .ph"), pa = $("#pActs");
+  if (!ph || !pa) return;
+  const acts = ph.querySelector(".acts");
+  if (acts) pa.replaceChildren(acts);
+}
+new MutationObserver(hoistActs).observe(document.getElementById("view"), { childList: true });
 let LAST_HASH = "";
 function route() {
   if (!LOADED) return;
@@ -7689,6 +7785,7 @@ function route() {
   else { viewDashboard(v); }
   document.title = `${title} · ${BRAND}`;
   paintIcons(v);
+  hoistActs();
   window.scrollTo(0, keepY);
 }
 function crumb(items) {
