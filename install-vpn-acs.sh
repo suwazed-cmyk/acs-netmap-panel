@@ -211,7 +211,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.12.3";
+const VERSION = "2.13.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -7335,6 +7335,7 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .zt-qrpills .pill svg{width:11px;height:11px;margin-right:3px;vertical-align:-1px}
   .zt-nwplain{font-size:15px;font-weight:700;letter-spacing:.02em}
   .zt-curqr .zt-hrow{min-height:34px}
+  .zt-cur .zt-hv .pill svg{width:11px;height:11px;margin-right:3px;vertical-align:-1px}
   .zt-curc,.zt-hcard{margin-bottom:12px}
   .zt-cur .zt-hv b.mono{font-size:14px;font-weight:600}
   .zt-cur .zt-hv .zt-small{margin-left:8px}
@@ -7714,7 +7715,7 @@ async function load() {
   LOADED = true;
   const U = STATE.settings.updates || {};
   const nUp = (U.panel ? 1 : 0) + (U.addons || []).length;
-  $("#ver").innerHTML = (STATE.settings.version ? "v" + esc(STATE.settings.version) : "") + (nUp ? ` <a class="upd-dot" href="${U.panel ? "#/pengaturan/umum" : "#/addon"}" title="${nUp} pembaruan tersedia">${nUp} pembaruan</a>` : "");
+  $("#ver").innerHTML = (STATE.settings.version ? "v" + esc(STATE.settings.version) : "") + (nUp ? ` <a class="upd-dot" href="${U.panel ? "#/pengaturan/pembaruan" : "#/addon"}" title="${nUp} pembaruan tersedia">${nUp} pembaruan</a>` : "");
   setBrand(STATE.settings.panelName);
   const A = STATE.settings.addons || {};
   $("#navZt").classList.toggle("hidden", !(A.zerotier && A.zerotier.installed));
@@ -7852,7 +7853,7 @@ function issues() {
     if (x.inGenie === false) list.push({ t: `${x.name}: IP virtual di luar patch GenieACS`, d: `${x.virtualSubnet} tidak dikenali GenieACS, Summon akan gagal.`, go: `#/router/${x.id}` });
   }
   const UP = STATE.settings.updates || {};
-  if (UP.panel) list.push({ k: "info", t: `Pembaruan panel v${UP.latest} tersedia`, d: "Perbarui dari Pengaturan → Umum → Pembaruan panel.", go: "#/pengaturan/umum" });
+  if (UP.panel) list.push({ k: "info", t: `Pembaruan panel v${UP.latest} tersedia`, d: "Perbarui dari Pengaturan → Pembaruan.", go: "#/pengaturan/pembaruan" });
   if ((UP.addons || []).length) list.push({ k: "info", t: `${UP.addons.length} add-on punya pembaruan`, d: UP.addons.map((id) => ((STATE.settings.addons || {})[id] || {}).name || id).join(", "), go: "#/addon" });
   const pend = STATE.sites.filter((x) => x.state === "pending");
   for (const x of STATE.sites.filter((y) => y.transport === "zt" && !y.ztNode)) list.push({ k: "info", t: `${x.name}: router ZeroTier belum dipilih`, d: "Pasang script, lalu pilih router dari daftar yang bergabung.", go: `#/router/${x.id}` });
@@ -8812,7 +8813,7 @@ ${wgOn() ? `    <div class="card"><div class="ch"><h2>Router lewat WireGuard (op
 }
 
 /* ================= Pengaturan ================= */
-const SET_TABS = [["umum", "Umum", "sliders"], ["keamanan", "Keamanan", "shield"], ["vpn", "VPN L2TP", "lock"], ["telegram", "Notifikasi Telegram", "send"], ["domain", "Domain & HTTPS", "globe"]];
+const SET_TABS = [["umum", "Umum", "sliders"], ["keamanan", "Keamanan", "shield"], ["vpn", "VPN L2TP", "lock"], ["telegram", "Notifikasi Telegram", "send"], ["domain", "Domain & HTTPS", "globe"], ["pembaruan", "Pembaruan", "dl"]];
 function viewSettings(v, tab) {
   if (!SET_TABS.some(([k]) => k === tab)) tab = "umum";
   crumb([["Pengaturan", "#/pengaturan"], [SET_TABS.find(([k]) => k === tab)[1]]]);
@@ -8825,6 +8826,8 @@ function viewSettings(v, tab) {
   else if (tab === "keamanan") setSecurity(b);
   else if (tab === "domain") setDomain(b);
   else if (tab === "vpn") setVpn(b);
+  else if (tab === "pembaruan") { b.innerHTML = `
+    <div class="card" id="updCard"><div class="ch"><h2>Pembaruan panel</h2><span id="updPill"></span></div><div class="cb" id="updBody" style="padding-top:4px"><p class="muted">Memeriksa…</p></div></div>`; fillUpdate(); }
   else setGeneral(b);
 }
 // ---------- Pengaturan → Keamanan ----------
@@ -8901,7 +8904,6 @@ function setGeneral(b) {
       <div class="err" id="vpsErr"></div>
       <div class="form-actions"><button class="btn pri">Simpan</button></div>
     </form></div>
-    <div class="card" id="updCard"><div class="ch"><h2>Pembaruan panel</h2><span id="updPill"></span></div><div class="cb" id="updBody" style="padding-top:4px"><p class="muted">Memeriksa…</p></div></div>
     ${(() => {
       const P = STATE.settings.stdPorts || {}, https = !!(STATE.settings.cloudflare && STATE.settings.cloudflare.https);
       const url = STATE.settings.panelUrl || "", bp = esc(String(STATE.settings.port || 8088));
@@ -8953,7 +8955,6 @@ function setGeneral(b) {
     try { await api("/api/stdports", { method: "POST", body: { enable: true, http: $("#pHttp").value.trim(), https: $("#pHttps").value.trim() } }); openJob(); }
     catch (err) { $("#portErr").textContent = err.message; busyBtn(btn, false); }
   };
-  fillUpdate();
   $("#pwForm").onsubmit = async (e) => {
     e.preventDefault(); $("#pwErr").textContent = "";
     const btn = $("#pwForm button"); busyBtn(btn, true);
@@ -9278,10 +9279,10 @@ async function setZerotier(b) {
             <div class="zt-hrow"><span class="zt-hl">Network ID</span><span class="zt-hv"><span class="mono zt-nwplain">${esc(cur.nwid)}</span><button class="zt-ib" data-copy="${esc(cur.nwid)}" data-msg="Network ID tersalin" title="Salin Network ID" aria-label="Salin Network ID">${ic("copy")}</button></span></div>
             <div class="zt-hrow"><span class="zt-hl">Nama jaringan</span><span class="zt-hv" id="ztNameBox"><span class="zt-nname">${esc(cur.name || "(tanpa nama)")}</span><button class="zt-ib" id="ztNameEdit" title="Ganti nama" aria-label="Ganti nama">${ic("edit")}</button></span></div>
             <div class="zt-hrow"><span class="zt-hl">Rentang IP</span><span class="zt-hv"><b class="mono">${esc(cur.subnet || "—")}</b></span></div>
-            <div class="zt-hrow"><span class="zt-hl">IP VPS (gateway)</span><span class="zt-hv"><b class="mono">${esc(act ? cur.vpsIp : "—")}</b></span></div>
+            <div class="zt-hrow"><span class="zt-hl">Gateway</span><span class="zt-hv"><b class="mono">${esc(act ? cur.vpsIp : "—")}</b></span></div>
+            <div class="zt-hrow"><span class="zt-hl">Akses</span><span class="zt-hv">${cur.private ? `<span class="pill ok">${ic("lock", "")}Private</span>` : `<span class="pill bad">Public</span>`}</span></div>
         </div>
-        <div class="zt-qrside"><span class="muted zt-small">Pindai untuk menyalin Network ID</span><button class="zt-qrbig" id="ztQr" title="Perbesar QR Network ID" aria-label="Perbesar QR Network ID">${(() => { try { const q = qrcode(0, "M"); q.addData(cur.nwid); q.make(); return q.createSvgTag({ cellSize: 4, margin: 0, scalable: true }); } catch (e) { return ic("qr"); } })()}</button>
-          <div class="zt-qrpills">${act ? (okNet ? `<span class="pill ok">VPS tersambung</span>` : `<span class="pill bad">VPS belum tersambung</span>`) : `<span class="pill wait">Tidak dipakai panel</span>`}${cur.private ? `<span class="pill ok">${ic("lock", "")}Private</span>` : `<span class="pill bad">Public</span>`}</div></div>
+        <div class="zt-qrside"><button class="zt-qrbig" id="ztQr" title="Perbesar QR Network ID" aria-label="Perbesar QR Network ID">${(() => { try { const q = qrcode(0, "M"); q.addData(cur.nwid); q.make(); return q.createSvgTag({ cellSize: 4, margin: 0, scalable: true }); } catch (e) { return ic("qr"); } })()}</button><span class="muted zt-small">Pindai untuk menyalin Network ID</span></div>
       </div>
     </div>
 

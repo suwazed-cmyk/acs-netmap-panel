@@ -378,7 +378,7 @@ journalctl -u zerotier-one -n 50 --no-pager
 
 ## Update dari GitHub
 Panel memeriksa pembaruan otomatis tiap 12 jam. Jika ada versi baru, muncul tanda **pembaruan** di bawah menu samping dan di Dashboard:
-- **Panel:** Pengaturan → Umum → **Pembaruan panel** → **Perbarui**. Panel menjalankan `git pull` dan installer di folder repo, menyala ulang beberapa detik, lalu muat ulang halaman. (Tombol ini tersedia setelah sekali update lewat SSH dengan installer versi terbaru.)
+- **Panel:** Pengaturan → **Pembaruan** → **Perbarui**. Panel menjalankan `git pull` dan installer di folder repo, menyala ulang beberapa detik, lalu muat ulang halaman. (Tombol ini tersedia setelah sekali update lewat SSH dengan installer versi terbaru.)
 - **Add-on:** menu Add-on menandai add-on yang punya versi baru; klik **Perbarui**. **Periksa pembaruan** untuk mengecek saat itu juga.
 
 Update manual lewat SSH tetap bisa:
