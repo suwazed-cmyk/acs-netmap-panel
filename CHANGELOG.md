@@ -2,6 +2,11 @@
 
 Garis besar setiap versi. Panel menampilkan poin-poin ini di Pengaturan → Pembaruan.
 
+## 2.24.0
+- Web ONT memakai subdomain acak per ONT saat panel memakai domain
+- Kartu Inform berkala ONT ditata ulang
+- Menu ⋯ di kartu add-on tidak lagi terpotong
+
 ## 2.23.0
 - Web ONT memakai port 62000–62999 tanpa perlu diatur
 - Port web ONT dideteksi otomatis, termasuk ONT yang memakai HTTPS

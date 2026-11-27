@@ -362,7 +362,9 @@ Tampilan panel **realtime tanpa penyegaran berkala**: begitu router tersambung/p
 
 **Remote router / ONT (port forwarding):** buka router → tab **Port Forwarding** → **Tambah** → pilih layanan (Winbox, WebFig, SSH, Web ONT, atau lainnya). Untuk Winbox, isi **Connect To** dengan `IP_VPS:20001` (port sesuai yang tampil). Layanan web bisa langsung diklik dan terbuka di tab baru. Port ini terbuka ke internet, jadi pastikan password perangkat kuat.
 
-**Buka web ONT tanpa VPN:** menu **GenieACS → Web ONT** → cari ONT (serial, IP, atau router) → **Buka web ONT**. Web ONT terbuka di tab baru lewat `http://IP_VPS:62000` (ONT berikutnya memakai 62001, dan seterusnya sampai 62999), lalu login ke ONT seperti biasa.
+**Buka web ONT tanpa VPN:** menu **GenieACS → Web ONT** → cari ONT (serial, IP, atau router) → **Buka web ONT**. Web ONT terbuka di tab baru, lalu login ke ONT seperti biasa. Alamatnya dipilih otomatis:
+- **Belum pakai domain:** `http://IP_VPS:62000` (ONT berikutnya 62001, dan seterusnya sampai 62999).
+- **Sudah pakai domain** (alamat VPS berupa domain dan Alamat panel port 80/443 aktif): setiap ONT mendapat subdomain acak baru, misalnya `http://k7f2m9qx-ab31c2.webont.domainanda.com`. Cukup satu record wildcard `*.webont.domainanda.com` → IP VPS (DNS only). Dengan Cloudflare lewat panel, record ini dibuat otomatis; bila HTTPS panel aktif, sertifikat wildcard ikut diterbitkan sehingga web ONT dibuka lewat `https://`. Untuk domain custom, tambahkan record wildcard itu sendiri. Bila syarat belum terpenuhi, panel otomatis memakai cara IP + port.
 - Alamat itu **hanya bisa dibuka lewat tombol di panel**. Tombol memberi tiket sekali pakai; orang yang mengetik alamatnya langsung akan ditolak.
 - Akses berlaku **30 menit sejak terakhir dipakai**, dan langsung berakhir saat Anda logout dari panel. Kalau habis, klik **Buka web ONT** lagi.
 - Beberapa ONT bisa dibuka bersamaan, masing-masing di port sendiri. Login ONT yang satu tidak menimpa yang lain.

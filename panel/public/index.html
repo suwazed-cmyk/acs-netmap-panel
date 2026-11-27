@@ -269,6 +269,22 @@
   .tr-tx{display:grid;gap:2px}.tr-tx b{font-size:14px}.tr-tx small{color:var(--muted);font-size:12.5px}
   .tr-steps{margin:10px 0 14px;padding-left:20px;display:grid;gap:14px}.tr-steps li{min-width:0}.tr-steps .codebox{max-width:100%}.tr-steps pre{overflow:auto}.tr-steps li b{display:block;margin-bottom:6px}
   .inf-card{margin-bottom:16px}
+  .inf-body{display:flex;flex-direction:column;gap:12px;padding-top:14px!important}
+  .inf-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+  .inf-stats>div{padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--subtle);display:flex;flex-direction:column;gap:2px}
+  .inf-stats b{font-size:20px;font-weight:800;line-height:1.1;color:var(--head)}
+  .inf-stats span{font-size:12px;color:var(--muted)}
+  .inf-warn{display:flex;gap:8px;align-items:flex-start;margin:0;font-size:13px;line-height:1.5;color:var(--text-2)}
+  .inf-warn svg{width:16px;height:16px;flex:none;color:var(--warn);margin-top:2px}
+  .inf-empty{display:flex;gap:10px;align-items:center;padding:12px 14px;border-radius:10px;background:var(--subtle);font-size:13.5px;color:var(--text-2)}
+  .inf-empty svg{width:17px;height:17px;flex:none;color:var(--muted)}
+  .inf-set{display:flex;align-items:center;gap:12px 16px;flex-wrap:wrap;padding-top:12px;border-top:1px solid var(--line)}
+  .inf-set-l{flex:1;min-width:160px}.inf-set-l label{margin:0;font-weight:600;color:var(--head);font-size:14px}.inf-set-l small{display:block;color:var(--muted);font-size:12.5px;margin-top:2px}
+  .inf-set-r{display:flex;align-items:center;gap:8px}.inf-set-r select{width:auto;min-width:150px}
+  @media (max-width:600px){.inf-stats{grid-template-columns:repeat(2,1fr)}}
+  /* menu ⋯ di dalam kartu tidak terpotong */
+  .card:has(.menu-list:not(.hidden)){overflow:visible;position:relative;z-index:25}
+  .ad-tile .menu-list{top:calc(100% + 6px)}
   .inf-lead{font-size:13.5px;line-height:1.6;color:var(--text-2);margin:0 0 12px}
   .inf-bar{display:flex;height:10px;border-radius:99px;overflow:hidden;background:var(--subtle);border:1px solid var(--line)}
   .inf-bar i{display:block;height:100%}
@@ -3168,19 +3184,23 @@ async function fillOntOpen() {
   try { r = await api("/api/ontgw"); } catch (e) { return; }
   if (!$("#gOntOpen")) return;
   ONTW.gw = r;
+  const md = $("#gOntMode"), M = r.mode || {};
+  if (md) md.innerHTML = `Berlaku 30 menit sejak terakhir dipakai. ` + (M.mode === "domain"
+    ? `Alamat: <span class="mono">acak.${esc(M.base)}</span> (${M.scheme === "https" ? "https" : "http"}).`
+    : `Alamat: <span class="mono">IP-VPS:${GW_RANGE}</span>, port ini harus terbuka (TCP) di firewall provider.${M.note ? ` <b>${esc(M.note)}</b>` : ""}`);
   const L = r.list || [];
   box.hidden = !L.length;
   box.innerHTML = `<div class="ch"><h2>Sedang terbuka</h2><span class="muted" style="font-size:12.5px">${L.length} ONT</span></div>
     <table class="t"><thead><tr><th>ONT</th><th class="hide-sm">Router</th><th>Alamat</th><th class="hide-md">Berakhir</th><th class="r"></th></tr></thead><tbody>
     ${L.map((x) => `<tr><td><b>${esc(x.label || x.ip)}</b><div class="muted mono" style="font-size:12px">${esc(x.ip)}</div></td><td class="hide-sm">${esc(x.site)}</td>
-      <td class="mono">:${x.port}</td><td class="hide-md">${x.users ? `${esc(fmtDur(Math.max(0, x.expires - Date.now())))} lagi` : `<span class="muted">menunggu dibuka</span>`}</td>
-      <td class="r" style="white-space:nowrap"><button class="btn sm" data-oreopen="${esc(x.ip)}" data-olabel="${esc(x.label)}">${ic("ext")}Buka</button> <button class="btn sm" data-oclose="${x.port}">${ic("x")}Tutup</button></td></tr>`).join("")}
+      <td class="mono" style="word-break:break-all">${x.host ? esc(x.host.split(".")[0]) + `<span class="muted">.webont…</span>` : ":" + x.port}</td><td class="hide-md">${x.users ? `${esc(fmtDur(Math.max(0, x.expires - Date.now())))} lagi` : `<span class="muted">menunggu dibuka</span>`}</td>
+      <td class="r" style="white-space:nowrap"><button class="btn sm" data-oreopen="${esc(x.ip)}" data-olabel="${esc(x.label)}">${ic("ext")}Buka</button> <button class="btn sm" data-oclose="${esc(x.id)}">${ic("x")}Tutup</button></td></tr>`).join("")}
     </tbody></table>`;
   paintIcons(box);
   box.querySelectorAll("[data-oreopen]").forEach((b) => (b.onclick = () => openOntWeb(b.dataset.oreopen, b.dataset.olabel, b)));
   box.querySelectorAll("[data-oclose]").forEach((b) => (b.onclick = async () => {
     busyBtn(b, true);
-    try { await api("/api/ontgw/close", { method: "POST", body: { port: +b.dataset.oclose } }); toast("Web ONT ditutup"); } catch (e) { toast(e.message); }
+    try { await api("/api/ontgw/close", { method: "POST", body: { id: b.dataset.oclose } }); toast("Web ONT ditutup"); } catch (e) { toast(e.message); }
     fillOntOpen();
   }));
 }
@@ -3214,7 +3234,7 @@ async function fillOntWeb() {
         <table class="t"><thead><tr><th>ONT</th><th class="hide-sm">Router</th><th>IP virtual</th><th class="hide-md">Terakhir lapor</th><th class="r"></th></tr></thead><tbody id="gOntRows"><tr><td colspan="5" class="muted">Membaca daftar ONT…</td></tr></tbody></table>
         <div class="cb" style="border-top:1px solid var(--line);padding:10px 20px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
           <button class="btn sm" id="gOntMore" hidden></button>
-          <span class="help" style="margin:0">Berlaku 30 menit sejak terakhir dipakai. Port ${GW_RANGE} (TCP) harus terbuka di firewall provider.</span>
+          <span class="help" style="margin:0" id="gOntMode">Berlaku 30 menit sejak terakhir dipakai.</span>
         </div>
       </div>`;
     paintIcons(box);
@@ -3235,38 +3255,33 @@ async function fillOntWeb() {
 function informCard(g) {
   const I = g.inform || {};
   const P = I.provision || {};
-  // Belum ada ONT (VPS baru) atau data ONT tidak terbaca: kartu tetap tampil, provision bisa dipasang lebih dulu
-  if (!I.total || g.devicesError) {
-    const pe = P.error ? `<span class="pill wait">Tidak bisa dicek</span>` : P.installed ? `<span class="pill ok">Provision aktif${P.interval ? ` · tiap ${P.interval} detik` : ""}</span>` : `<span class="pill wait">Belum dipasang</span>`;
-    return `<div class="card inf-card">
-    <div class="ch"><h2>Inform berkala ONT</h2>${pe}</div>
-    <div class="cb" style="padding-top:12px">
-      <p class="inf-lead">${g.devicesError ? `Data ONT tidak bisa dibaca: ${esc(g.devicesError)}.` : "Belum ada ONT yang melapor ke GenieACS."} ${P.installed ? `Provision sudah aktif, jadi ONT yang tersambung nanti otomatis melapor ${P.interval ? `tiap <b>${P.interval} detik</b>` : "secara berkala"}.` : "Pasang provision sekarang supaya setiap ONT yang tersambung nanti langsung melapor secara berkala dan tidak terlihat offline."}</p>
-      <div class="inf-act">
-        <label for="infIv" class="muted zt-small" style="margin:0">Laporkan tiap</label>
-        <select id="infIv" style="width:auto">${[120, 240, 300, 600].map((v) => `<option value="${v}" ${(P.interval || 240) === v ? "selected" : ""}>${v / 60} menit${v === 240 ? " (disarankan)" : ""}</option>`).join("")}</select>
-        <button class="btn pri" id="infGo">${ic("check")}${P.installed ? "Simpan interval" : "Pasang provision"}</button>
-        ${P.installed ? `<button class="btn ghost danger" id="infRm">Hapus provision</button>` : ""}
-      </div>
-    </div></div>`;
-  }
-  const bad = I.slow + I.off + I.unknown;
-  const top = Object.entries(I.intervals).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([iv, n]) => `<span class="pill ${iv <= 300 ? "ok" : "bad"}">${iv >= 3600 ? iv / 3600 + " jam" : iv >= 60 ? Math.round(iv / 60) + " menit" : iv + " dtk"} · ${n} ONT</span>`).join("");
+  const has = !!I.total && !g.devicesError;
+  const bad = has ? I.slow + I.off + I.unknown : 0;
+  const iv = P.interval ? (P.interval % 60 ? `${P.interval} detik` : `${P.interval / 60} menit`) : "";
+  const pill = P.error ? `<span class="pill wait">Tidak bisa dicek</span>`
+    : P.installed ? `<span class="pill ok">Aktif${iv ? ` · tiap ${iv}` : ""}</span>`
+    : bad ? `<span class="pill bad">Perlu diperbaiki</span>` : `<span class="pill wait">Belum dipasang</span>`;
   const seg = (n, cls) => (n ? `<i class="${cls}" style="width:${(n / I.total) * 100}%"></i>` : "");
   return `<div class="card inf-card">
-    <div class="ch"><h2>Inform berkala ONT</h2>${P.installed ? `<span class="pill ok">Provision aktif${P.interval ? ` · tiap ${P.interval} detik` : ""}</span>` : bad ? `<span class="pill bad">Perlu diperbaiki</span>` : `<span class="pill ok">Normal</span>`}</div>
-    <div class="cb" style="padding-top:12px">
-      <p class="inf-lead">${P.installed ? `Semua ONT diatur melapor ke GenieACS ${P.interval ? `tiap <b>${P.interval} detik</b>` : "secara berkala"}. ONT yang belum ikut berubah setelah inform berikutnya.`
-        : bad ? `<b>${bad} dari ${I.total} ONT</b> melapor jarang (lebih dari 5 menit), inform berkalanya mati, atau intervalnya belum diketahui. ONT seperti ini terlihat <b>offline</b> di GenieACS beberapa menit setelah tersambung, padahal di lokasi tetap hidup. Penyebabnya bukan VPN (L2TP, WireGuard, maupun ZeroTier sama saja).`
-        : "Semua ONT melapor tiap 5 menit atau lebih cepat."}</p>
+    <div class="ch"><h2>Inform berkala ONT</h2>${pill}</div>
+    <div class="cb inf-body">
+      ${has ? `
+      <div class="inf-stats">
+        <div><b style="color:var(--ok)">${I.fast}</b><span>≤ 5 menit</span></div>
+        <div><b style="color:var(--warn)">${I.slow}</b><span>lebih jarang</span></div>
+        <div><b style="color:var(--bad)">${I.off}</b><span>inform mati</span></div>
+        <div><b>${I.unknown}</b><span>belum diketahui</span></div>
+      </div>
       <div class="inf-bar">${seg(I.fast, "ok")}${seg(I.slow, "warn")}${seg(I.off, "bad")}${seg(I.unknown, "unk")}</div>
-      <div class="inf-leg"><span><i class="ok"></i>≤ 5 menit: ${I.fast}</span><span><i class="warn"></i>lebih jarang: ${I.slow}</span><span><i class="bad"></i>inform berkala mati: ${I.off}</span><span><i class="unk"></i>belum diketahui: ${I.unknown}</span></div>
-      ${top ? `<div class="inf-top"><span class="muted zt-small">Interval terbanyak</span>${top}</div>` : ""}
-      <div class="inf-act">
-        <label for="infIv" class="muted zt-small" style="margin:0">Laporkan tiap</label>
-        <select id="infIv" style="width:auto">${[120, 240, 300, 600].map((v) => `<option value="${v}" ${(P.interval || 240) === v ? "selected" : ""}>${v / 60} menit${v === 240 ? " (disarankan)" : ""}</option>`).join("")}</select>
-        <button class="btn pri" id="infGo">${ic("check")}${P.installed ? "Simpan interval" : "Perbaiki semua ONT"}</button>
-        ${P.installed ? `<button class="btn ghost danger" id="infRm">Hapus provision</button>` : ""}
+      ${bad && !P.installed ? `<p class="inf-warn">${ic("alert")}<span><b>${bad} ONT</b> jarang melapor, sehingga terlihat offline padahal hidup. Pasang provision untuk memperbaikinya.</span></p>` : ""}`
+      : `<div class="inf-empty">${ic("info")}<span>${g.devicesError ? `Data ONT tidak bisa dibaca: ${esc(g.devicesError)}` : "Belum ada ONT yang melapor ke GenieACS."}</span></div>`}
+      <div class="inf-set">
+        <div class="inf-set-l"><label for="infIv">Interval laporan</label><small>${P.installed ? "ONT melapor otomatis sesuai interval ini" : "Pasang supaya semua ONT melapor berkala"}</small></div>
+        <div class="inf-set-r">
+          <select id="infIv">${[120, 240, 300, 600].map((v) => `<option value="${v}" ${(P.interval || 240) === v ? "selected" : ""}>${v / 60} menit${v === 240 ? " (disarankan)" : ""}</option>`).join("")}</select>
+          <button class="btn pri" id="infGo">${P.installed ? "Simpan" : `${ic("check")}Pasang`}</button>
+          ${P.installed ? `<button class="btn ghost icon" id="infRm" title="Hapus provision" aria-label="Hapus provision" style="color:var(--bad)">${ic("trash")}</button>` : ""}
+        </div>
       </div>
     </div></div>`;
 }
