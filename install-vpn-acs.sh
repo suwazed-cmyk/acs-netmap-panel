@@ -211,7 +211,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.14.0";
+const VERSION = "2.14.1";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -2978,7 +2978,18 @@ function sourceDir() {
 }
 async function checkPanelUpdate() {
   const out = { current: VERSION, latest: "", available: false, error: "", notes: "", date: "" };
-  const r = await httpJson("GET", UPDATE_RAW, null, { Range: "bytes=0-6000", Accept: "text/plain" }, 15000);
+  // raw.githubusercontent.com menyimpan salinan /main sampai ±5 menit. Ambil dulu commit terbaru lewat API,
+  // lalu baca berkas pada commit itu (alamatnya unik per commit, jadi selalu versi terbaru).
+  let rawUrl = UPDATE_RAW;
+  let commit = null;
+  if (!process.env.VPNACS_UPDATE_RAW) {
+    const c = await httpJson("GET", `https://api.github.com/repos/${UPDATE_REPO}/commits/main`, null, { Accept: "application/vnd.github+json" }, 15000);
+    if (c.json && c.json.sha) {
+      commit = c.json;
+      rawUrl = `https://raw.githubusercontent.com/${UPDATE_REPO}/${c.json.sha}/panel/server.js`;
+    }
+  }
+  const r = await httpJson("GET", rawUrl, null, { Range: "bytes=0-6000", Accept: "text/plain" }, 15000);
   const m = r.text && r.text.match(/const VERSION = "([\d.]+)"/);
   if (!m) {
     out.error = r.status ? `GitHub menjawab HTTP ${r.status}` : `Tidak bisa menghubungi GitHub (${r.error || "?"})`;
@@ -2987,7 +2998,7 @@ async function checkPanelUpdate() {
   out.latest = m[1];
   out.available = verCmp(out.latest, VERSION) > 0;
   if (out.available) {
-    const c = await httpJson("GET", `https://api.github.com/repos/${UPDATE_REPO}/commits/main`, null, {}, 15000);
+    const c = commit ? { json: commit } : await httpJson("GET", `https://api.github.com/repos/${UPDATE_REPO}/commits/main`, null, {}, 15000);
     if (c.json && c.json.commit) {
       out.notes = String(c.json.commit.message || "").split("\n")[0].slice(0, 160);
       out.date = (c.json.commit.committer && c.json.commit.committer.date) || "";
