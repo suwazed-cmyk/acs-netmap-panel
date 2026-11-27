@@ -208,7 +208,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.19.1";
+const VERSION = "2.20.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -3642,6 +3642,12 @@ async function runJob(job, steps) {
   logActivity(job.req || null, `${job.title} ${job.ok ? "berhasil" : "gagal"}`, job.ok ? "" : job.error);
   delete job.req;
   jobSave();
+  sseSend("job", { id: job.id, ok: job.ok });
+  // Status "pembaruan tersedia" dihitung ulang supaya tanda pembaruan langsung hilang
+  if (job.ok && (job.action === "install" || job.action === "update") && UPDATES && UPDATES.addons && job.addon) {
+    delete UPDATES.addons[job.addon];
+    checkUpdates().then(() => sseSend("data")).catch(() => {});
+  }
 }
 // ---------- Pemeriksaan add-on: apakah terpasang dan berjalan dengan benar ----------
 function httpCode(opts) {
@@ -5796,7 +5802,7 @@ async function handleApi(req, res, url) {
     if (!ADDON_JOB) return send(res, 200, { job: null });
     const j = ADDON_JOB;
     const now = Date.now();
-    return send(res, 200, { job: { id: j.id, addon: j.addon, action: j.action || "", title: j.title, pct: j.pct || 0, cur: j.cur, detail: j.detail || "", steps: j.steps, log: (j.log || []).slice(-120), done: !!j.done, ok: !!j.ok, error: j.error || "", interrupted: !!j.interrupted, elapsed: Math.round(((j.done ? j.finished || now : now) - (j.started || now)) / 1000), quiet: j.done ? 0 : Math.round((now - (j.lastOut || now)) / 1000) } });
+    return send(res, 200, { job: { id: j.id, addon: j.addon, action: j.action || "", title: j.title, finishedAt: j.done ? j.finished || 0 : 0, pct: j.pct || 0, cur: j.cur, detail: j.detail || "", steps: j.steps, log: (j.log || []).slice(-120), done: !!j.done, ok: !!j.ok, error: j.error || "", interrupted: !!j.interrupted, elapsed: Math.round(((j.done ? j.finished || now : now) - (j.started || now)) / 1000), quiet: j.done ? 0 : Math.round((now - (j.lastOut || now)) / 1000) } });
   }
   const am = p.match(/^\/api\/addons\/([a-z-]+)(?:\/(install|update|remove|check))?$/);
   if (am && ADDONS[am[1]]) {
@@ -7852,6 +7858,20 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   .upd-list li b{flex:1;font-weight:600;color:var(--head)}
   @media (max-width:1100px){.set-grid{grid-template-columns:minmax(0,1fr)}}
   @media (max-width:700px){.srow{grid-template-columns:minmax(0,1fr)}}
+  /* ikon di tombol bulat/persegi selalu di tengah */
+  .btn.icon{gap:0}
+  .btn.icon>span,.user-btn>span{display:inline-flex;align-items:center;justify-content:center;line-height:0}
+  .btn.icon svg,.user-btn svg{display:block}
+  /* tombol aksi di kepala dialog (kiri tombol X) */
+  .mh-acts{margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+  .mh .mh-acts~.x{margin-left:10px}
+  @media (max-width:600px){.mh{flex-wrap:wrap;row-gap:10px}.mh-acts{order:3;width:100%;justify-content:flex-start;margin-left:0}.mh .mh-acts~.x{margin-left:auto}}
+  /* pita "versi baru terpasang" */
+  .upd-bar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:12px;padding:9px 16px;background:var(--primary);color:#fff;font-size:13.5px;font-weight:500}
+  .upd-bar svg{width:17px;height:17px;flex:none}
+  .upd-bar .sp{flex:1}
+  .upd-bar .btn{height:30px;min-height:30px;padding:0 12px;background:#fff;color:var(--primary);border:0;font-weight:700}
+  .upd-bar .x{background:none;border:0;color:#fff;opacity:.8;cursor:pointer;display:grid;place-items:center;padding:2px}
   /* tombol mata di kolom password */
   .pw-wrap{position:relative;display:block}
   .pw-wrap>input{padding-right:42px!important}
@@ -8146,7 +8166,7 @@ function toggleTheme() {
 /* ================= Dialog ================= */
 function modal(title, body, footer, opts = {}) {
   $("#modalRoot").innerHTML = `<div class="mbg" id="mbg"><div class="modal ${opts.size || ""}" role="dialog" aria-modal="true">
-    <div class="mh"><h2>${title}</h2><button class="btn ghost icon x" data-act="closemodal" aria-label="Tutup">${ic("x")}</button></div>
+    <div class="mh"><h2>${title}</h2>${opts.head ? `<div class="mh-acts">${opts.head}</div>` : ""}<button class="btn ghost icon x" data-act="closemodal" aria-label="Tutup">${ic("x")}</button></div>
     <div class="mb${opts.flush ? " flush" : ""}">${body}</div>${footer ? `<div class="mf">${footer}</div>` : `<div style="height:18px"></div>`}</div></div>`;
   $("#mbg").addEventListener("mousedown", (e) => { if (e.target.id === "mbg") closeModal(); });
   const f = $("#modalRoot input:not([readonly]):not([type=radio]):not([type=checkbox])"); if (f) f.focus();
@@ -8273,6 +8293,8 @@ $("#loginForm").addEventListener("submit", async (e) => {
 async function load() {
   STATE = await api("/api/overview");
   LOADED = true;
+  const v = STATE.settings.version || "";
+  if (!PAGE_VER) PAGE_VER = v; else if (v && v !== PAGE_VER && !$("#mbg")) updBar();
   const U = STATE.settings.updates || {};
   const nUp = (U.panel ? 1 : 0) + (U.addons || []).length;
   $("#ver").innerHTML = (STATE.settings.version ? "v" + esc(STATE.settings.version) : "") + (nUp ? ` <a class="upd-dot" href="${U.panel ? "#/pengaturan/pembaruan" : "#/addon"}" title="${nUp} pembaruan tersedia">${nUp} pembaruan</a>` : "");
@@ -9026,10 +9048,11 @@ function adDetail(a) {
   if (a.repo) info.push(["Sumber", `<a href="${esc(a.repo)}" target="_blank" rel="noopener">${esc(a.repo.replace(/^https:\/\/github.com\//, "github.com/"))}</a>`]);
   if (a.note) info.push(["Catatan", esc(a.note)]);
   if (a.update) info.push(["Pembaruan", `<b style="color:var(--primary)">Tersedia</b>${a.update.latest ? ` · <span class="mono">${esc(a.update.latest)}</span>` : ""}${a.update.behind ? ` · ${a.update.behind} perubahan` : ""}${a.update.notes ? `<div class="muted" style="font-size:12.5px;margin-top:2px">${esc(a.update.notes)}</div>` : ""}`]);
-  const left = a.installed ? `<button class="btn ghost danger" data-add="remove">${ic("trash")}Lepas</button><span class="sp"></span>` : "";
-  const right = a.installed
-    ? `<button class="btn" data-add="check">${ic("check")}Periksa</button><button class="btn" data-add="update">${ic(a.update ? "dl" : "refresh")}Perbarui</button>${adOpen(a)}`
-    : `<button class="btn" data-act="closemodal">Tutup</button><button class="btn pri" data-add="install">${ic("dl")}Install</button>`;
+  // Aksi utama di kepala dialog (tetap terlihat walau deskripsi panjang); Lepas & Periksa di bawah
+  const head = a.installed
+    ? `<button class="btn" data-add="update">${ic(a.update ? "dl" : "refresh")}Perbarui</button>${adOpen(a)}`
+    : `<button class="btn pri" data-add="install">${ic("dl")}Install</button>`;
+  const foot = a.installed ? `<div class="ad-mf"><button class="btn ghost danger" data-add="remove">${ic("trash")}Lepas</button><span class="sp"></span><button class="btn" data-add="check">${ic("check")}Periksa</button></div>` : "";
   modal(`<span class="ad-mh">${adIcon(a, "sm")}${esc(a.name)}</span>`, `
     <div class="ad-dh"><span class="pill ${st.c}">${esc(st.t)}</span><span class="tag gray">${adCat(a)}</span></div>
     <p class="ad-lead">${esc(a.tagline || "")}</p>
@@ -9037,7 +9060,7 @@ function adDetail(a) {
     ${(a.features || []).length ? `<h3 class="ad-h3">Fitur</h3><ul class="ad-feat">${a.features.map((f) => `<li>${ic("check")}<span>${esc(f)}</span></li>`).join("")}</ul>` : ""}
     <h3 class="ad-h3">Informasi</h3>
     <dl class="ad-info">${info.map(([k, val]) => `<div><dt>${k}</dt><dd>${val}</dd></div>`).join("")}</dl>`,
-    `<div class="ad-mf">${left}${right}</div>`, { size: "md" });
+    foot, { size: "md", head });
   document.querySelectorAll("#modalRoot [data-add]").forEach((btn) => (btn.onclick = () => {
     const act = btn.dataset.add;
     if (act !== "remove") closeModal();
@@ -9060,7 +9083,7 @@ function openAddonPath(a) {
 }
 // Modal progres proses (install, update, lepas, port 80/443)
 let JOBPOLL = null;
-function openJob(after) {
+function openJob(after, opts = {}) {
   modal(`<span id="jTitle">Memproses…</span>`, `
     <div class="jtop"><div class="jp"><b id="jPct">0%</b><span id="jDetail">Memulai…</span></div><div class="jprog run" id="jBar"><i></i></div><div class="jlive" id="jLive"><span class="dot"></span><span id="jLiveTx">Menghubungi panel…</span></div></div>
     <ol class="steps" id="jSteps"></ol>
@@ -9112,9 +9135,66 @@ function openJob(after) {
       if (after) after(r);
       if (location.hash.startsWith("#/addon")) fillAddons();
       else if (location.hash.startsWith("#/pengaturan")) ROUTE_AFTER_CLOSE = true;
+      // jendela progres diganti dialog selesai (gagal: log tetap bisa dibuka dari dialog)
+      if ($("#jSteps") && !opts.review) jobDoneDialog(r);
     }
   };
   tick(); JOBPOLL = setInterval(tick, 1000);
+}
+/* ---------- Pemberitahuan proses selesai ----------
+   Muncul saat install/pembaruan/lepas add-on atau pembaruan panel selesai, juga bila
+   jendela progres sudah ditutup (tanda "job" dari server lewat data realtime). */
+const JOB_SEEN = "vpnacs-job-seen";
+function jobSeen(id) { try { return localStorage.getItem(JOB_SEEN) === id; } catch (e) { return false; } }
+function jobMark(id) { try { localStorage.setItem(JOB_SEEN, id); } catch (e) {} }
+async function jobCheckDone() {
+  if ($("#jSteps") || $("#appView").classList.contains("hidden")) return;
+  let r;
+  try { r = (await api("/api/addons/job")).job; } catch (e) { return; }
+  if (!r || !r.done || jobSeen(r.id)) return;
+  if (!r.finishedAt || Date.now() - r.finishedAt > 30 * 60e3) { jobMark(r.id); return; }
+  await load().catch(() => {});
+  if (location.hash.startsWith("#/addon")) fillAddons();
+  jobDoneDialog(r);
+}
+async function jobDoneDialog(r) {
+  jobMark(r.id);
+  clearInterval(JOBPOLL);
+  const self = r.action === "selfupdate";
+  if (self) { const ub = $("#updBar"); if (ub) ub.remove(); }
+  const big = self || r.action === "install" || r.action === "update";
+  let openBtn = "";
+  if (r.ok && r.addon && (r.action === "install" || r.action === "update")) {
+    try { const L = (await api("/api/addons")).list || []; const a = L.find((x) => x.id === r.addon); if (a && a.installed) openBtn = adOpen(a).replace("btn pri", "btn"); } catch (e) {}
+  }
+  const dur = r.elapsed ? (r.elapsed >= 60 ? `${Math.floor(r.elapsed / 60)} menit ${r.elapsed % 60} detik` : `${r.elapsed} detik`) : "";
+  const text = !r.ok ? `<p>${esc(r.error || "Proses berhenti sebelum selesai.")}</p>`
+    : self ? `<p>Panel sudah memakai versi baru${STATE.settings.version ? ` <b>v${esc(STATE.settings.version)}</b>` : ""}. Muat ulang halaman untuk memakai tampilan terbaru.</p>`
+    : big ? `<p>Selesai${dur ? ` dalam ${dur}` : ""}. Muat ulang halaman agar menu dan data terbaru langsung tampil.</p>`
+    : `<p>Selesai${dur ? ` dalam ${dur}` : ""}.</p>`;
+  const btns = !r.ok ? `<button class="btn" id="jdLog">Lihat log</button><button class="btn pri" data-act="closemodal">OK</button>`
+    : big ? `<button class="btn" id="jdLater">Nanti</button>${openBtn}<button class="btn pri" id="jdReload">${ic("refresh")}Muat ulang</button>`
+    : `<button class="btn pri" data-act="closemodal">OK</button>`;
+  $("#modalRoot").innerHTML = `<div class="mbg" id="mbg"><div class="modal dlg sm" role="dialog" aria-modal="true">
+    <div class="dlg-b"><span class="dlg-ic ${r.ok ? "ok" : "bad"}">${ic(r.ok ? "check" : "x")}</span>
+      <div style="flex:1;min-width:0"><h2>${esc(r.ok ? r.title : r.title.replace(/ (dipasang|diperbarui|dilepas|diaktifkan|dimatikan)$/, "") + " gagal")}</h2><div class="dlg-t">${text}</div></div></div>
+    <div class="mf">${btns}</div></div></div>`;
+  const later = () => { closeModal(); if (self) updBar(); };
+  $("#mbg").addEventListener("mousedown", (e) => { if (e.target.id === "mbg") later(); });
+  const rl = $("#jdReload"); if (rl) { rl.onclick = () => location.reload(); rl.focus(); }
+  const lt = $("#jdLater"); if (lt) lt.onclick = later;
+  const lg = $("#jdLog"); if (lg) lg.onclick = () => { openJob(null, { review: true }); setTimeout(() => { const d = $(".jlog"); if (d) d.open = true; }, 400); };
+  const op = $("#modalRoot a.btn"); if (op) op.addEventListener("click", () => setTimeout(closeModal, 50));
+}
+// Pita di atas halaman: versi panel di server lebih baru daripada halaman yang sedang terbuka
+let PAGE_VER = "";
+function updBar() {
+  if ($("#updBar")) return;
+  const el = document.createElement("div");
+  el.id = "updBar"; el.className = "upd-bar";
+  el.innerHTML = `${ic("dl")}<span>Versi baru panel${STATE.settings.version ? ` v${esc(STATE.settings.version)}` : ""} sudah terpasang.</span><span class="sp"></span><button class="btn" type="button">Muat ulang</button>`;
+  el.querySelector(".btn").onclick = () => location.reload();
+  const w = document.querySelector("#appView .wrap"); (w || $("#appView")).prepend(el);
 }
 
 /* ---------- Tes koneksi (popup) ---------- */
@@ -11119,7 +11199,8 @@ function liveStart() {
   ES.addEventListener("data", () => kick("data"));
   ES.addEventListener("health", () => { if ($("#dashHealth") && !document.hidden) dashHealth(); });
   ES.addEventListener("logout", () => { liveStop(); idleLogout(true); });
-  ES.onopen = () => { if (ES_OPENED) kick("sites"); ES_OPENED = true; };
+  ES.addEventListener("job", () => setTimeout(jobCheckDone, 400));
+  ES.onopen = () => { if (ES_OPENED) kick("sites"); ES_OPENED = true; jobCheckDone(); };
   ES.onerror = () => {
     if (!ES || ES.readyState !== 2) return; // 0 = browser sedang menyambung ulang sendiri
     ES = null;

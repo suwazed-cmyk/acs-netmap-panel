@@ -268,7 +268,7 @@ Penting:
 - **Port bisa diganti** di **Pengaturan → Umum → Alamat panel** (misalnya 8000/8443 bila 80/443 dipakai aplikasi lain). Alamat panel ikut memakai nomor port itu. **Kembalikan bawaan** = 80/443, **Matikan** = hanya port 8088.
 
 ### D. Menu Add-on
-Menu **Add-on**: cari add-on, klik untuk melihat detail dan fiturnya, lalu **Install**. Panel menampilkan progres langkah demi langkah (0–100%) beserta log. Add-on yang terpasang tampil di bagian **Terpasang** (dan kartu **Aplikasi** di Dashboard) dengan tombol **Buka**; Perbarui, Periksa, Ubah alamat, dan Lepas ada di menu ⋯. Aplikasi (Panel ACS, Bilingku) tidak lagi ditaruh di menu samping.
+Menu **Add-on**: cari add-on, klik untuk melihat detail dan fiturnya, lalu **Install** (tombolnya di kanan atas jendela detail). Panel menampilkan progres langkah demi langkah (0–100%) beserta log. Add-on yang terpasang tampil di bagian **Terpasang** (dan kartu **Aplikasi** di Dashboard) dengan tombol **Buka**; Perbarui, Periksa, Ubah alamat, dan Lepas ada di menu ⋯. Aplikasi (Panel ACS, Bilingku) tidak lagi ditaruh di menu samping.
 
 | Add-on | Isi | Dibuka di |
 |---|---|---|
@@ -402,6 +402,8 @@ journalctl -u zerotier-one -n 50 --no-pager
 ---
 
 ## Update dari GitHub
+Setelah add-on atau panel selesai dipasang/diperbarui, muncul dialog **selesai** dengan pilihan **Muat ulang** atau **Nanti**, walaupun jendela progres sudah ditutup. Jika memilih Nanti setelah pembaruan panel, pita biru "Versi baru panel sudah terpasang" tampil di atas halaman sampai halaman dimuat ulang.
+
 Panel memeriksa pembaruan otomatis tiap 12 jam. Jika ada versi baru, muncul tanda **pembaruan** di bawah menu samping dan di Dashboard:
 - **Panel:** Pengaturan → **Pembaruan** → **Perbarui**. Panel menjalankan `git pull` dan installer di folder repo, menyala ulang beberapa detik, lalu muat ulang halaman. (Tombol ini tersedia setelah sekali update lewat SSH dengan installer versi terbaru.)
 - **Add-on:** menu Add-on menandai add-on yang punya versi baru; klik **Perbarui**. **Periksa pembaruan** untuk mengecek saat itu juga.

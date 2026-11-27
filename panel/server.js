@@ -52,7 +52,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.19.1";
+const VERSION = "2.20.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -3486,6 +3486,12 @@ async function runJob(job, steps) {
   logActivity(job.req || null, `${job.title} ${job.ok ? "berhasil" : "gagal"}`, job.ok ? "" : job.error);
   delete job.req;
   jobSave();
+  sseSend("job", { id: job.id, ok: job.ok });
+  // Status "pembaruan tersedia" dihitung ulang supaya tanda pembaruan langsung hilang
+  if (job.ok && (job.action === "install" || job.action === "update") && UPDATES && UPDATES.addons && job.addon) {
+    delete UPDATES.addons[job.addon];
+    checkUpdates().then(() => sseSend("data")).catch(() => {});
+  }
 }
 // ---------- Pemeriksaan add-on: apakah terpasang dan berjalan dengan benar ----------
 function httpCode(opts) {
@@ -5640,7 +5646,7 @@ async function handleApi(req, res, url) {
     if (!ADDON_JOB) return send(res, 200, { job: null });
     const j = ADDON_JOB;
     const now = Date.now();
-    return send(res, 200, { job: { id: j.id, addon: j.addon, action: j.action || "", title: j.title, pct: j.pct || 0, cur: j.cur, detail: j.detail || "", steps: j.steps, log: (j.log || []).slice(-120), done: !!j.done, ok: !!j.ok, error: j.error || "", interrupted: !!j.interrupted, elapsed: Math.round(((j.done ? j.finished || now : now) - (j.started || now)) / 1000), quiet: j.done ? 0 : Math.round((now - (j.lastOut || now)) / 1000) } });
+    return send(res, 200, { job: { id: j.id, addon: j.addon, action: j.action || "", title: j.title, finishedAt: j.done ? j.finished || 0 : 0, pct: j.pct || 0, cur: j.cur, detail: j.detail || "", steps: j.steps, log: (j.log || []).slice(-120), done: !!j.done, ok: !!j.ok, error: j.error || "", interrupted: !!j.interrupted, elapsed: Math.round(((j.done ? j.finished || now : now) - (j.started || now)) / 1000), quiet: j.done ? 0 : Math.round((now - (j.lastOut || now)) / 1000) } });
   }
   const am = p.match(/^\/api\/addons\/([a-z-]+)(?:\/(install|update|remove|check))?$/);
   if (am && ADDONS[am[1]]) {
