@@ -2,6 +2,9 @@
 
 Garis besar setiap versi. Panel menampilkan poin-poin ini di Pengaturan → Pembaruan.
 
+## 2.24.1
+- Jendela tidak lagi tertutup saat menggeser batang gulir halaman
+
 ## 2.24.0
 - Web ONT memakai subdomain acak per ONT saat panel memakai domain
 - Kartu Inform berkala ONT ditata ulang

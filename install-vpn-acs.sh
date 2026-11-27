@@ -208,7 +208,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.24.0";
+const VERSION = "2.24.1";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -8455,11 +8455,29 @@ function modal(title, body, footer, opts = {}) {
   $("#modalRoot").innerHTML = `<div class="mbg" id="mbg"><div class="modal ${opts.size || ""}" role="dialog" aria-modal="true">
     <div class="mh"><h2>${title}</h2>${opts.head ? `<div class="mh-acts">${opts.head}</div>` : ""}<button class="btn ghost icon x" data-act="closemodal" aria-label="Tutup">${ic("x")}</button></div>
     <div class="mb${opts.flush ? " flush" : ""}">${body}</div>${footer ? `<div class="mf">${footer}</div>` : `<div style="height:18px"></div>`}</div></div>`;
-  $("#mbg").addEventListener("mousedown", (e) => { if (e.target.id === "mbg") closeModal(); });
+  backdropClose($("#mbg"), closeModal);
   const f = $("#modalRoot input:not([readonly]):not([type=radio]):not([type=checkbox])"); if (f) f.focus();
 }
 // Halaman yang perlu dimuat ulang setelah proses selesai, ditunda sampai jendela ditutup
 let ROUTE_AFTER_CLOSE = false;
+// Tutup jendela hanya bila klik benar-benar di latar gelap: mulai dan selesai di latar,
+// bukan di batang gulir (scrollbar) dan bukan seret dari dalam jendela
+function backdropClose(bg, fn) {
+  if (!bg) return;
+  let start = null;
+  const onBg = (e) => {
+    if (e.target !== bg) return false;
+    const r = bg.getBoundingClientRect();
+    // batang gulir: di luar area isi, atau 24px dari tepi kanan (batang gulir tipis yang melayang)
+    return e.clientX < r.left + bg.clientWidth && e.clientY < r.top + bg.clientHeight && e.clientX < r.right - 24;
+  };
+  bg.addEventListener("mousedown", (e) => { start = onBg(e) ? { x: e.clientX, y: e.clientY } : null; });
+  bg.addEventListener("click", (e) => {
+    const ok = start && onBg(e) && Math.abs(e.clientX - start.x) < 6 && Math.abs(e.clientY - start.y) < 6;
+    start = null;
+    if (ok) fn();
+  });
+}
 function closeModal() {
   if (typeof CF !== "undefined" && CF && CF.running && $("#cfSteps")) return; // proses domain sedang berjalan
   $("#modalRoot").innerHTML = ""; if (TEST && !TEST.keep) TEST = null;
@@ -8479,7 +8497,7 @@ function confirmDialog({ title, text, ok = "Lanjutkan", danger = false, icon, on
         ${check ? `<label class="chk" style="display:flex;gap:10px;align-items:flex-start;margin:14px 0 0;font-weight:500;cursor:pointer"><input type="checkbox" id="dlgChk" style="margin-top:3px;width:16px;height:16px;flex:none"><span>${check}</span></label>` : ""}
         <div class="err" id="dlgErr"></div></div></div>
     <div class="mf"><button class="btn" data-act="closemodal">Batal</button><button class="btn ${danger ? "dangerf" : "pri"}" id="dlgOk" ${check ? "disabled" : ""}>${ok}</button></div></div></div>`;
-  $("#mbg").addEventListener("mousedown", (e) => { if (e.target.id === "mbg") closeModal(); });
+  backdropClose($("#mbg"), closeModal);
   const btn = $("#dlgOk");
   if (check) { $("#dlgChk").onchange = () => { btn.disabled = !$("#dlgChk").checked; }; $("#dlgChk").focus(); } else btn.focus();
   btn.onclick = async () => {
@@ -8493,7 +8511,7 @@ function doneDialog(title, text, kind = "ok", autoClose = true) {
     <div class="dlg-b"><span class="dlg-ic ${kind}">${ic(kind === "ok" ? "check" : kind === "bad" ? "x" : "info")}</span>
       <div style="flex:1;min-width:0"><h2>${title}</h2>${text ? `<div class="dlg-t">${text}</div>` : ""}</div></div>
     <div class="mf"><button class="btn pri" data-act="closemodal" id="dlgOk">OK</button></div></div></div>`;
-  $("#mbg").addEventListener("mousedown", (e) => { if (e.target.id === "mbg") closeModal(); });
+  backdropClose($("#mbg"), closeModal);
   $("#dlgOk").focus();
   if (autoClose) { const el = $("#mbg"); setTimeout(() => { if ($("#mbg") === el) closeModal(); }, 2600); }
 }
@@ -9478,7 +9496,7 @@ async function jobDoneDialog(r) {
       <div style="flex:1;min-width:0"><h2>${esc(r.ok ? r.title : r.title.replace(/ (dipasang|diperbarui|dilepas|diaktifkan|dimatikan)$/, "") + " gagal")}</h2><div class="dlg-t">${text}</div></div></div>
     <div class="mf">${btns}</div></div></div>`;
   const later = () => { closeModal(); if (self) updBar(); };
-  $("#mbg").addEventListener("mousedown", (e) => { if (e.target.id === "mbg") later(); });
+  backdropClose($("#mbg"), later);
   const rl = $("#jdReload"); if (rl) { rl.onclick = () => location.reload(); rl.focus(); }
   const lt = $("#jdLater"); if (lt) lt.onclick = later;
   const lg = $("#jdLog"); if (lg) lg.onclick = () => { openJob(null, { review: true }); setTimeout(() => { const d = $(".jlog"); if (d) d.open = true; }, 400); };
