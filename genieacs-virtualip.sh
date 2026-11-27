@@ -1,6 +1,6 @@
 #!/bin/bash
 # =====================================================================
-#  GenieACS Virtual IP Patch (NETMAP) - untuk GenieACS v1.2.13 dari genie.sh
+#  GenieACS Virtual IP Patch (NETMAP) - untuk GenieACS v1.2.13 s/d v1.2.16
 #  Membuat GenieACS memakai IP virtual (IP pengirim Inform hasil NETMAP
 #  MikroTik) pada ConnectionRequestURL, sehingga Summon menuju IP virtual.
 #
@@ -17,7 +17,16 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VIRTUAL_CIDR="10.100.0.0/14"
-GENIE_TAG="v1.2.13"
+# Versi source mengikuti GenieACS yang terpasang (npm -g): 1.2.13 dari genie.sh, 1.2.16 dari install.sh.
+# Bisa dipaksa: GENIE_TAG=v1.2.16 bash genieacs-virtualip.sh
+installed_genie_version() {
+  local f
+  for f in /usr/lib/node_modules/genieacs/package.json /usr/local/lib/node_modules/genieacs/package.json; do
+    [ -f "$f" ] && { grep -oP '"version":\s*"\K[0-9.]+' "$f" | head -1; return; }
+  done
+}
+GV="$(installed_genie_version || true)"
+case "$GV" in 1.2.13|1.2.14|1.2.15|1.2.16) GENIE_TAG="${GENIE_TAG:-v$GV}" ;; *) GENIE_TAG="${GENIE_TAG:-v1.2.13}" ;; esac
 
 SRC_DIR="/opt/genieacs-src"
 APP_DIR="/opt/genieacs-app"
@@ -65,7 +74,8 @@ do_status() {
 
 do_rollback() {
   for s in $SERVICES; do
-    sed -i "s#^ExecStart=.*#ExecStart=/usr/bin/genieacs-$s#" "/etc/systemd/system/genieacs-$s.service"
+    local bin="/usr/bin/genieacs-$s"; [ -x "$bin" ] || bin="$(command -v "genieacs-$s" || echo "$bin")"
+    sed -i "s#^ExecStart=.*#ExecStart=${bin}#" "/etc/systemd/system/genieacs-$s.service"
   done
   sed -i '/^GENIEACS_CR_USE_REMOTE_ADDRESS=/d' "$ENV_FILE"
   restart_all
@@ -74,8 +84,9 @@ do_rollback() {
 
 do_install() {
   echo -e "${GREEN}== Install paket pendukung ==${NC}"
-  apt-get update -qq
-  apt-get install -y -qq git python3 ca-certificates >/dev/null
+  export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1
+  apt-get -o DPkg::Lock::Timeout=900 update -qq </dev/null
+  apt-get -o DPkg::Lock::Timeout=900 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install -y -qq git python3 ca-certificates </dev/null >/dev/null
   ok "git & python3 siap"
 
   echo -e "${GREEN}== Ambil source GenieACS ${GENIE_TAG} ==${NC}"
@@ -257,7 +268,7 @@ PYEOF
   echo "Cek: journalctl -u genieacs-cwmp -n 20 | grep version  (harus ada '+' di versi)"
   local summary
   summary="$SCRIPT_DIR/ringkasan.sh"
-  [ -f "$summary" ] && bash "$summary"
+  [ -f "$summary" ] && [ -z "${VPNACS_NO_SUMMARY:-}" ] && bash "$summary"
 }
 
 case "${1:-install}" in

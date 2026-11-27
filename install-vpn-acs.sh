@@ -5,7 +5,8 @@
 #  script MikroTik siap salin (IP virtual / NETMAP), dan port forwarding
 #  untuk remote MikroTik / perangkat lokasi lewat IP publik VPS.
 #
-#  Syarat: vpnsetup.sh (L2TP/IPsec) dan genie.sh sudah terpasang di VPS.
+#  Syarat: L2TP/IPsec, MongoDB, Node.js, dan GenieACS sudah terpasang.
+#  Cara termudah: jalankan install.sh (memasang semuanya, lalu panel ini).
 #
 #  Pemakaian (sebagai root):
 #    bash install-vpn-acs.sh              -> pasang / perbarui panel
@@ -29,11 +30,23 @@ fail() { echo -e "${RED}[GAGAL]${NC} $*"; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || fail "Jalankan sebagai root"
 NODE_BIN="$(command -v node || true)"
-[ -n "$NODE_BIN" ] || fail "Node.js tidak ditemukan. Jalankan genie.sh dulu."
+[ -n "$NODE_BIN" ] || fail "Node.js tidak ditemukan. Jalankan install.sh (memasang semua komponen)."
 
 DEFAULT_ADMIN_PW="Admin123"
 ask_password() {
   local p1 p2
+  # install.sh mengirim password acak lewat variabel ini (tanpa pertanyaan)
+  if [ -n "${VPNACS_ADMIN_PASSWORD:-}" ]; then
+    "$NODE_BIN" "$APP_DIR/server.js" --set-password "$VPNACS_ADMIN_PASSWORD"
+    return
+  fi
+  if [ ! -t 0 ]; then
+    p1="$(openssl rand -base64 18 2>/dev/null | tr -dc 'A-Za-z0-9' | head -c 12)"
+    [ ${#p1} -ge 8 ] || p1="$DEFAULT_ADMIN_PW"
+    "$NODE_BIN" "$APP_DIR/server.js" --set-password "$p1"
+    warn "Tidak ada terminal untuk bertanya: password admin dibuat acak: $p1"
+    return
+  fi
   while true; do
     read -r -s -p "Password admin panel (Enter = ${DEFAULT_ADMIN_PW}): " p1; echo
     if [ -z "$p1" ]; then p1="$DEFAULT_ADMIN_PW"; break; fi
@@ -72,15 +85,18 @@ if [ "${1:-}" = "uninstall" ]; then
 fi
 
 # ---------- Alat yang dibutuhkan ----------
+export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1
+APT_OPT=(-o DPkg::Lock::Timeout=900 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
+command -v iptables >/dev/null 2>&1 || apt-get "${APT_OPT[@]}" install -y -qq iptables </dev/null >/dev/null 2>&1 || true
 command -v iptables >/dev/null 2>&1 || fail "iptables tidak ditemukan. Pasang dulu: apt install iptables"
 if ! command -v ping >/dev/null 2>&1; then
-  apt-get install -y -qq iputils-ping >/dev/null 2>&1 && ok "ping terpasang (untuk Tes Koneksi)" || warn "Gagal memasang ping, Tes Koneksi melewati langkah ping"
+  apt-get "${APT_OPT[@]}" install -y -qq iputils-ping </dev/null >/dev/null 2>&1 && ok "ping terpasang (untuk Tes Koneksi)" || warn "Gagal memasang ping, Tes Koneksi melewati langkah ping"
 fi
 # certbot + plugin Cloudflare: untuk HTTPS panel (menu Pengaturan > Domain & HTTPS)
 if ! command -v certbot >/dev/null 2>&1 || ! dpkg -s python3-certbot-dns-cloudflare >/dev/null 2>&1; then
   echo "Memasang certbot (untuk HTTPS panel)..."
-  if DEBIAN_FRONTEND=noninteractive apt-get install -y -qq certbot python3-certbot-dns-cloudflare >/dev/null 2>&1 || \
-     { apt-get update -qq >/dev/null 2>&1 && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq certbot python3-certbot-dns-cloudflare >/dev/null 2>&1; }; then
+  if apt-get "${APT_OPT[@]}" install -y -qq certbot python3-certbot-dns-cloudflare </dev/null >/dev/null 2>&1 || \
+     { apt-get "${APT_OPT[@]}" update -qq </dev/null >/dev/null 2>&1 && apt-get "${APT_OPT[@]}" install -y -qq certbot python3-certbot-dns-cloudflare </dev/null >/dev/null 2>&1; }; then
     ok "certbot terpasang (HTTPS panel siap dipakai)"
   else
     warn "Gagal memasang certbot. Domain Cloudflare tetap bisa dipakai, tetapi HTTPS panel tidak."
@@ -93,16 +109,16 @@ grep -qs '^net.ipv4.ip_forward *= *1' /etc/sysctl.conf /etc/sysctl.d/*.conf || e
 ok "IP forwarding aktif (dibutuhkan port forwarding)"
 
 # ---------- Cek server VPN ----------
-[ -f /etc/ppp/chap-secrets ] || warn "/etc/ppp/chap-secrets tidak ada. Pasang VPN dengan vpnsetup.sh dulu."
+[ -f /etc/ppp/chap-secrets ] || warn "/etc/ppp/chap-secrets tidak ada. Pasang VPN dengan install.sh dulu."
 [ -f /etc/ipsec.secrets ] || warn "/etc/ipsec.secrets tidak ada. PSK tidak bisa dibaca otomatis."
 
 # ---------- Jaringan VPN ----------
 # "local ip" dan "ip range" di /etc/xl2tpd/xl2tpd.conf diatur otomatis oleh panel
 # (separuh awal subnet = IP tetap MikroTik, separuh akhir = pool dinamis).
-[ -f "$XL2TPD_CONF" ] || warn "$XL2TPD_CONF tidak ditemukan. Pasang VPN dengan vpnsetup.sh dulu."
+[ -f "$XL2TPD_CONF" ] || warn "$XL2TPD_CONF tidak ditemukan. Pasang VPN dengan install.sh dulu."
 
 # ---------- Izinkan L2TP tanpa IPsec ----------
-# vpnsetup.sh (hwdsl2) memblokir L2TP yang tidak memakai IPsec.
+# vpnsetup.sh (hwdsl2, instalasi lama) memblokir L2TP yang tidak memakai IPsec.
 # Aturan ACCEPT ditaruh paling atas agar L2TP biasa bisa masuk.
 IPT_RULE="-p udp --dport 1701 -m comment --comment vpn-acs-l2tp -j ACCEPT"
 persist_rule() {
@@ -195,7 +211,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.9.0";
+const VERSION = "2.9.1";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -4591,6 +4607,12 @@ async function vpsHealth(d) {
   }
   // Layanan: inti panel + yang terpasang
   const units = [["vpn-acs", "Panel"], ["xl2tpd", "VPN L2TP"], ...GENIE_UNITS.map(([u, l]) => [u, "GenieACS " + l.replace(/\s*\(.*\)/, "")]), ["mongod", "MongoDB"]];
+  // IPsec hanya ditampilkan bila dipakai (libreswan: ipsec, strongSwan: strongswan-starter / strongswan)
+  if (d.settings && d.settings.useIpsec) {
+    for (const u of ["ipsec", "strongswan-starter", "strongswan"]) {
+      if ((await unitInfo(u)).loaded) { units.splice(2, 0, [u, "IPsec"]); break; }
+    }
+  }
   if (addonInstalled(d, "zerotier")) units.push(["zerotier-one", "ZeroTier"]);
   if (ADDONS.wireguard && addonInstalled(d, "wireguard")) units.push([`wg-quick@${WG_IFACE}`, "WireGuard"]);
   for (const [id, a] of Object.entries(ADDONS)) if (a.kind === "aplikasi" && addonInstalled(d, id)) units.push([`addon-${id}`, a.name]);
@@ -6159,6 +6181,23 @@ if (process.argv[2] === "--set-password") {
   saveData(d);
   console.log("Password admin disimpan.");
   process.exit(0);
+} else if (process.argv[2] === "--genie-inform") {
+  // Dipakai install.sh: pasang provision "inform berkala" ke GenieACS (dilewati bila sudah ada)
+  (async () => {
+    const iv = Math.min(3600, Math.max(60, parseInt(process.argv[3], 10) || 300));
+    for (let i = 0; i < 20; i++) {
+      const cur = await genieInformPreset();
+      if (!cur.error) {
+        if (cur.installed) { console.log("Inform berkala sudah ada" + (cur.interval ? ` (tiap ${cur.interval} detik)` : "") + ", dilewati."); process.exit(0); }
+        const r = await genieInformInstall(iv);
+        if (r.ok) { console.log(`Inform berkala dipasang: tiap ${iv} detik (provision ${INFORM_PROV}).`); process.exit(0); }
+        console.error(r.error); process.exit(1);
+      }
+      await new Promise((ok) => setTimeout(ok, 3000));
+    }
+    console.error("GenieACS NBI tidak menjawab di " + nbiBase());
+    process.exit(1);
+  })();
 } else {
   // Sinkronkan berkas saat panel dinyalakan
   (async () => {

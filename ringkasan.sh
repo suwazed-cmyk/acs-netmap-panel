@@ -143,7 +143,7 @@ if svc_exists xl2tpd; then
   UDP_OPEN+=("1701|L2TP")
 else
   line "Status" "${DIM}belum dipasang${NC}"
-  MISSING+=("VPN L2TP           : lihat README langkah 3 (vpnsetup.sh)")
+  MISSING+=("VPN L2TP           : jalankan bash install.sh")
 fi
 
 # ---------- GenieACS ----------
@@ -172,7 +172,7 @@ if [ -f "$GENIE_ENV" ] || svc_exists genieacs-cwmp; then
   TCP_OPEN+=("${UI_PORT}|GenieACS UI")
 else
   line "Status" "${DIM}belum dipasang${NC}"
-  MISSING+=("GenieACS           : lihat README langkah 4 (genie.sh)")
+  MISSING+=("GenieACS           : jalankan bash install.sh")
 fi
 
 # ---------- ZeroTier (opsional) ----------

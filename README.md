@@ -36,8 +36,9 @@ ONT ─ OLT ─ MikroTik router C ═══ VPN L2TP / WireGuard / ZeroTier ═�
 
 | File | Fungsi |
 |---|---|
-| `install-vpn-acs.sh` | Installer Panel VPN ACS (sudah berisi seluruh panel) |
-| `genieacs-virtualip.sh` | Patch IP virtual untuk GenieACS v1.2.13 |
+| `install.sh` | **Installer satu perintah**: L2TP/IPsec, MongoDB, Node.js, GenieACS, patch, panel |
+| `install-vpn-acs.sh` | Installer Panel VPN ACS saja (sudah berisi seluruh panel) |
+| `genieacs-virtualip.sh` | Patch IP virtual untuk GenieACS v1.2.13–v1.2.16 |
 | `ringkasan.sh` | Ringkasan semua layanan: alamat web, port, status, port firewall |
 | `cek.sh` | Tes semua layanan: service, port, web menjawab, patch, sertifikat, DNS |
 | `bersihkan.sh` | Menghapus pengaturan yang dipasang repo ini dari VPS |
@@ -48,12 +49,20 @@ ONT ─ OLT ─ MikroTik router C ═══ VPN L2TP / WireGuard / ZeroTier ═�
 | | Minimal | Disarankan |
 |---|---|---|
 | Virtualisasi | **KVM** (bukan OpenVZ/LXC) | KVM |
-| OS | **Ubuntu 22.04 LTS 64-bit** | Ubuntu 22.04 LTS 64-bit |
-| CPU / RAM | 1 vCPU / 2 GB | 2 vCPU / 4 GB |
+| OS | Ubuntu 20.04 / 22.04 / 24.04, Debian 11 / 12 (64-bit) | **Ubuntu 22.04 / 24.04 LTS** |
+| CPU | x86_64 atau arm64 | x86_64 dengan AVX |
+| RAM | 1 GB (installer menambah swap 2 GB) | 2–4 GB |
 | Disk | 25 GB SSD | 40 GB SSD/NVMe |
 | IP | 1 IPv4 publik statis | 1 IPv4 publik statis |
 
-Jangan pakai Ubuntu 24.04: MongoDB 4.4 dari `genie.sh` kemungkinan gagal terpasang.
+MongoDB dipilih otomatis oleh installer:
+
+| CPU | MongoDB |
+|---|---|
+| x86_64 dengan AVX, arm64 ARMv8.2+ | **8.0** (repo resmi MongoDB), semua OS di atas (Debian hanya x86_64) |
+| x86_64 tanpa AVX | **4.4** di Ubuntu 20.04/22.04 dan Debian 11/12; Ubuntu 24.04 tidak bisa (pakai 22.04) |
+
+Cek AVX: `grep -c avx /proc/cpuinfo` (0 = tanpa AVX). Banyak VPS murah menyembunyikan AVX; minta provider memakai CPU mode *host-passthrough*.
 
 Selain VPS: MikroTik (RouterOS v6 atau v7) dengan akses Winbox, dan ONT yang mendukung TR-069.
 
@@ -61,8 +70,8 @@ Selain VPS: MikroTik (RouterOS v6 atau v7) dengan akses Winbox, dan ONT yang men
 
 | Tahap | Langkah | Hasil |
 |---|---|---|
-| **A. Siapkan VPS** | 1–2 | VPS siap, repo terunduh |
-| **B. Pasang layanan** | 3–7 | L2TP, GenieACS, patch IP virtual, panel berjalan, port terbuka |
+| **A. Pasang di VPS** | 1 | Satu perintah: L2TP/IPsec, MongoDB, Node.js, GenieACS, patch IP virtual, panel |
+| **B. Buka port** | 7 | Port firewall provider terbuka |
 | **C. Hubungkan router** | 8–11 | Router tersambung, ONT muncul di GenieACS, Summon berhasil |
 | **D. Fitur opsional** | — | Telegram, domain + HTTPS, ZeroTier, WireGuard (bisa kapan saja, tidak wajib) |
 
@@ -72,77 +81,66 @@ Setelah setiap langkah, Anda bisa menjalankan `bash ringkasan.sh` (alamat web da
 
 ## Instalasi inti
 
-### 1. Persiapan VPS
+### 1. Pasang semuanya (satu perintah)
+Login ke VPS sebagai **root**, lalu jalankan:
 ```bash
-apt update && apt upgrade -y
-timedatectl set-timezone Asia/Makassar
-apt install -y curl wget git nano openssl iputils-ping
-
-# swap 2 GB
-fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
-echo '/swapfile none swap sw 0 0' >> /etc/fstab
-
-# cek: harus kvm, Ubuntu 22.04, dan kernel tanpa kata "cloud"
-systemd-detect-virt
-lsb_release -a
-uname -r
+curl -fsSL https://raw.githubusercontent.com/suwazed-cmyk/acs-netmap-panel/main/install.sh | bash
 ```
-Ganti `Asia/Makassar` dengan zona waktu Anda (`Asia/Jakarta` untuk WIB, `Asia/Jayapura` untuk WIT).
-
-### 2. Ambil repo ini
+Atau dari folder repo:
 ```bash
-cd /root
-git clone https://github.com/suwazed-cmyk/acs-netmap-panel.git
-cd acs-netmap-panel
+git clone https://github.com/suwazed-cmyk/acs-netmap-panel.git /root/acs-netmap-panel
+bash /root/acs-netmap-panel/install.sh
 ```
 
-### 3. Server VPN L2TP
-```bash
-wget -O /root/vpnsetup.sh https://raw.githubusercontent.com/beryindo/genieacs/refs/heads/main/vpnsetup.sh
-bash /root/vpnsetup.sh
-systemctl status xl2tpd --no-pager | head -5
-```
-Status harus `active (running)`.
+Tidak ada pertanyaan selama pemasangan. Layar menampilkan **progress bar** per langkah (±10–15 menit di VPS 2 vCPU; paling lama saat membangun patch GenieACS):
 
-### 4. GenieACS
-`genie.sh` mengunduh `libssl1.1` dari `ftp.debian.org`, yang sering macet. Baris `sed` di bawah mengganti sumbernya ke server Ubuntu:
-```bash
-wget -O /root/genie.sh https://raw.githubusercontent.com/beryindo/genieacs/refs/heads/main/genie.sh
-sed -i 's#https://ftp.debian.org/debian/pool/main/o/openssl/libssl1.1_1.1.1w-0+deb11u1_amd64.deb#http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2.24_amd64.deb#; s#dpkg -i libssl1.1_1.1.1w-0+deb11u1_amd64.deb#dpkg -i libssl1.1_1.1.1f-1ubuntu2.24_amd64.deb#' /root/genie.sh
-grep -n "libssl" /root/genie.sh
-bash /root/genie.sh
 ```
-Ketik `y` saat ditanya. Cek: `systemctl status mongod genieacs-cwmp genieacs-ui --no-pager | grep -E "●|Active"`
-
-**Perbaikan keamanan (wajib):** ganti kunci login GenieACS UI dan tutup NBI dari internet.
-```bash
-sed -i "s/^GENIEACS_UI_JWT_SECRET=.*/GENIEACS_UI_JWT_SECRET=$(openssl rand -hex 32)/" /opt/genieacs/genieacs.env
-grep -q '^GENIEACS_NBI_INTERFACE=' /opt/genieacs/genieacs.env \
-  && sed -i 's/^GENIEACS_NBI_INTERFACE=.*/GENIEACS_NBI_INTERFACE=127.0.0.1/' /opt/genieacs/genieacs.env \
-  || echo 'GENIEACS_NBI_INTERFACE=127.0.0.1' >> /opt/genieacs/genieacs.env
-systemctl restart genieacs-cwmp genieacs-nbi genieacs-fs genieacs-ui
+ ✓ [1/10] Menyiapkan sistem (paket dasar, swap) (48d)
+ ✓ [2/10] Mengambil source ACS NETMAP Panel (3d)
+ ✓ [3/10] Memasang VPN L2TP/IPsec (21d)
+ [████████████░░░░░░░░░░░░░░░░░░]  41%  ⠹ [4/10] Memasang MongoDB 8.0 (1m 05d)
 ```
 
-### 5. Patch IP virtual GenieACS
+Yang dipasang (semua dari sumber resmi, bukan script pihak ketiga):
+
+| Komponen | Sumber | Catatan |
+|---|---|---|
+| VPN L2TP/IPsec | paket Ubuntu/Debian: `xl2tpd`, `strongswan` | PSK acak, jaringan VPN `192.168.42.0/24` (bisa diganti di panel) |
+| MongoDB | repo resmi `repo.mongodb.org` | 8.0, atau 4.4 bila CPU tanpa AVX (lihat tabel di atas); hanya untuk lokal |
+| Node.js 22 | rilis resmi `nodejs.org`, dicek SHA256 | dipasang ke `/usr/local` |
+| GenieACS 1.2.16 | npm resmi, susunan sesuai dokumentasi GenieACS | `/opt/genieacs/genieacs.env`, log di `/var/log/genieacs`, JWT acak, **NBI hanya 127.0.0.1** |
+| Patch IP virtual | `genieacs-virtualip.sh` (repo ini) | dibangun dari source GenieACS versi yang terpasang |
+| Panel VPN ACS | `install-vpn-acs.sh` (repo ini) | password admin acak |
+| Inform berkala | provision `vpnacs-inform` | ONT melapor tiap 300 detik (bisa diubah di menu GenieACS) |
+
+Di akhir muncul ringkasan: **alamat panel, password admin, alamat GenieACS UI, URL ACS untuk ONT, dan PSK**. Ringkasan yang sama disimpan di **`/root/acs-netmap-info.txt`** (hanya root). Catat password admin, lalu hapus berkas itu bila sudah aman.
+
+Log lengkap pemasangan: **`/var/log/acs-netmap-install.log`**. Bila satu langkah gagal, layar menampilkan keluaran terakhir langkah itu. Perbaiki penyebabnya lalu jalankan **perintah yang sama** lagi; langkah yang sudah selesai tidak diulang.
+
+**VPS yang sudah terpasang** (cara lama dengan `vpnsetup.sh` dan `genie.sh`): installer mendeteksi L2TP, MongoDB, Node.js, GenieACS, dan patch yang sudah ada lalu **tidak mengubahnya**; hanya panel yang diperbarui dan password admin lama tetap dipakai.
+
+**Tanpa SSH (user-data / cloud-init):** banyak provider punya kolom *User data* / *Startup script* saat membuat VPS. Isi dengan:
+```bash
+#!/bin/bash
+curl -fsSL https://raw.githubusercontent.com/suwazed-cmyk/acs-netmap-panel/main/install.sh | bash
+```
+Setelah VPS menyala ±15 menit, login lalu baca `cat /root/acs-netmap-info.txt`.
+
+Zona waktu panel diatur di **Pengaturan → Umum**. Zona waktu sistem bisa diganti dengan `timedatectl set-timezone Asia/Makassar` (WITA), `Asia/Jakarta` (WIB), atau `Asia/Jayapura` (WIT).
+
+<details>
+<summary>Perintah satu per satu (bila ingin memasang manual)</summary>
+
 ```bash
 cd /root/acs-netmap-panel
-bash genieacs-virtualip.sh
+bash install-vpn-acs.sh          # hanya panel (butuh L2TP, Node.js, GenieACS sudah ada)
+bash genieacs-virtualip.sh       # hanya patch IP virtual (GenieACS 1.2.13–1.2.16)
+bash genieacs-virtualip.sh status
 ```
-Di akhir muncul ringkasan. Cek patch: `bash genieacs-virtualip.sh status`
-
-Rentang IP virtual tidak perlu diatur di sini. Setelah panel terpasang, **panel mengatur rentangnya sendiri** mengikuti IP virtual setiap router: rentang otomatis `10.100.0.0/14` ditambah IP virtual yang Anda isi sendiri (misalnya `172.16.10.0/24`). Lihat menu **GenieACS** di panel.
-
-### 6. Panel VPN ACS
-```bash
-cd /root/acs-netmap-panel
-bash install-vpn-acs.sh
-```
-Saat ditanya password admin, tekan **Enter** untuk memakai password bawaan **`Admin123`**, atau ketik password sendiri (minimal 8 karakter).
-
-Di akhir instalasi muncul **ringkasan**: alamat web panel dan GenieACS, URL ACS untuk ONT, status layanan, dan port yang harus dibuka.
+</details>
 
 ### 7. Firewall provider
-Jangan menyalakan `ufw` karena bentrok dengan aturan VPN. Buka port berikut di firewall provider VPS (jika ada):
+Jangan menyalakan `ufw` karena bentrok dengan aturan VPN (bila sudah menyala, installer membuka port yang dibutuhkan). Buka port berikut di firewall provider VPS (jika ada):
 
 | Port | Protokol | Untuk |
 |---|---|---|
@@ -165,18 +163,18 @@ bash cek.sh
 Setiap pemeriksaan diberi tanda **[OK]**, **[PERINGATAN]**, atau **[GAGAL]**. Baris yang gagal disertai perintah untuk memperbaikinya. Komponen yang belum dipasang ditandai **[LEWATI]**.
 
 ### 8. Atur panel dan GenieACS (sekali di awal)
-Buka `http://IP_VPS` lalu login dengan password `Admin123` (jika saat instal Anda cukup menekan Enter), lalu **segera ganti password** di Pengaturan. Jika port 80 dipakai program lain, buka `http://IP_VPS:8088`.
+Buka `http://IP_VPS` lalu login dengan **password admin dari ringkasan instalasi** (`cat /root/acs-netmap-info.txt`). Jika port 80 dipakai program lain, buka `http://IP_VPS:8088`.
 
 Menu **Pengaturan → Umum**:
 1. **Nama panel** (opsional), misalnya `INET WIFI`. Dipakai di judul panel dan sebagai komentar aturan di MikroTik (`INET WIFI - ONT ke IP virtual`). Bisa diganti kapan saja; script baru otomatis membersihkan aturan dengan nama lama.
 2. **Alamat VPS**: IP publik VPS (atau domain). Alamat ini dipakai di script MikroTik.
 3. **Pakai IPsec**: biarkan mati (L2TP biasa), kecuali Anda memang butuh.
 4. **Jaringan VPN (L2TP)**: tentukan **sekarang** (bawaan `192.168.42.0/24`). Mengganti belakangan berarti URL ACS di semua ONT ikut berubah.
-5. **Password admin**: ganti jika masih `Admin123`. Selama belum diganti, dashboard menampilkan peringatan.
+5. **Password admin**: bisa diganti dengan password Anda sendiri. Instalasi lama yang masih memakai `Admin123` mendapat peringatan di dashboard sampai diganti.
 
 Menu **GenieACS**: pastikan **Patch IP virtual** berstatus **Aktif** dan keempat layanan **Berjalan**. Kartu ini juga menampilkan rentang IP virtual yang dipakai GenieACS. Kolom **Rentang tambahan** hanya perlu diisi jika Anda punya ONT dengan IP virtual buatan sendiri di luar panel.
 
-Buka **GenieACS UI** di `http://IP_VPS:3000`. Jika muncul *initialization wizard*, buat akun admin dan centang **Users saja** agar konfigurasi dari repo beryindo tidak tertimpa.
+Buka **GenieACS UI** di `http://IP_VPS:3000`. Pada pemasangan baru muncul *initialization wizard*: buat akun admin dan biarkan semua pilihan dicentang (Users, Presets, Provisions, Overview, Device page). Pada VPS lama yang dipasang dengan `genie.sh`, centang **Users saja** agar konfigurasi yang sudah ada tidak tertimpa.
 
 ### 9. Tambah router
 Panel → **Tambah router**:

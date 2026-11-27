@@ -189,10 +189,18 @@ head1 "VPN L2TP"
 if svc_exists xl2tpd; then
   cek_svc xl2tpd "Server L2TP"
   cek_udp 1701 "L2TP" "systemctl restart xl2tpd"
+  IPSEC_UNIT=""
+  for u in ipsec strongswan-starter strongswan; do svc_exists "$u" && { IPSEC_UNIT="$u"; break; }; done
   if [ "$(panel_get useIpsec)" = "1" ]; then
-    cek_svc ipsec "IPsec"
+    if [ -n "$IPSEC_UNIT" ]; then cek_svc "$IPSEC_UNIT" "IPsec"
+    else bad "IPsec dinyalakan di panel, tapi layanan IPsec tidak ada" "bash install.sh"; fi
     cek_udp 500 "IPsec"; cek_udp 4500 "IPsec NAT-T"
+  elif [ -n "$IPSEC_UNIT" ]; then
+    if [ "$(systemctl is-active "$IPSEC_UNIT" 2>/dev/null)" = "active" ]; then ok "IPsec siap dipakai ($IPSEC_UNIT), saat ini dimatikan di panel"
+    else skip "IPsec tidak berjalan ($IPSEC_UNIT), tidak dipakai karena dimatikan di panel"; fi
   fi
+  if grep -qs 'PSK' /etc/ipsec.secrets; then ok "PSK IPsec tersedia (/etc/ipsec.secrets)"
+  else warn "PSK IPsec tidak ditemukan di /etc/ipsec.secrets" "bash install.sh"; fi
   PEERS=$(ip -o -4 addr show 2>/dev/null | awk '$2 ~ /^ppp/' | wc -l)
   SITES="$(panel_get sites)"
   if [ -n "$SITES" ] && [ "$SITES" != "0" ]; then
@@ -201,13 +209,22 @@ if svc_exists xl2tpd; then
     ok "Router tersambung lewat L2TP: ${PEERS}"
   fi
 else
-  skip "L2TP belum dipasang (README langkah 3)"
+  skip "L2TP belum dipasang (bash install.sh)"
 fi
 
 # ---------- GenieACS ----------
 head1 "GenieACS"
 if [ -f "$GENIE_ENV" ] || svc_exists genieacs-cwmp; then
   cek_svc mongod "MongoDB"
+  MV="$(mongod --version 2>/dev/null | grep -oP 'db version v\K[0-9.]+' | head -1)"
+  [ -n "$MV" ] && ok "Versi MongoDB: $MV"
+  a="$(listen_tcp 27017)"
+  if [ -z "$a" ]; then bad "MongoDB tidak mendengarkan port 27017" "journalctl -u mongod -n 50 --no-pager"
+  elif echo "$a" | grep -qE '^127\.0\.0\.1:|^\[::1\]:'; then ok "MongoDB hanya untuk lokal ($a)"
+  else warn "MongoDB terbuka untuk semua alamat ($a)" "Isi bindIp: 127.0.0.1 di /etc/mongod.conf lalu systemctl restart mongod"; fi
+  [ -n "$NODE_BIN" ] && ok "Node.js: $("$NODE_BIN" -v 2>/dev/null)"
+  GV="$(grep -hoP '"version":\s*"\K[0-9.]+' /usr/lib/node_modules/genieacs/package.json /usr/local/lib/node_modules/genieacs/package.json 2>/dev/null | head -1)"
+  [ -n "$GV" ] && ok "Versi GenieACS: $GV"
   for s in cwmp nbi fs ui; do cek_svc "genieacs-$s" "GenieACS $s"; done
   UI_PORT="$(grep -oP '^GENIEACS_UI_PORT=\K[0-9]+' "$GENIE_ENV" 2>/dev/null)"; UI_PORT="${UI_PORT:-3000}"
   CWMP_PORT="$(grep -oP '^GENIEACS_CWMP_PORT=\K[0-9]+' "$GENIE_ENV" 2>/dev/null)"; CWMP_PORT="${CWMP_PORT:-7547}"
@@ -236,7 +253,7 @@ if [ -f "$GENIE_ENV" ] || svc_exists genieacs-cwmp; then
   elif [ -n "$CIDR" ]; then bad "Setting IP virtual ada, tapi GenieACS belum memakai versi patch" "bash genieacs-virtualip.sh"
   else bad "Patch IP virtual belum aktif (Summon ke ONT akan gagal)" "bash genieacs-virtualip.sh"; fi
 else
-  skip "GenieACS belum dipasang (README langkah 4)"
+  skip "GenieACS belum dipasang (bash install.sh)"
 fi
 
 # ---------- ZeroTier ----------
