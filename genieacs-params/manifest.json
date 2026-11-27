@@ -1,6 +1,0 @@
-{
-  "version": "1.0.0",
-  "provision": "acsnm-params",
-  "virtualParameters": ["RXPower", "gettemp", "getponmode", "getSerialNumber", "PonMac", "IPTR069", "pppoeIP", "pppoeUsername", "pppoeUsername2", "pppoeMac", "getdeviceuptime", "getpppuptime", "activedevices", "getSSID"],
-  "ui": { "replace": ["ui/index.json", "ui/filters.json"], "add": ["ui/overview.json"], "pageSize": 50 }
-}

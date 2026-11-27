@@ -2,6 +2,12 @@
 
 Garis besar setiap versi. Panel menampilkan poin-poin ini di Pengaturan → Pembaruan.
 
+## 2.26.0
+- GenieACS dipasang tanpa parameter bawaan; parameter ONT dipilih dari katalog pihak ketiga
+- Kumpulan SafriNetwork bisa dipasang sekali klik, diunduh langsung dari GitHub pembuatnya
+- Bagian yang mengubah akun ACS dan akses web ONT dilewati; tampilan lama dikembalikan saat dihapus
+- Parameter standar versi 2.25.0 dibersihkan otomatis
+
 ## 2.25.0
 - Parameter standar ONT: kolom SN, PPPoE, redaman, suhu, IP, SSID, dan klien WiFi di GenieACS UI terisi otomatis
 - Mendukung TR-098 dan TR-181 untuk semua merek umum, hanya membaca data ONT

@@ -113,7 +113,7 @@ Yang dipasang (semua dari sumber resmi, bukan script pihak ketiga):
 | Patch IP virtual | `genieacs-virtualip.sh` (repo ini) | dibangun dari source GenieACS versi yang terpasang |
 | Panel VPN ACS | `install-vpn-acs.sh` (repo ini) | password admin dibuat sendiri di wizard |
 | Inform berkala | provision `vpnacs-inform` | ONT melapor tiap 300 detik (bisa diubah di menu GenieACS) |
-| Parameter standar ONT | folder `genieacs-params` (repo ini) | opsional, dipasang dari menu GenieACS |
+| Parameter ONT | katalog pihak ketiga (mis. SafriNetwork) | opsional, dipasang dari menu GenieACS |
 
 Di akhir muncul ringkasan: **alamat panel, alamat GenieACS UI, dan PSK**. Ringkasan yang sama disimpan di **`/root/acs-netmap-info.txt`** (hanya root).
 
@@ -334,13 +334,17 @@ Penyebab paling umum: **inform berkala ONT** terlalu jarang (misalnya 1 jam atau
 
 Menu **GenieACS → Inform berkala ONT** menampilkan sebaran interval semua ONT. Klik **Perbaiki semua ONT** (bawaan tiap 4 menit): panel memasang provision `vpnacs-inform` + preset di GenieACS yang menyalakan inform berkala di setiap ONT. Berlaku saat ONT melapor berikutnya.
 
-### I. Parameter standar ONT (kolom GenieACS UI)
-GenieACS baru belum punya virtual parameter, sehingga kolom IP, SSID, dan redaman di GenieACS UI kosong. **GenieACS → Pengaturan → Parameter standar ONT → Pasang** memasang isi folder [`genieacs-params`](genieacs-params/):
-- 14 virtual parameter **hanya baca**: SN, PPPoE (username, IP, MAC, uptime), IP WAN TR-069, redaman RX, suhu, SSID, jumlah klien WiFi, uptime, GPON/EPON/Ethernet. Mendukung TR-098 dan TR-181 (ZTE, Huawei, FiberHome, C-Data, Nokia, Realtek, dan ONT OEM CMCC/CT-COM/CU).
-- Provision + preset `acsnm-params` yang menyegarkannya berkala (data cepat tiap 5 menit, PPPoE/SSID tiap jam, SN/MAC tiap hari).
-- Kolom dan filter daftar perangkat, grafik **Kondisi ONT** (redaman, suhu, jenis jalur), dan 50 ONT per halaman.
+### I. Parameter ONT (kolom GenieACS UI)
+GenieACS dipasang polos, tanpa virtual parameter, sehingga kolom IP, SSID, dan redaman di GenieACS UI kosong. **GenieACS → Pengaturan → Parameter ONT** berisi katalog kumpulan parameter pihak ketiga. Klik **Pasang** untuk mengunduhnya langsung dari GitHub pembuatnya.
 
-Pemasangan lewat NBI tanpa menghapus provision lain. Parameter bernama sama dan tampilan GenieACS UI lama disimpan dulu, lalu dikembalikan bila parameter standar dihapus (ikon 🗑). Versi baru ikut pembaruan panel dan ditandai **Pembaruan** di kartu yang sama.
+| Kumpulan | Sumber | Isi |
+|---|---|---|
+| SafriNetwork | [safrinnetwork/GACS-Ubuntu-22.04](https://github.com/safrinnetwork/GACS-Ubuntu-22.04/tree/main/parameter) (disusun dari alijayanet, beryindo, R-Tech) | 19 virtual parameter, provision `default` dan `bootstrap`, tampilan GenieACS UI lengkap dengan tombol Summon |
+
+- Bagian yang mengubah ONT **dilewati**: provision `inform` (mengganti akun ACS), bagian *Remot Wan* di provision `default` (mengubah akses web/firewall ONT), dan pengosongan `X_HW_VenderClassID`. Bila isi repo pembuat berubah dan ada penulisan nilai baru ke ONT, panel menolak memasangnya.
+- Virtual parameter, provision, preset, dan tampilan GenieACS UI yang ditimpa **dicadangkan**, lalu dikembalikan saat **Hapus** (ikon 🗑). Hanya satu kumpulan yang aktif.
+- Panel menandai **Perbarui** bila folder parameter di repo pembuat berubah.
+- Setelah memasang, muat ulang GenieACS UI (F5). Nilai terisi saat ONT melapor berikutnya.
 
 ### G. Keamanan login & laporan kesehatan VPS
 **Pengaturan → Keamanan:**
