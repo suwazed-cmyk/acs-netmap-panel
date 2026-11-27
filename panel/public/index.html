@@ -1044,6 +1044,25 @@
   .tcnt{min-width:19px;height:19px;padding:0 6px;border-radius:10px;font-size:11px;font-weight:700;display:inline-grid;place-items:center;background:var(--bad);color:#fff}
   .tcnt.warn{background:var(--warn)}
   [data-pane]>.card+.card,[data-pane]>.card+.grid2,[data-pane]>.kpis+.card{margin-top:12px}
+
+  /* ZeroTier: jaringan saat ini + QR dalam satu kartu, tab Pengaturan */
+  .zt-curqr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:18px;align-items:center;padding:6px 16px 14px}
+  .zt-curqr .zt-cur{padding:4px 0 0}
+  .zt-qrside{display:flex;flex-direction:column;align-items:center;gap:6px;padding-left:18px;border-left:1px solid var(--line)}
+  .zt-qrside .zt-qrbig{width:124px;height:124px;margin:0;padding:8px}
+  .zt-qrside .zt-small{font-size:11.5px}
+  .zt-curc,.zt-hcard{margin-bottom:12px}
+  .zt-hcard .zt-health{grid-template-columns:repeat(4,1fr)}
+  .zt-hcard .zt-hc{border-bottom:0;border-right:1px solid var(--line)}
+  .zt-hcard .zt-hc:last-child{border-right:0}
+  .zt-setgrid,.g-setgrid{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:12px;align-items:start;margin-bottom:12px}
+  .g-setgrid>*>.card,.g-setgrid>.card{margin:0}
+  .g-inf>.card,.g-inf>div{margin:0}
+  .zt-setin .zt-sec:first-child{margin-top:0}
+  .zt-actc{padding:12px 16px 14px;gap:8px}
+  .zt-acth{display:flex;align-items:center;justify-content:space-between;font-size:14px}
+  @media (max-width:1024px){.zt-hcard .zt-health{grid-template-columns:1fr 1fr}.zt-hcard .zt-hc:nth-child(2n){border-right:0}.zt-hcard .zt-hc:nth-child(-n+2){border-bottom:1px solid var(--line)}.zt-setgrid,.g-setgrid{grid-template-columns:1fr}}
+  @media (max-width:720px){.zt-curqr{grid-template-columns:1fr}.zt-qrside{border-left:0;padding-left:0;border-top:1px solid var(--line);padding-top:12px}.zt-hcard .zt-health{grid-template-columns:1fr}.zt-hcard .zt-hc{border-right:0;border-bottom:1px solid var(--line)}.zt-hcard .zt-hc:last-child{border-bottom:0}}
 </style>
 </head>
 <body>
@@ -2791,7 +2810,7 @@ async function fillGenie(refresh) {
     : !P.synced ? { c: "warn", t: "Setting GenieACS belum sama dengan panel", d: "Panel akan mencoba lagi dalam 5 menit. Jika tetap begini, cek: journalctl -u vpn-acs -n 50" }
     : { c: "ok", t: "Patch IP virtual aktif", d: "Rentang mengikuti IP virtual router di panel secara otomatis." };
   const svcDown = g.services.filter((x) => !x.active).length;
-  const GT = [["ringkasan", "Ringkasan", "pulse"], ["inform", "Inform berkala", "clock"], ["patch", "Patch IP virtual", "code", P.cidr !== null && (!P.patched || !P.synced || P.outside.length) ? "!" : ""], ["layanan", "Layanan & alamat", "box", svcDown || ""]];
+  const GT = [["ringkasan", "Ringkasan", "pulse"], ["pengaturan", "Pengaturan", "sliders", P.cidr !== null && (!P.patched || !P.synced || P.outside.length) ? "!" : ""], ["layanan", "Layanan & alamat", "box", svcDown || ""]];
   if (!GT.some(([k]) => k === GTAB)) GTAB = "ringkasan";
   b.innerHTML = `
     ${subTabs(GT, GTAB)}
@@ -2814,10 +2833,9 @@ async function fillGenie(refresh) {
         <div class="cb" style="border-top:1px solid var(--line);padding:12px 20px"><span class="help" style="margin:0">ONT dikelompokkan menurut IP virtual di ConnectionRequestURL. Diperbarui tiap 1 menit${g.cachedAt ? ` · dibaca ${esc(fmtT(g.cachedAt))}` : ""}.</span></div>
       </div>
     </div>
-    <div data-pane="inform"${GTAB === "inform" ? "" : " hidden"}>
-    ${informCard(g)}
-    </div>
-    <div data-pane="patch"${GTAB === "patch" ? "" : " hidden"}>
+    <div data-pane="pengaturan"${GTAB === "pengaturan" ? "" : " hidden"}>
+    <div class="g-setgrid">
+    <div class="g-inf">${informCard(g)}</div>
         <div class="card"><div class="ch"><h2>Patch IP virtual</h2></div><div class="cb">
           <div class="note ${patch.c}" style="margin:0">${ic(patch.c === "ok" ? "check" : patch.c === "warn" ? "alert" : "info")}<div><b>${esc(patch.t)}</b>${esc(patch.d)}</div></div>
           ${P.outside.length ? `<div class="note warn" style="margin:12px 0 0">${ic("alert")}<div><b>${P.outside.length} router di luar rentang patch</b>${P.outside.map((o) => `<a href="#/router/${o.id}">${esc(o.name)}</a> (${esc(o.virtualSubnet)})`).join(", ")}</div></div>` : ""}
@@ -2834,6 +2852,7 @@ async function fillGenie(refresh) {
             <div class="form-actions"><button class="btn pri">Simpan</button></div>
           </form>`}
         </div>
+    </div>
     </div>
     <div data-pane="layanan"${GTAB === "layanan" ? "" : " hidden"}>
       <div class="grid2">
@@ -2957,7 +2976,7 @@ async function setZerotier(b) {
   const okNet = cur.status === "OK";
   const act = cur.active;
   const actNet = nets.find((n) => n.current);
-  const ZT = [["ringkasan", "Ringkasan", "hub"], ["perangkat", "Perangkat", "monitor", pending.length || ""], ["jaringan", "Rute & jaringan", "share"]];
+  const ZT = [["ringkasan", "Ringkasan", "hub"], ["perangkat", "Perangkat", "monitor", pending.length || ""], ["pengaturan", "Pengaturan", "sliders"]];
   if (!ZT.some(([k]) => k === ZTAB)) ZTAB = "ringkasan";
   b.innerHTML = `${subTabs(ZT, ZTAB)}
     <div data-pane="ringkasan"${ZTAB === "ringkasan" ? "" : " hidden"}>${ztnetNote}
@@ -2965,18 +2984,19 @@ async function setZerotier(b) {
     ${act && !okNet ? `<div class="note warn">${ic("alert")}<div><b>VPS belum tersambung ke jaringan</b>Status: ${esc(cur.status || "-")}. Biasanya selesai dalam beberapa detik; muat ulang halaman ini.</div></div>` : ""}
     ${pending.length ? `<div class="note warn zt-pend">${ic("clock")}<div><b>${pending.length} perangkat menunggu persetujuan</b>${pending.slice(0, 3).map((m) => `<span class="mono">${esc(m.node)}</span>${m.name ? ` (${esc(m.name)})` : ""}`).join(", ")}${pending.length > 3 ? " dan lainnya" : ""}. Router yang dipasang dari panel disetujui otomatis.
       <div style="margin-top:10px"><button class="btn sm" id="ztShowPend">Lihat &amp; setujui</button></div></div></div>` : ""}
-    <div class="zt-top">
-      <div class="zt-main">
-        <div class="card">
-          <div class="ch zt-ch"><h2>Jaringan saat ini</h2>
-            <div class="zt-selw" title="Pilih jaringan di controller"><select id="ztNetSel" aria-label="Pilih jaringan">${nets.map((n) => `<option value="${esc(n.current ? "" : n.nwid)}" ${n.nwid === cur.nwid ? "selected" : ""}>${esc(n.name || "(tanpa nama)")}${n.current ? " · dipakai panel" : ""}</option>`).join("")}</select></div></div>
-          <div class="zt-cur">
+    <div class="card zt-curc">
+      <div class="ch zt-ch"><h2>Jaringan saat ini</h2>
+        <div class="zt-selw" title="Pilih jaringan di controller"><select id="ztNetSel" aria-label="Pilih jaringan">${nets.map((n) => `<option value="${esc(n.current ? "" : n.nwid)}" ${n.nwid === cur.nwid ? "selected" : ""}>${esc(n.name || "(tanpa nama)")}${n.current ? " · dipakai panel" : ""}</option>`).join("")}</select></div></div>
+      <div class="zt-curqr">
+        <div class="zt-cur">
             <div class="zt-hrow"><span class="zt-hl">Network ID</span><span class="zt-hv"><span class="zt-idbox"><span class="zt-nwid mono">${esc(cur.nwid)}</span><button class="zt-ib" data-copy="${esc(cur.nwid)}" data-msg="Network ID tersalin" title="Salin Network ID" aria-label="Salin Network ID">${ic("copy")}</button></span></span></div>
             <div class="zt-hrow"><span class="zt-hl">Nama jaringan</span><span class="zt-hv" id="ztNameBox"><span class="zt-nname">${esc(cur.name || "(tanpa nama)")}</span><button class="zt-ib" id="ztNameEdit" title="Ganti nama" aria-label="Ganti nama">${ic("edit")}</button></span></div>
             <div class="zt-hmeta">${act ? (okNet ? `<span class="pill ok">VPS tersambung</span>` : `<span class="pill bad">VPS belum tersambung</span>`) : `<span class="pill wait">Tidak dipakai panel</span>`}${cur.private ? `<span class="pill ok">${ic("lock", "")}Private</span>` : `<span class="pill bad">Public</span>`}${act ? `<span class="muted">interface <span class="mono">${esc(cur.iface || "—")}</span></span>` : ""}</div>
-          </div>
         </div>
-        <div class="card">
+        <div class="zt-qrside"><button class="zt-qrbig" id="ztQr" title="Perbesar QR Network ID" aria-label="Perbesar QR Network ID">${(() => { try { const q = qrcode(0, "M"); q.addData(cur.nwid); q.make(); return q.createSvgTag({ cellSize: 4, margin: 0, scalable: true }); } catch (e) { return ic("qr"); } })()}</button><span class="muted zt-small">Pindai untuk menyalin Network ID</span></div>
+      </div>
+    </div>
+    <div class="card zt-hcard">
           <div class="ch"><h2>Konfigurasi &amp; kesehatan</h2><span class="muted zt-small">${act ? "jaringan panel" : "VPS tidak bergabung"}</span></div>
           <div class="zt-health">
             <div class="zt-hc"><span>Rentang IP</span><b class="mono">${esc(cur.subnet || "—")}</b><small>${cur.poolStart && cur.poolEnd ? `Pool ${esc(cur.poolStart)} – .${esc(cur.poolEnd.split(".").pop())}` : "Pool otomatis (seluruh rentang)"}</small></div>
@@ -2985,21 +3005,6 @@ async function setZerotier(b) {
             <div class="zt-hc"><span>Menunggu persetujuan</span><b class="${pending.length ? "warn" : ""}">${pending.length} <em>perangkat</em></b><small>${cur.private ? "perangkat baru perlu disetujui" : "jaringan public: tanpa persetujuan"}</small></div>
           </div>
         </div>
-      </div>
-      <div class="zt-side">
-        <div class="card zt-qrc">
-          <div class="ch"><h2>QR Network ID</h2><span class="zt-tip" title="Pindai dengan kamera HP untuk menyalin Network ID, lalu tempel di aplikasi ZeroTier One.">${ic("info")}</span></div>
-          <button class="zt-qrbig" id="ztQr" title="Perbesar QR Network ID" aria-label="Perbesar QR Network ID">${(() => { try { const q = qrcode(0, "M"); q.addData(cur.nwid); q.make(); return q.createSvgTag({ cellSize: 4, margin: 0, scalable: true }); } catch (e) { return ic("qr"); } })()}</button>
-          <p class="muted zt-small zt-qrt">Pindai untuk menyalin Network ID</p>
-        </div>
-        <div class="card zt-actc">
-          <button class="btn pri" id="ztSet">${ic("sliders")}Pengaturan jaringan</button>
-          ${!act ? `<button class="btn" data-zuse="${esc(cur.nwid)}" ${cur.conflict || !cur.subnet ? "disabled" : ""}>${ic("hub")}Jadikan jaringan panel</button>
-          <p class="muted zt-small">${cur.conflict ? esc(cur.conflict) : `${actNet ? `Jaringan panel sekarang: <b>${esc(actNet.name || actNet.nwid)}</b>. ` : ""}VPS bergabung ke jaringan ini dan router ZeroTier memakainya.`}</p>`
-            : `<button class="btn ghost danger" id="ztLeave">${ic("trash")}Lepas VPS dari jaringan</button>`}
-        </div>
-      </div>
-    </div>
 
     </div>
     <div data-pane="perangkat"${ZTAB === "perangkat" ? "" : " hidden"}>
@@ -3018,19 +3023,28 @@ async function setZerotier(b) {
     </div>
 
     </div>
-    <div data-pane="jaringan"${ZTAB === "jaringan" ? "" : " hidden"}>
-    <div class="grid2 zt-g2">
+    <div data-pane="pengaturan"${ZTAB === "pengaturan" ? "" : " hidden"}>
+    <div class="zt-setgrid">
+      <div class="card" id="ztSetBox"></div>
+      <div class="stack">
+        <div class="card zt-actc"><div class="zt-acth"><b>Dipakai panel</b><span>${act ? `<span class="pill ok">Ya</span>` : `<span class="pill wait">Tidak</span>`}</span></div>
+          ${!act ? `<button class="btn" data-zuse="${esc(cur.nwid)}" ${cur.conflict || !cur.subnet ? "disabled" : ""}>${ic("hub")}Jadikan jaringan panel</button>
+          <p class="muted zt-small">${cur.conflict ? esc(cur.conflict) : `${actNet ? `Jaringan panel sekarang: <b>${esc(actNet.name || actNet.nwid)}</b>. ` : ""}VPS bergabung ke jaringan ini dan router ZeroTier memakainya.`}</p>`
+            : `<button class="btn ghost danger" id="ztLeave">${ic("trash")}Lepas VPS dari jaringan</button>`}
+        </div>
+      <div class="card"><div class="ch"><h2>Jaringan di controller</h2><span class="muted" style="font-size:12.5px">${nets.length} jaringan</span></div>
+        <ul class="zt-nets">${nets.map((n) => ztNetRow(n, { canUse: false, open: true })).join("")}</ul>
+
+      </div>
+      </div>
+    </div>
       <div class="card"><div class="ch"><h2>Rute jaringan</h2><span class="muted" style="font-size:12.5px">dibagikan ke semua perangkat</span></div>
         <ul class="zt-routes">${(cur.routes || []).map((r) => `<li><span class="mono zt-rt">${esc(r.target)}</span>
           ${r.via ? `<span class="zt-arrow">→</span><span class="mono">${esc(r.via)}</span><span class="muted zt-rv">${esc(ipOwner(r.via))}</span>` : `<span class="muted zt-rv">langsung (jaringan ZeroTier)</span>`}
           <span class="tag ${r.via ? (r.panel ? "" : "gray") : "gray"}">${r.via ? (r.panel ? "otomatis" : "manual") : "jaringan"}</span></li>`).join("") || `<li class="muted">Belum ada rute</li>`}</ul>
         <p class="help" style="margin:0 20px 16px">Rute IP virtual tiap router dan URL ACS dibuat otomatis oleh panel. Rentang jaringan diatur di Pengaturan.</p>
       </div>
-      <div class="card"><div class="ch"><h2>Jaringan di controller</h2><span class="muted" style="font-size:12.5px">${nets.length} jaringan</span></div>
-        <ul class="zt-nets">${nets.map((n) => ztNetRow(n, { canUse: false, open: true })).join("")}</ul>
 
-      </div>
-    </div>
     <p class="help" style="margin-top:12px">${act ? "" : "Rute IP virtual router dan URL ACS hanya dibuat otomatis di jaringan panel. "}Rentang IP ZeroTier tidak boleh bentrok dengan ${esc(s.tunnelNet || "")} (L2TP), ${esc(s.virtualPool || "")} (IP virtual), subnet ONT, dan 172.17.0.0/16 (Docker). URL ACS untuk ONT tetap ${esc(s.acsUrl || "")}.</p>
     </div>`;
 
@@ -3076,7 +3090,7 @@ async function setZerotier(b) {
   b.querySelectorAll("[data-zf]").forEach((c) => (c.onclick = () => { ZTV.f = c.dataset.zf; b.querySelectorAll("[data-zf]").forEach((x) => x.classList.toggle("on", x === c)); fill(); }));
   fill();
   const sp = $("#ztShowPend"); if (sp) sp.onclick = () => { ZTV.f = "wait"; ZTV.q = ""; ZTAB = "perangkat"; setZerotier(b); };
-  $("#ztSet").onclick = () => ztSettingsDialog(cur, b);
+  if ($("#ztSetBox")) ztSettingsDialog(cur, b, $("#ztSetBox"));
   $("#ztQr").onclick = () => ztQrDialog(cur);
   ztInlineEdit(cur, b);
   $("#ztNetSel").onchange = (e) => ztOpenNet(e.target.value, b);
@@ -3206,9 +3220,9 @@ function ztCreateDialog(z, b) {
     } catch (e) { $("#zcErr").textContent = e.message; busyBtn($("#zcOk"), false); }
   };
 }
-function ztSettingsDialog(cur, b) {
+function ztSettingsDialog(cur, b, box) {
   const dns = cur.dns || { domain: "", servers: [] };
-  modal("Pengaturan jaringan", `
+  const form = `
     <div class="zt-sec"><h3>Umum</h3>
       <label for="zsName">Nama jaringan</label>
       <input id="zsName" type="text" maxlength="64" value="${esc(cur.name || "")}">
@@ -3230,8 +3244,9 @@ function ztSettingsDialog(cur, b) {
         <div><label for="zsDs">Server DNS</label><input id="zsDs" type="text" class="mono" value="${esc((dns.servers || []).join(", "))}" placeholder="${esc(cur.vpsIp)}"></div>
       </div>
       <div class="help">Dikirim ke perangkat yang mengizinkan DNS dari ZeroTier. Biarkan kosong bila tidak dipakai.</div></div>
-    <div class="err" id="zsErr"></div>`,
-    `<button class="btn" data-act="closemodal">Batal</button><button class="btn pri" id="zsOk">Simpan</button>`, { size: "lg" });
+    <div class="err" id="zsErr"></div>`;
+  if (box) box.innerHTML = `<div class="ch"><h2>Pengaturan jaringan</h2><span class="muted zt-small">${esc(cur.name || cur.nwid)}</span></div><div class="cb zt-setin">${form}<div class="form-actions"><button class="btn pri" id="zsOk">${ic("check")}Simpan</button></div></div>`;
+  else modal("Pengaturan jaringan", form, `<button class="btn" data-act="closemodal">Batal</button><button class="btn pri" id="zsOk">Simpan</button>`, { size: "lg" });
   const help = () => {
     const pub = document.querySelector("input[name=zsPriv]:checked").value === "0";
     $("#zsPrivHelp").innerHTML = pub ? `<span style="color:var(--bad)"><b>Tidak disarankan.</b> Siapa pun yang tahu Network ID bisa bergabung tanpa persetujuan dan masuk ke jaringan GenieACS Anda.</span>` : "Perangkat baru harus disetujui di panel. Router yang dipasang dari panel disetujui otomatis.";
