@@ -1135,6 +1135,22 @@
   /* tombol aksi detail add-on sejajar dengan status */
   .ad-dh{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
   .ad-dacts{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+  .vh-tg{margin-left:auto;width:32px!important;height:32px!important;min-height:32px!important;color:var(--primary)!important}
+  .vh-tg svg{width:17px!important;height:17px!important}
+  .log-h{gap:12px;flex-wrap:wrap}.log-h .search{margin-left:auto;flex:0 1 340px;width:340px;max-width:100%}
+  /* Logout otomatis: pilihan durasi */
+  .idle-opts{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:8px;margin-top:4px}
+  .idle-opts button{display:flex;flex-direction:column;align-items:center;gap:2px;padding:12px 6px;border:1px solid var(--line-2);border-radius:12px;background:var(--surface);cursor:pointer;font:inherit;color:var(--text);transition:border-color .12s,background .12s}
+  .idle-opts button b{font-size:18px;font-weight:800;color:var(--head);line-height:1.1}
+  .idle-opts button small{font-size:12px;color:var(--muted)}
+  .idle-opts button:hover{border-color:var(--primary)}
+  .idle-opts button.on{border-color:var(--primary);background:var(--primary-soft);box-shadow:0 0 0 1px var(--primary) inset}
+  .idle-opts button.on b{color:var(--primary)}
+  .idle-opts button i.rec{font-style:normal;font-size:10.5px;font-weight:700;color:var(--ok);text-transform:uppercase;letter-spacing:.03em}
+  .tg-ev{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;margin-top:6px}
+  .tg-ev .check{margin:0}
+  .tg-h{font-size:12.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:18px 0 8px}
+  @media (max-width:700px){.tg-ev{grid-template-columns:1fr}}
   /* pita "versi baru terpasang" */
   .upd-bar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:12px;padding:9px 16px;background:var(--primary);color:#fff;font-size:13.5px;font-weight:500}
   .upd-bar svg{width:17px;height:17px;flex:none}
@@ -1284,7 +1300,7 @@ const ICONS = {
   home: '<path d="M3 10.5L12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
   router: '<rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 16.5h.01M11 16.5h.01M8 9a6 6 0 0 1 8 0M5.5 6.5a10 10 0 0 1 13 0"/>',
   book: '<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2V5z"/><path d="M4 19a2 2 0 0 1 2-2h13"/>',
-  gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>',
+  gear: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
   moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
@@ -1718,7 +1734,7 @@ function viewDashboard(v, live) {
   const iss = issues();
   const issK = iss.some((x) => (x.k || "warn") === "bad") ? "" : iss.some((x) => (x.k || "warn") === "warn") ? "warn" : "info";
   if (DASH_TAB === "issues" && !iss.length) DASH_TAB = "uptime";
-  $("#pActs").innerHTML = `<span class="pupd">Terakhir diperbarui: <b>${new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).replace(/\./g, ":")}</b></span><button class="btn pri" data-act="add">${ic("plus")}Tambah router</button>`;
+  $("#pActs").innerHTML = `<button class="btn pri" data-act="add">${ic("plus")}Tambah router</button>`;
   v.innerHTML = `
     <div class="kpis">
       <div class="kpi"><span><i class="kico blue">${ic("router")}</i>Total router</span><b>${S.length}</b><small>${pend ? `${pend} menunggu pemasangan` : "MikroTik terdaftar"}</small></div>
@@ -2761,18 +2777,15 @@ async function setSecurity(b) {
   const step = (ms) => (ms >= 3600e3 ? `${ms / 3600e3} jam` : `${ms / 60e3} menit`);
   const others = x.sessions.filter((z) => !z.current).length;
   b.innerHTML = `
-    <div class="card"><div class="ch"><h2>Logout otomatis</h2><span class="pill info">${lbl(x.idleMin)}</span></div>
-      <form class="cb" id="idleForm" style="padding-top:4px">
-        <label for="secIdle">Keluar otomatis bila tidak ada aktivitas selama</label>
-        <select id="secIdle" style="max-width:260px">${x.idleChoices.map((m) => `<option value="${m}" ${m === x.idleMin ? "selected" : ""}>${lbl(m)}${m === 60 ? " (disarankan)" : ""}</option>`).join("")}</select>
-        <div class="help">Aktivitas = klik, ketik, gulir, atau pindah halaman. Penyegaran otomatis (misalnya di halaman ZeroTier) tidak dihitung, jadi tab yang dibiarkan terbuka tetap keluar. Satu menit sebelumnya muncul peringatan dengan tombol <b>Tetap masuk</b>.</div>
-        <div class="form-actions"><button class="btn pri">Simpan</button></div>
-      </form></div>
+    <div class="card"><div class="ch"><h2>Logout otomatis</h2><span class="muted zt-small">bila tidak ada aktivitas</span></div>
+      <div class="cb" id="idleForm" style="padding-top:6px">
+        <div class="idle-opts">${x.idleChoices.map((m) => `<button type="button" data-idle="${m}" class="${m === x.idleMin ? "on" : ""}"><b>${m >= 60 ? m / 60 : m}</b><small>${m >= 60 ? "jam" : "menit"}</small>${m === 60 ? `<i class="rec">disarankan</i>` : ""}</button>`).join("")}</div>
+        <div class="help">Satu menit sebelumnya muncul peringatan dengan tombol <b>Tetap masuk</b>.</div>
+      </div></div>
 
     <div class="card"><div class="ch"><h2>Blokir salah password</h2><span class="muted zt-small">${x.blocked.length ? `${x.blocked.length} IP diblokir` : "tidak ada IP diblokir"}</span></div>
       <div class="cb" style="padding-top:4px">
         <ol class="sec-steps">${x.blockSteps.map((ms, i) => `<li><b>${i === 0 ? "5 kali salah" : i === 1 ? "Mengulang lagi" : "Masih mengulang"}</b><span>diblokir ${step(ms)}</span></li>`).join("")}</ol>
-        <div class="help">Blokir berlaku per alamat IP dan tetap tersimpan walaupun panel di-restart. Tingkat blokir kembali ke awal setelah 24 jam tanpa percobaan salah.</div>
         <label class="check" style="margin-top:14px"><input type="checkbox" id="secNotify" ${x.notifyBlock ? "checked" : ""}> Kirim notifikasi Telegram saat ada IP diblokir</label>
         ${tgOn ? "" : `<div class="help">Telegram belum diatur. Atur dulu di <a href="#/pengaturan/telegram">Notifikasi Telegram</a>.</div>`}
       </div>
@@ -2790,11 +2803,13 @@ async function setSecurity(b) {
     </div>`;
   { const C = [...b.querySelectorAll(":scope > .card")]; setCols(b, [C[0], C[2]], [C[1]]); }
   paintIcons(b);
-  $("#idleForm").onsubmit = async (e) => {
-    e.preventDefault(); const btn = e.target.querySelector("button:not(.pw-eye)"); busyBtn(btn, true);
-    try { await api("/api/security", { method: "PUT", body: { idleMin: parseInt($("#secIdle").value, 10) } }); IDLE_MS = parseInt($("#secIdle").value, 10) * 60e3; toast("Logout otomatis disimpan"); setSecurity(b); }
-    catch (err) { toast(err.message); busyBtn(btn, false); }
-  };
+  b.querySelectorAll("[data-idle]").forEach((btn) => (btn.onclick = async () => {
+    if (btn.classList.contains("on")) return;
+    const m = parseInt(btn.dataset.idle, 10);
+    b.querySelectorAll("[data-idle]").forEach((x) => x.classList.toggle("on", x === btn));
+    try { await api("/api/security", { method: "PUT", body: { idleMin: m } }); IDLE_MS = m * 60e3; toast(`Logout otomatis: ${lbl(m)}`); }
+    catch (err) { toast(err.message); setSecurity(b); }
+  }));
   $("#secNotify").onchange = async (e) => { try { await api("/api/security", { method: "PUT", body: { notifyBlock: e.target.checked } }); toast(e.target.checked ? "Notifikasi blokir aktif" : "Notifikasi blokir dimatikan"); } catch (err) { toast(err.message); } };
   b.querySelectorAll("[data-unblock]").forEach((btn) => (btn.onclick = async () => { busyBtn(btn, true); try { await api("/api/security/unblock", { method: "POST", body: { ip: btn.dataset.unblock } }); toast("Blokir dibuka"); setSecurity(b); } catch (e) { toast(e.message); busyBtn(btn, false); } }));
   b.querySelectorAll("[data-kick]").forEach((btn) => (btn.onclick = async () => { busyBtn(btn, true); try { await api(`/api/sessions/${btn.dataset.kick}`, { method: "DELETE" }); toast("Sesi dikeluarkan"); setSecurity(b); } catch (e) { toast(e.message); busyBtn(btn, false); } }));
@@ -2813,16 +2828,16 @@ function setGeneral(b) {
     <div class="set-grid">
       <div class="set-col">
         <div class="card"><div class="ch"><h2>Panel</h2></div><form class="cb set-form" id="brandForm">
-          <div class="srow"><div class="sl"><label for="sBrand">Nama panel</label><small>Judul panel dan komentar aturan di script MikroTik.</small></div>
-            <div class="sc"><input id="sBrand" type="text" maxlength="30" placeholder="contoh: NetKu WiFi" value="${esc(s.panelName || "")}"><div class="help">Contoh komentar: <code>${esc(s.panelName || "VPN ACS")} - ONT ke IP virtual</code></div></div></div>
-          <div class="srow"><div class="sl"><label for="sTz">Zona waktu</label><small>Jam di riwayat, log, dan pesan Telegram.</small></div>
+          <div class="srow"><div class="sl"><label for="sBrand">Nama panel</label></div>
+            <div class="sc"><input id="sBrand" type="text" maxlength="30" placeholder="contoh: NetKu WiFi" value="${esc(s.panelName || "")}"></div></div>
+          <div class="srow"><div class="sl"><label for="sTz">Zona waktu</label></div>
             <div class="sc"><select id="sTz">${(s.timezones || []).map((z) => `<option value="${z.id}" ${z.id === tzId() ? "selected" : ""}>${z.label} (${z.id})</option>`).join("")}</select></div></div>
           <div class="err" id="brandErr"></div>
           <div class="form-actions"><button class="btn pri" id="brandSave">Simpan</button></div>
         </form></div>
         <div class="card"><div class="ch"><h2>Password admin</h2></div><form class="cb set-form" id="pwForm">
           <div class="srow"><div class="sl"><label for="pOld">Password lama</label></div><div class="sc"><input id="pOld" type="password" autocomplete="current-password"></div></div>
-          <div class="srow"><div class="sl"><label for="pNew">Password baru</label><small>Minimal 8 karakter. Perangkat lain otomatis dikeluarkan.</small></div><div class="sc"><input id="pNew" type="password" autocomplete="new-password"></div></div>
+          <div class="srow"><div class="sl"><label for="pNew">Password baru</label></div><div class="sc"><input id="pNew" type="password" autocomplete="new-password" placeholder="Minimal 8 karakter"></div></div>
           <div class="err" id="pwErr"></div>
           <div class="form-actions"><button class="btn pri" id="pwSave">Ganti password</button></div>
         </form></div>
@@ -2831,7 +2846,7 @@ function setGeneral(b) {
         <div class="card"><div class="ch"><h2>Alamat VPS</h2></div><form class="cb set-form" id="vpsForm">
           <label for="sIp" style="margin-top:0">IP publik atau domain</label>
           <input id="sIp" type="text" placeholder="contoh: 103.20.30.40 atau vpn.domain.com" value="${esc(s.publicIp || "")}">
-          <div class="help">Dipakai sebagai <i>connect-to</i> di script MikroTik.${s.cloudflare ? ` Saat ini diatur lewat <a href="#/pengaturan/domain">Domain &amp; HTTPS</a>.` : ""}</div>
+          ${s.cloudflare ? `<div class="help">Diatur lewat <a href="#/pengaturan/domain">Domain &amp; HTTPS</a>.</div>` : ""}
           <div class="err" id="vpsErr"></div>
           <div class="form-actions"><button class="btn pri" id="vpsSave">Simpan</button></div>
         </form></div>
@@ -2840,7 +2855,7 @@ function setGeneral(b) {
           ${P.error ? `<div class="note bad" style="margin:0 0 10px">${ic("alert")}<div><b>Port tidak bisa dipakai</b>${esc(P.error)}. Panel tetap di port ${bp}.</div></div>` : ""}
           <div class="f2"><div><label for="pHttp" style="margin-top:0">Port HTTP</label><input id="pHttp" type="number" min="1" max="65535" value="${esc(String(P.http || P.defHttp || 80))}"></div>
             <div><label for="pHttps" style="margin-top:0">Port HTTPS</label><input id="pHttps" type="number" min="1" max="65535" value="${esc(String(P.https || P.defHttps || 443))}"></div></div>
-          <div class="help">Bawaan ${P.defHttp || 80}/${P.defHttps || 443}${https ? " (HTTPS dipakai karena domain ber-HTTPS)" : ""}, jadi alamat panel tanpa nomor port. Ganti bila port itu dipakai aplikasi lain, dan buka port ini di firewall provider. Port ${bp} tetap jalan sebagai cadangan.</div>
+          <div class="help">Port ${bp} tetap aktif sebagai cadangan.</div>
           <div class="err" id="portErr"></div>
           <div class="form-actions">${P.enabled ? `<button class="btn" id="stdOff" type="button">Matikan</button>` : ""}<button class="btn" id="portDef" type="button">Bawaan</button><button class="btn pri" id="portSave">${P.enabled ? "Simpan port" : `${ic("globe")}Aktifkan`}</button></div>
         </form></div>
@@ -3015,7 +3030,7 @@ async function fillUpdate(refresh) {
       ${P.available ? `<span class="upd-arrow">${ic("chev")}</span><div class="upd-v"><small>Terbaru</small><b style="color:var(--primary)">v${esc(P.latest)}</b></div>` : ""}
     </div>
     <div class="kv" style="padding:0;border:0"><span>Terakhir diperiksa</span><b>${u.checkedAt ? esc(fmtT(u.checkedAt, true)) : "—"}</b></div>
-    <div class="help">Diperiksa otomatis tiap 12 jam. ${u.canSelfUpdate ? "Pembaruan menjalankan <code>git pull</code> lalu installer di folder repo; panel menyala ulang beberapa detik, data tetap aman." : "Perbarui lewat SSH: <code>cd /root/acs-netmap-panel &amp;&amp; git pull &amp;&amp; bash install-vpn-acs.sh</code> (setelah itu tombol Perbarui tersedia di sini)."}</div>
+    ${u.canSelfUpdate ? "" : `<div class="help">Perbarui sekali lewat SSH: <code>cd /root/acs-netmap-panel &amp;&amp; git pull &amp;&amp; bash install-vpn-acs.sh</code></div>`}
     <div class="form-actions"><button class="btn" id="updCheck" type="button">${ic("refresh")}Periksa sekarang</button>${P.available && u.canSelfUpdate ? `<button class="btn pri" id="updGo" type="button">${ic("dl")}Perbarui ke v${esc(P.latest)}</button>` : ""}</div>`;
   paintIcons(b);
   const ab = $("#updAddons");
@@ -3157,7 +3172,7 @@ async function fillOntWeb() {
         <table class="t"><thead><tr><th>ONT</th><th class="hide-sm">Router</th><th>IP virtual</th><th class="hide-md">Terakhir lapor</th><th class="r"></th></tr></thead><tbody id="gOntRows"><tr><td colspan="5" class="muted">Membaca daftar ONT…</td></tr></tbody></table>
         <div class="cb" style="border-top:1px solid var(--line);padding:10px 20px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
           <button class="btn sm" id="gOntMore" hidden></button>
-          <span class="help" style="margin:0">Web ONT dibuka lewat IP VPS tanpa perlu tersambung VPN. Hanya bisa dibuka dari tombol ini, dan berlaku 1 jam sejak terakhir dipakai. Kalau habis, klik lagi.</span>
+          <span class="help" style="margin:0">Berlaku 1 jam sejak terakhir dipakai.</span>
         </div>
       </div>`;
     paintIcons(box);
@@ -3184,7 +3199,7 @@ async function fillGwSettings() {
       <div class="f2"><div><label for="gwFrom">Port awal</label><input id="gwFrom" type="number" min="1024" max="65535" value="${c.from}"></div>
         <div><label for="gwCount">Jumlah pintu</label><input id="gwCount" type="number" min="1" max="100" value="${c.count}"></div></div>
       <label for="gwT">Port web ONT</label><input id="gwT" type="number" min="1" max="65535" value="${c.tport}">
-      <div class="help">Port <b class="mono">${c.from}-${c.to}</b> di IP VPS${r.publicIp ? ` (${esc(r.publicIp)})` : ""}. Satu ONT yang dibuka memakai satu port, jadi ${c.count} ONT bisa dibuka bersamaan. Jika VPS memakai firewall dari penyedia (security group), buka juga port ini di sana.</div>
+      <div class="help">Port <b class="mono">${c.from}-${c.to}</b>, satu port per ONT. Buka juga di firewall provider.</div>
       <div class="err" id="gwErr"></div>
       <div class="form-actions"><button class="btn pri">Simpan</button></div>
     </form>`;
@@ -3214,7 +3229,6 @@ function informCard(g) {
         <button class="btn pri" id="infGo">${ic("check")}${P.installed ? "Simpan interval" : "Pasang provision"}</button>
         ${P.installed ? `<button class="btn ghost danger" id="infRm">Hapus provision</button>` : ""}
       </div>
-      <p class="help">Panel memasang provision <code>vpnacs-inform</code> + preset di GenieACS yang menyalakan inform berkala di setiap ONT. Tidak mengubah pengaturan lain.</p>
     </div></div>`;
   }
   const bad = I.slow + I.off + I.unknown;
@@ -3235,7 +3249,6 @@ function informCard(g) {
         <button class="btn pri" id="infGo">${ic("check")}${P.installed ? "Simpan interval" : "Perbaiki semua ONT"}</button>
         ${P.installed ? `<button class="btn ghost danger" id="infRm">Hapus provision</button>` : ""}
       </div>
-      <p class="help">Panel memasang provision <code>vpnacs-inform</code> + preset di GenieACS yang menyalakan inform berkala di setiap ONT. Berlaku saat ONT melapor berikutnya (biasanya setelah reboot ONT atau inform berkala lama). Tidak mengubah pengaturan lain.</p>
     </div></div>`;
 }
 function bindInform(g) {
@@ -3316,7 +3329,7 @@ async function fillGenie(refresh) {
           <form class="cb" id="gExtraForm" style="border-top:1px solid var(--line)">
             <label for="gExtra" style="margin-top:0">Rentang tambahan (opsional)</label>
             <input id="gExtra" type="text" placeholder="contoh: 10.20.0.0/16" value="${esc(R.extra.join(", "))}">
-            <div class="help">IP virtual router di panel otomatis dimasukkan. Isi ini hanya untuk ONT dengan IP virtual buatan sendiri di luar panel. Pisahkan dengan koma.</div>
+            <div class="help">Hanya untuk IP virtual di luar panel. Pisahkan dengan koma.</div>
             <div class="err" id="gExtraErr"></div>
             <div class="form-actions"><button class="btn pri">Simpan</button></div>
           </form>`}
@@ -3908,24 +3921,24 @@ function setTelegram(b) {
         <div><label for="tgChat">Grup</label><select id="tgChat"></select></div>
         <div><label for="tgThread">Topik</label><select id="tgThread"></select></div>
       </div>
-      <div class="help">Grup atau topik tidak muncul? Pastikan bot sudah admin, kirim pesan di topik itu, lalu klik Deteksi lagi.</div>
     </div></div>
     <div class="card"><div class="ch"><h2>Aturan notifikasi</h2></div><div class="cb" style="padding-top:6px">
-      <label class="check" style="margin-top:10px"><input id="tgOn" type="checkbox" ${t.enabled !== false ? "checked" : ""}>Aktifkan notifikasi VPN terputus</label>
-      <div class="help">Router berstatus "Menunggu pemasangan" tidak pernah dikirim notifikasi.</div>
+      <div class="tg-h" style="margin-top:6px">VPN</div>
+      <label class="check" style="margin:0"><input id="tgOn" type="checkbox" ${t.enabled !== false ? "checked" : ""}>Aktifkan notifikasi VPN terputus</label>
       <div class="f2">
-        <div><label for="tgDelay">Jeda sebelum lapor (menit)</label><input id="tgDelay" type="number" min="1" max="1440" value="${t.delayMin || 3}">
-          <div class="help">VPN harus putus selama ini dulu, supaya putus sebentar tidak dilaporkan.</div></div>
-        <div><label for="tgRemind">Ingatkan lagi jika masih putus (menit)</label><input id="tgRemind" type="number" min="0" max="1440" value="${t.remindMin ?? 60}">
-          <div class="help">Isi 0 untuk mematikan. Minimal 10.</div></div>
+        <div><label for="tgDelay">Lapor setelah putus (menit)</label><input id="tgDelay" type="number" min="1" max="1440" value="${t.delayMin || 3}"></div>
+        <div><label for="tgRemind">Ingatkan lagi tiap (menit, 0 = mati)</label><input id="tgRemind" type="number" min="0" max="1440" value="${t.remindMin ?? 60}"></div>
       </div>
-      <label class="check" style="margin-top:16px"><input id="tgRec" type="checkbox" ${t.notifyRecovery !== false ? "checked" : ""}>Kirim juga saat tersambung lagi (beserta lama putusnya)</label>
-      <label class="check" style="margin-top:12px"><input id="tgQuiet" type="checkbox" ${quiet ? "checked" : ""}>Jam tenang (pesan tetap terkirim tanpa bunyi)</label>
+      <label class="check" style="margin-top:14px"><input id="tgRec" type="checkbox" ${t.notifyRecovery !== false ? "checked" : ""}>Kirim juga saat tersambung lagi</label>
+      <div class="tg-h">Kejadian lain</div>
+      <div class="tg-ev">${(t.eventList || []).map(([k, lbl]) => `<label class="check"><input type="checkbox" data-tgev="${k}" ${(t.events || {})[k] ? "checked" : ""}>${esc(lbl)}</label>`).join("")}
+        <label class="check"><input type="checkbox" id="tgBlockEv">IP diblokir karena salah password</label></div>
+      <div class="tg-h">Jam tenang</div>
+      <label class="check" style="margin:0"><input id="tgQuiet" type="checkbox" ${quiet ? "checked" : ""}>Kirim tanpa bunyi pada jam tertentu</label>
       <div class="f2 ${quiet ? "" : "hidden"}" id="tgQuietBox">
         <div><label for="tgQs">Mulai</label><input id="tgQs" type="time" value="${esc(t.quietStart || "22:00")}"></div>
         <div><label for="tgQe">Selesai</label><input id="tgQe" type="time" value="${esc(t.quietEnd || "06:00")}"></div>
       </div>
-      <div class="help">Zona waktu: ${esc(tzLabel())} (ubah di tab <a href="#/pengaturan/umum">Umum</a>).</div>
       <div class="err" id="tgErr"></div>
       <div class="form-actions">
         ${t.tokenSet ? `<button class="btn ghost danger" id="tgClear">${ic("trash")}Hapus Telegram</button><span class="sp"></span>` : ""}
@@ -3976,8 +3989,12 @@ function setTelegram(b) {
       notifyRecovery: $("#tgRec").checked,
       quietStart: $("#tgQuiet").checked ? $("#tgQs").value : "",
       quietEnd: $("#tgQuiet").checked ? $("#tgQe").value : "",
+      events: Object.fromEntries([...document.querySelectorAll("[data-tgev]")].map((x) => [x.dataset.tgev, x.checked])),
     };
   };
+  // "IP diblokir" disimpan di pengaturan Keamanan; kotaknya ditampilkan di sini juga
+  api("/api/security").then((x) => { const cb = $("#tgBlockEv"); if (cb) cb.checked = !!x.notifyBlock; }).catch(() => {});
+  if ($("#tgBlockEv")) $("#tgBlockEv").onchange = async (e) => { try { await api("/api/security", { method: "PUT", body: { notifyBlock: e.target.checked } }); toast("Disimpan"); } catch (err) { toast(err.message); } };
   $("#tgDetect").onclick = async () => {
     const btn = $("#tgDetect"); $("#tgErr").textContent = ""; busyBtn(btn, true);
     try {
@@ -4047,9 +4064,8 @@ async function healthSettings(el) {
         <div><label for="hlDays">Interval</label><div class="hl-in"><input id="hlDays" type="number" min="1" max="30" value="${c.days}"><span>hari</span></div></div>
         <div><label for="hlTime">Jam kirim</label><input id="hlTime" type="time" value="${esc(c.time)}"></div>
       </div>
-      <div class="help">Isi: CPU, RAM, swap, disk, uptime VPS, status layanan (panel, VPN, GenieACS, add-on), dan ringkasan router. ${x.next ? `Laporan berikutnya <b>${esc(fmtT(x.next, true))}</b>.` : ""}${x.lastSent ? ` Terakhir dikirim ${esc(fmtT(x.lastSent, true))}.` : ""}</div>
+      ${x.next ? `<div class="help">Laporan berikutnya <b>${esc(fmtT(x.next, true))}</b>.</div>` : ""}
       <label class="check" style="margin-top:14px"><input type="checkbox" id="hlAlert" ${c.alerts ? "checked" : ""}> Peringatan langsung bila disk atau RAM di atas 90% atau ada layanan mati</label>
-      <div class="help">Dikirim saat masalah muncul, diulang paling sering sekali per 6 jam selama belum beres, dan ada pesan saat kembali normal.</div>
       ${x.tgActive ? "" : `<div class="note warn" style="margin-top:12px">${ic("alert")}<div><b>Telegram belum aktif</b>Atur bot dan grup di atas dulu; laporan baru dikirim setelah Telegram aktif.</div></div>`}
       <div class="err" id="hlErr"></div>
       <div class="form-actions"><button type="button" class="btn" id="hlTest" ${x.tgActive ? "" : "disabled"}>${ic("send")}Kirim sekarang</button><button class="btn pri">Simpan</button></div>
@@ -4077,14 +4093,13 @@ async function dashHealth() {
   const bar = (label, p, sub) => `<div class="vh-r"><div class="vh-t"><span>${label}</span><b>${p == null ? "—" : p + "%"}</b></div><div class="zt-bar"><i style="width:${p || 0}%;background:${col(p || 0)}"></i></div><small>${sub}</small></div>`;
   const fb = (n) => (n >= 1024 ** 3 ? (n / 1024 ** 3).toFixed(1).replace(".", ",") + " GB" : Math.round(n / 1024 ** 2) + " MB");
   const down = x.services.filter((v) => !v.active);
-  const html = `<div class="card"><div class="ch"><h2>Kesehatan VPS</h2><span class="live${down.length ? " bad" : ""}"><i></i>${down.length ? "Ada layanan mati" : "Online"}</span></div>
+  const html = `<div class="card"><div class="ch"><h2>Kesehatan VPS</h2><a class="btn ghost icon vh-tg" href="#/pengaturan/telegram" title="Laporan kesehatan ke Telegram" aria-label="Laporan kesehatan ke Telegram">${ic("send")}</a></div>
     <div class="vh">
       ${bar("CPU", x.cpu == null ? null : Math.round(x.cpu), `beban ${x.load[0].toFixed(2).replace(".", ",")} · ${x.cores} inti`)}
       ${bar("RAM", x.mem.pct, `${fb(x.mem.used)} / ${fb(x.mem.total)}`)}
       ${x.disk ? bar("Disk", x.disk.pct, `${fb(x.disk.used)} / ${fb(x.disk.total)}`) : ""}
       <div class="vh-f"><span class="pill ${down.length ? "bad" : "ok"}">${down.length ? `${down.length} layanan mati` : `${x.services.length} layanan berjalan`}</span><span class="muted zt-small">uptime ${esc(fmtDurShortD(x.uptime))}</span></div>
       ${down.length ? `<div class="zt-small" style="color:var(--bad)">${down.map((v) => esc(v.label)).join(", ")}</div>` : ""}
-      <div class="vh-l"><a href="#/pengaturan/telegram">Laporan kesehatan ke Telegram</a></div>
     </div></div>`;
   if (el.firstElementChild) { const t = document.createElement("div"); t.innerHTML = html; paintIcons(t); morph(el, t); } else { el.innerHTML = html; paintIcons(el); }
   HEALTH_HTML = el.innerHTML;
@@ -4119,7 +4134,7 @@ function setDomain(b) {
         <button class="btn" id="cfAgain">${ic("refresh")}Verifikasi ulang</button>
       </div></div>
     <div class="card"><div class="ch"><h2>Subdomain layanan</h2></div><form class="cb" id="subForm" style="padding-top:6px">
-      <p class="help" style="margin-top:4px">Panel membuat record DNS (DNS only) di <b>${esc(c.zoneName)}</b> untuk GenieACS dan aplikasi add-on yang terpasang, lalu memasang link-nya di panel. ${c.https ? "Sertifikat HTTPS ikut diperluas otomatis. " : ""}Nama subdomain bisa diganti kapan saja; record lama buatan panel ikut dihapus.</p>
+      <p class="help" style="margin-top:4px">Record DNS dibuat otomatis di <b>${esc(c.zoneName)}</b>.</p>
       <div class="subl">${(c.subServices || []).map((x) => {
         const k = x.key, cur = (c.subdomains || {})[k];
         const val = cur ? cur.host.slice(0, -(c.zoneName.length + 1)) : x.def;
@@ -4134,7 +4149,7 @@ function setDomain(b) {
       <div class="form-actions"><button class="btn pri" id="subGo">${ic("play")}Terapkan subdomain</button></div>
     </form></div>` : ""}
     <div class="card" id="cfFormCard"><div class="ch"><h2>${c ? "Ganti domain" : "Hubungkan domain Cloudflare"}</h2></div><form class="cb" id="cfForm" style="padding-top:6px">
-      <p class="help" style="margin-top:4px">Panel membuat record DNS yang mengarah ke VPS ini, lalu mengganti alamat VPS di script MikroTik menjadi domain. Setiap langkah diperiksa dulu. <b>Jika ada yang gagal, semua dibatalkan dan pengaturan tetap seperti semula.</b></p>
+      <p class="help" style="margin-top:4px">Jika ada langkah yang gagal, semua dibatalkan.</p>
       <label for="cfDom">Domain / subdomain</label>
       <input id="cfDom" type="text" placeholder="contoh: vpn.domainanda.com" value="${esc(c ? c.domain : "")}">
       <label for="cfTok">API Token Cloudflare</label>
@@ -4147,8 +4162,7 @@ function setDomain(b) {
         <li><b>Buat dan salin</b>Continue to summary → Create Token → salin token (hanya ditampilkan sekali). Jangan pakai Global API Key.</li>
       </ol></details>
       <label class="check" style="margin-top:16px"><input id="cfHttps" type="checkbox" ${!c || c.https ? "checked" : ""}>Pasang HTTPS untuk panel (sertifikat Let's Encrypt gratis, diperpanjang otomatis)</label>
-      <div class="help">Panel akan dibuka lewat <span class="mono">${STATE.settings.stdPorts && STATE.settings.stdPorts.active ? "https://domain" : "https://domain:" + port}</span>. VPN, GenieACS, dan Winbox tidak terpengaruh.</div>
-      <div class="note info" style="margin:14px 0 0">${ic("info")}<div><b>Record dibuat dalam mode DNS only (awan abu-abu)</b>Proxy Cloudflare (awan oranye) tidak bisa meneruskan VPN L2TP dan Winbox, jadi panel otomatis mematikannya untuk domain ini.</div></div>
+      <div class="note info" style="margin:14px 0 0">${ic("info")}<div><b>Record dibuat sebagai DNS only</b>Mode Proxied tidak bisa meneruskan VPN L2TP dan Winbox.</div></div>
       <div class="err" id="cfErr"></div>
       <div class="form-actions"><button class="btn pri" id="cfGo">${ic("play")}Verifikasi &amp; terapkan</button></div>
     </form></div>
@@ -4243,11 +4257,10 @@ function viewLog(v) {
   v.innerHTML = `
     <div class="ph"><div><h1>Log aktivitas</h1><p>Catatan perubahan di panel dan kejadian penting. Disimpan 90 hari.</p></div></div>
     <div class="card">
-      <div class="ch"><h2>Riwayat aktivitas</h2><span class="muted" id="logCount" style="font-size:12.5px"></span></div>
-      <div class="toolbar"><div class="search">${ic("search", "")}<input id="lq" type="text" placeholder="Cari aktivitas, router, atau IP" value="${esc(LOGQ)}"></div></div>
+      <div class="ch log-h"><h2>Riwayat aktivitas <span class="muted" id="logCount" style="font-size:12.5px;font-weight:500;margin-left:6px"></span></h2><div class="search">${ic("search", "")}<input id="lq" type="text" placeholder="Cari aktivitas, router, atau IP" value="${esc(LOGQ)}"></div></div>
       <div id="logBody"><div class="empty"><p>Memuat…</p></div></div>
     </div>
-    <p class="help" style="margin-top:12px">Password dan token tidak pernah dicatat. Waktu dalam ${esc(tzLabel())}.</p>`;
+    `;
   let tm;
   $("#lq").addEventListener("input", (e) => { LOGQ = e.target.value; clearTimeout(tm); tm = setTimeout(fillLog, 250); });
   fillLog();
@@ -4359,13 +4372,13 @@ function wzRender() {
     `<h1>Password admin</h1><p>Buat <b>password admin</b> untuk masuk ke panel ini. Minimal 8 karakter.</p>
       <label for="wzPw">Password</label><input id="wzPw" type="password" autocomplete="new-password" value="${esc(WZ.pw)}">
       <label for="wzPw2">Ulangi password</label><input id="wzPw2" type="password" autocomplete="new-password" value="${esc(WZ.pw)}">
-      <div class="help">Tekan ikon mata untuk melihat password yang Anda ketik.</div>`,
+`,
     `<h1>Jaringan VPN L2TP</h1><p>Jaringan VPN menentukan URL ACS di semua ONT. Biarkan bawaannya jika ragu.</p>
       <label for="wzNet">Jaringan VPN</label><input id="wzNet" type="text" class="mono" value="${esc(S.tunnelNet)}">
       <div class="wz-net" id="wzNetInfo">${wzNetHtml(ci)}</div>
       <div class="note warn wz-note">${ic("alert")}<div><b>Tentukan sekarang</b>Mengganti jaringan VPN setelah ONT terpasang berarti URL ACS di semua ONT harus diganti.</div></div>
       <label class="check"><input id="wzIpsec" type="checkbox" ${S.useIpsec ? "checked" : ""}>Pakai IPsec (enkripsi L2TP)</label>
-      <div class="help">Biarkan mati kecuali memang dibutuhkan. Tanpa IPsec lebih ringan dan didukung semua MikroTik.</div>`,
+`,
     `<h1>Periksa sebelum selesai</h1>
       <div class="wz-sum">
         <div><span>Nama panel</span><b>${esc(S.panelName || "VPN ACS")}</b></div>

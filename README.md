@@ -339,6 +339,8 @@ Menu **GenieACS → Inform berkala ONT** menampilkan sebaran interval semua ONT.
 - **Blokir salah password bertingkat** per IP: 5 kali salah diblokir **5 menit**, diulang **30 menit**, lalu **24 jam**. Tersimpan walau panel di-restart; bisa dibuka manual. Notifikasi Telegram dikirim saat ada IP diblokir.
 - **Sesi aktif**: daftar perangkat yang sedang login (browser/HP, IP, terakhir aktif) dengan tombol **Keluarkan**. Mengganti password admin otomatis mengeluarkan semua perangkat lain.
 
+**Pengaturan → Notifikasi Telegram → Kejadian lain:** selain VPN putus/tersambung, bisa dipilih notifikasi untuk router ditambah/dihapus, router tersambung pertama kali, login panel, password admin diganti, pembaruan tersedia, add-on dipasang/diperbarui/gagal, dan IP diblokir.
+
 **Pengaturan → Notifikasi Telegram → Laporan kesehatan VPS:** laporan berkala (bawaan **tiap 7 hari jam 08:00**, interval 1–30 hari) berisi CPU, RAM, swap, disk, uptime, status layanan (panel, VPN, GenieACS, add-on), dan ringkasan router. **Peringatan langsung** bila disk/RAM di atas 90% atau ada layanan mati (diulang paling sering 6 jam sekali, dan ada pesan saat normal lagi). Dashboard menampilkan kartu **Kesehatan VPS**.
 
 ---

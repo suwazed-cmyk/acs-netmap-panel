@@ -52,7 +52,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.20.1";
+const VERSION = "2.21.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -2237,9 +2237,30 @@ function tgConfig(d) {
     remindMin: t.remindMin == null ? 60 : clampInt(t.remindMin, 0, 1440, 60),
     quietStart: t.quietStart || "",
     quietEnd: t.quietEnd || "",
+    events: Object.assign({}, TG_EVENT_DEF, t.events || {}),
   };
   c.active = c.enabled && !!c.token && !!c.chatId;
   return c;
+}
+// Notifikasi tambahan selain VPN putus/tersambung (bisa dipilih di Pengaturan → Notifikasi Telegram)
+const TG_EVENTS = [
+  ["routerAdd", "Router ditambah atau dihapus"],
+  ["routerFirst", "Router tersambung pertama kali"],
+  ["login", "Login ke panel berhasil"],
+  ["password", "Password admin diganti"],
+  ["update", "Pembaruan panel atau add-on tersedia"],
+  ["job", "Add-on dipasang, diperbarui, atau gagal"],
+];
+const TG_EVENT_DEF = { routerAdd: true, routerFirst: true, login: false, password: true, update: true, job: true };
+function tgEvent(d, key, text) {
+  try {
+    const c = tgConfig(d);
+    if (!c.active || !c.events[key]) return;
+    tgEnqueue(`${text}\n${escHtml(brandOf(d))} · ${fmtClock(Date.now(), tzName(d), true)}`);
+    tgFlush();
+  } catch (e) {
+    // abaikan
+  }
 }
 function isQuiet(c, tz, now) {
   if (!c.quietStart || !c.quietEnd || c.quietStart === c.quietEnd) return false;
@@ -2393,6 +2414,7 @@ async function monitorTick() {
         s.installedAt = new Date(now).toISOString();
         dataChanged = true;
         logActivity(null, "Router tersambung pertama kali", s.name);
+        tgEvent(d, "routerFirst", `🟢 <b>ROUTER TERPASANG</b>\n${escHtml(s.name)} tersambung ke VPS untuk pertama kali (${TR_LABEL[trOf(s)]}).`);
       }
       let r = h.sites[s.id];
       if (!r) {
@@ -2942,6 +2964,15 @@ async function checkUpdates() {
       out.addons[id] = { available: false, error: e.message };
     }
   }
+  // Kabari lewat Telegram sekali per versi baru (panel atau add-on)
+  const prev = UPDATES || {};
+  const fresh = [];
+  if (out.panel && out.panel.available && out.panel.latest && !(prev.panel && prev.panel.available && prev.panel.latest === out.panel.latest)) fresh.push(`Panel v${out.panel.latest}`);
+  for (const [id, x] of Object.entries(out.addons)) {
+    const px = (prev.addons || {})[id];
+    if (x && x.available && !(px && px.available && px.latest === x.latest)) fresh.push(`${(ADDONS[id] && ADDONS[id].name) || id}${x.latest ? " " + x.latest : ""}`);
+  }
+  if (fresh.length && UPDATES) tgEvent(d, "update", `⬆️ <b>PEMBARUAN TERSEDIA</b>\n${fresh.map((x) => "• " + escHtml(x)).join("\n")}\nPerbarui di Pengaturan → Pembaruan atau menu Add-on.`);
   UPDATES = out;
   try {
     fs.writeFileSync(UPDATE_FILE, JSON.stringify(out));
@@ -3487,6 +3518,7 @@ async function runJob(job, steps) {
   delete job.req;
   jobSave();
   sseSend("job", { id: job.id, ok: job.ok });
+  tgEvent(loadData(), "job", job.ok ? `✅ <b>${escHtml(job.title.toUpperCase())}</b>` : `❌ <b>${escHtml(job.title.toUpperCase())} GAGAL</b>\n${escHtml(String(job.error || "").slice(0, 300))}`);
   // Status "pembaruan tersedia" dihitung ulang supaya tanda pembaruan langsung hilang
   if (job.ok && (job.action === "install" || job.action === "update") && UPDATES && UPDATES.addons && job.addon) {
     delete UPDATES.addons[job.addon];
@@ -5166,6 +5198,7 @@ async function handleApi(req, res, url) {
     }
     const t = newSession(req);
     logActivity(req, "Login berhasil", uaLabel(req.headers["user-agent"]));
+    tgEvent(d, "login", `🔑 <b>LOGIN PANEL</b>\n${escHtml(uaLabel(req.headers["user-agent"]))} dari IP <code>${escHtml(clientIp(req))}</code>`);
     return send(res, 200, { ok: true }, { "Set-Cookie": `vpnacs=${t}; ${cookieFlags(req)}; Max-Age=${30 * 86400}` });
   }
   if (p === "/api/logout" && method === "POST") {
@@ -5393,6 +5426,8 @@ async function handleApi(req, res, url) {
           remindMin: tg.remindMin,
           quietStart: tg.quietStart,
           quietEnd: tg.quietEnd,
+          events: tg.events,
+          eventList: TG_EVENTS,
           lastOk: TG_STATUS.lastOk,
           lastError: TG_STATUS.lastError,
           lastErrorAt: TG_STATUS.lastErrorAt,
@@ -5503,6 +5538,10 @@ async function handleApi(req, res, url) {
     t.notifyRecovery = body.notifyRecovery !== false;
     t.quietStart = qs;
     t.quietEnd = qe;
+    if (body.events && typeof body.events === "object") {
+      t.events = {};
+      for (const [k] of TG_EVENTS) t.events[k] = !!body.events[k];
+    }
     if (t.enabled && !t.token) return send(res, 400, { error: "Isi token bot dulu." });
     if (t.enabled && !t.chatId) return send(res, 400, { error: "Pilih grup tujuan dulu (klik Deteksi grup & topik)." });
     if (body.timezone !== undefined && TIMEZONES[body.timezone]) d.settings.timezone = body.timezone;
@@ -6019,6 +6058,7 @@ async function handleApi(req, res, url) {
     }
     d.sites.push(site);
     saveData(d);
+    tgEvent(d, "routerAdd", `➕ <b>ROUTER DITAMBAH</b>\n${escHtml(site.name)} · ${TR_LABEL[trOf(site)]} · virtual ${site.virtualSubnet}`);
     logActivity(req, "Router ditambah", `${site.name} · ${TR_LABEL[trOf(site)]}${isWg(site) ? " " + site.wgIp : ""} · ONT ${site.realSubnet} → virtual ${site.virtualSubnet}`);
     let bindError = "";
     if (isZt(site) && String(body.ztNode || "").trim()) {
@@ -6133,6 +6173,7 @@ async function handleApi(req, res, url) {
       d.sites = d.sites.filter((s) => s.id !== site.id);
       saveData(d);
       logActivity(req, "Router dihapus", `${site.name} · ${site.virtualSubnet}`);
+      tgEvent(d, "routerAdd", `🗑️ <b>ROUTER DIHAPUS</b>\n${escHtml(site.name)} · virtual ${site.virtualSubnet}`);
       await applyAll(d, [site.virtualSubnet]);
       return send(res, 200, { ok: true });
     }
@@ -6425,6 +6466,7 @@ async function handleApi(req, res, url) {
       d.admin = hashPassword(body.newPassword);
       const out = sessionsDrop(req.sessKey);
       logs.push(["Password admin diganti", out ? `${out} sesi lain dikeluarkan` : ""]);
+      tgEvent(d, "password", `🔐 <b>PASSWORD ADMIN DIGANTI</b>\nDari IP <code>${escHtml(clientIp(req))}</code>${out ? ` · ${out} sesi lain dikeluarkan` : ""}`);
     }
     saveData(d);
     for (const [a, x] of logs) logActivity(req, a, x);
