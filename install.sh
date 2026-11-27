@@ -505,9 +505,9 @@ st_panel() {
   systemctl is-active --quiet vpn-acs
   # ufw aktif: buka port yang dibutuhkan (README menyarankan ufw tetap mati)
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
-    ufw allow 1701/udp; ufw allow 80/tcp; ufw allow 443/tcp; ufw allow 8088/tcp; ufw allow 3000/tcp
+    ufw allow 1701/udp; ufw allow 80/tcp; ufw allow 443/tcp; ufw allow 8088/tcp; ufw allow 3000/tcp; ufw allow 8101:8120/tcp
     ufw allow in on ppp+ to any port 7547 proto tcp || true
-    note "ufw aktif: port 1701/udp, 80, 443, 8088, 3000 dibuka."
+    note "ufw aktif: port 1701/udp, 80, 443, 8088, 3000, 8101-8120 dibuka."
   fi
 }
 

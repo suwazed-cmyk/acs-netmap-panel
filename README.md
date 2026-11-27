@@ -18,6 +18,7 @@ ONT ─ OLT ─ MikroTik router C ═══ VPN L2TP / WireGuard / ZeroTier ═�
   - Akun VPN dan **script MikroTik siap salin**, mengikuti nama panel Anda
   - **Tes koneksi** bertahap, status **tersambung/terputus**, dan **riwayat uptime** 24 jam / 7 hari / 30 hari
   - **Port forwarding** untuk remote Winbox / WebFig / web ONT lewat IP publik VPS
+  - **Buka web ONT tanpa VPN**: tombol **Buka web ONT** di GenieACS → Web ONT (dan di Panel ACS). Hanya bisa dibuka lewat tombol itu, berlaku 1 jam sejak terakhir dipakai, beberapa ONT bisa dibuka bersamaan
   - Halaman **GenieACS** (status layanan, patch, jumlah ONT per router) dan **ZeroTier** (controller lengkap: jaringan, rentang IP, perangkat, rute; pemilih jaringan untuk membuka dan mengelola semua jaringan di controller, Network ID + tombol salin, ganti nama langsung di kartu, QR Network ID)
   - **Notifikasi Telegram** saat VPN putus, dikirim ke grup bertopik
   - **Laporan kesehatan VPS** ke Telegram (CPU, RAM, disk, layanan, router) dengan interval hari yang bisa diatur, plus peringatan disk/RAM/layanan mati
@@ -348,13 +349,21 @@ Menu **GenieACS → Inform berkala ONT** menampilkan sebaran interval semua ONT.
 |---|---|
 | **Dashboard** | Jumlah router tersambung/terputus, uptime tiap router (24 jam, 7 hari, 30 hari), daftar **Perlu perhatian**, alamat GenieACS |
 | **Router** | Daftar router. Detail router punya tab **Ringkasan**, **Port Forwarding**, **Script MikroTik**, dan **Riwayat** |
-| **GenieACS** | Status layanan, patch IP virtual, jumlah ONT per router, alamat GenieACS UI |
+| **GenieACS** | Status layanan, patch IP virtual, jumlah ONT per router, **Web ONT** (buka web ONT lewat internet), alamat GenieACS UI |
 | **ZeroTier** | Controller ZeroTier: jaringan, rentang IP, perangkat, rute |
 | **Pengaturan** | Umum (nama panel, VPS, jaringan VPN, password), Notifikasi Telegram, Domain & HTTPS |
 | **Panduan** | Ringkasan cara pakai, langsung di panel |
 | **Log aktivitas** | Semua perubahan di panel selama 90 hari (password dan token tidak dicatat) |
 
 **Remote router / ONT (port forwarding):** buka router → tab **Port Forwarding** → **Tambah** → pilih layanan (Winbox, WebFig, SSH, Web ONT, atau lainnya). Untuk Winbox, isi **Connect To** dengan `IP_VPS:20001` (port sesuai yang tampil). Layanan web bisa langsung diklik dan terbuka di tab baru. Port ini terbuka ke internet, jadi pastikan password perangkat kuat.
+
+**Buka web ONT tanpa VPN:** menu **GenieACS → Web ONT** → cari ONT (serial, IP, atau router) → **Buka web ONT**. Web ONT terbuka di tab baru lewat `http://IP_VPS:8101` (port berikutnya untuk ONT lain, sampai 8120), lalu login ke ONT seperti biasa.
+- Alamat itu **hanya bisa dibuka lewat tombol di panel**. Tombol memberi tiket sekali pakai; orang yang mengetik alamatnya langsung akan ditolak.
+- Akses berlaku **1 jam sejak terakhir dipakai**, dan langsung berakhir saat Anda logout dari panel. Kalau habis, klik **Buka web ONT** lagi.
+- Beberapa ONT bisa dibuka bersamaan, masing-masing di port sendiri. Login ONT yang satu tidak menimpa yang lain.
+- Yang sedang terbuka tampil di kartu **Sedang terbuka** dan bisa ditutup kapan saja. Setiap pembukaan tercatat di **Log aktivitas**.
+- Deret port, jumlah pintu, dan port web ONT (bawaan 80) diatur di **GenieACS → Pengaturan → Pintu web ONT**. Jika VPS memakai firewall dari penyedia (security group), buka juga port `8101-8120/tcp` di sana.
+- Syaratnya, ONT sudah melapor ke GenieACS (IP virtualnya diketahui) dan router-nya sedang tersambung.
 
 **Riwayat:** tab **Riwayat** mencatat setiap putus (kapan dan berapa lama) serta grafik 30 hari, disimpan 90 hari. Router baru berstatus **Menunggu pemasangan** sampai MikroTik tersambung pertama kali.
 

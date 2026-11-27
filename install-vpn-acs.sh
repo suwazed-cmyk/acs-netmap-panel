@@ -216,7 +216,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.16.0";
+const VERSION = "2.17.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -1040,7 +1040,7 @@ function validateForward(d, site, b) {
   }
   const used = usedPublicPorts(d);
   const protos = proto === "both" ? ["tcp", "udp"] : [proto];
-  const free = (port) => !RESERVED_PORTS.has(port) && protos.every((p) => !used.has(p + ":" + port));
+  const free = (port) => !RESERVED_PORTS.has(port) && !gwInRange(d, port) && protos.every((p) => !used.has(p + ":" + port));
   let publicPort;
   if (b.publicPort === undefined || b.publicPort === null || String(b.publicPort).trim() === "") {
     publicPort = FWD_AUTO_START;
@@ -1050,6 +1050,7 @@ function validateForward(d, site, b) {
     publicPort = parseInt(b.publicPort, 10);
     if (!(publicPort >= 1024 && publicPort <= 65535)) return { error: "Port publik harus 1024-65535." };
     if (RESERVED_PORTS.has(publicPort)) return { error: `Port ${publicPort} sudah dipakai layanan VPS. Pilih port lain.` };
+    if (gwInRange(d, publicPort)) { const g = gwCfg(d); return { error: `Port ${publicPort} termasuk deret pintu web ONT (${g.from}-${g.to}). Pilih port lain.` }; }
     if (!free(publicPort)) {
       const owner = d.sites.find((s) => (s.forwards || []).some((f) => f.publicPort === publicPort));
       return { error: `Port publik ${publicPort} sudah dipakai${owner ? ` di router "${owner.name}"` : ""}. Pilih port lain atau kosongkan untuk otomatis.` };
@@ -1316,7 +1317,7 @@ async function genieDevices() {
   if (GENIE_CACHE.data && Date.now() - GENIE_CACHE.t < 60000) return GENIE_CACHE.data;
   const port = readGenieEnv("GENIEACS_NBI_PORT") || "7557";
   const base = NBI_URL || `http://127.0.0.1:${port}`;
-  const proj = ["_id", "_lastInform", "_lastBoot", ...["InternetGatewayDevice", "Device"].flatMap((r) => ["ConnectionRequestURL", "PeriodicInformInterval", "PeriodicInformEnable"].map((k) => `${r}.ManagementServer.${k}`))].join(",");
+  const proj = ["_id", "_lastInform", "_lastBoot", "_deviceId._SerialNumber", "_deviceId._ProductClass", "_deviceId._OUI", ...["InternetGatewayDevice", "Device"].flatMap((r) => ["ConnectionRequestURL", "PeriodicInformInterval", "PeriodicInformEnable"].map((k) => `${r}.ManagementServer.${k}`))].join(",");
   const r = await httpJson("GET", `${base}/devices/?projection=${encodeURIComponent(proj)}`, null, null, 20000);
   if (r.status !== 200 || !Array.isArray(r.json)) {
     return { error: r.status === 0 ? `GenieACS NBI tidak menjawab (${r.error})` : `GenieACS NBI menolak (HTTP ${r.status})` };
@@ -1326,7 +1327,8 @@ async function genieDevices() {
     devices: r.json.map((d) => {
       const iv = parseInt(mv(d, "PeriodicInformInterval"), 10);
       const en = mv(d, "PeriodicInformEnable");
-      return { id: d._id, last: d._lastInform ? Date.parse(d._lastInform) : 0, ip: crHost(d), iv: iv > 0 ? iv : 0, en: en === null ? null : en === true || en === "true" || en === 1 || en === "1" };
+      const di = d._deviceId || {};
+      return { id: d._id, sn: di._SerialNumber || "", pc: di._ProductClass || "", oui: di._OUI || "", last: d._lastInform ? Date.parse(d._lastInform) : 0, ip: crHost(d), iv: iv > 0 ? iv : 0, en: en === null ? null : en === true || en === "true" || en === 1 || en === "1" };
     }),
   };
   GENIE_CACHE = { t: Date.now(), data };
@@ -4406,6 +4408,263 @@ function onUpgrade(req, sock, head) {
   if (a) return proxyUpgrade(req, sock, head, a.port, a.path);
   sock.destroy();
 }
+// =====================================================================
+//  Pintu web ONT: buka web ONT dari internet tanpa tersambung VPN
+//  - Satu deret port di VPS (bawaan 8101-8120). Setiap ONT yang dibuka
+//    meminjam satu port selama dipakai, jadi beberapa ONT bisa dibuka bersamaan.
+//  - Port hanya bisa dipakai lewat tombol di panel / Panel ACS: tombol membuat
+//    tiket sekali pakai (60 detik) yang ditukar menjadi cookie kunci.
+//  - Kunci kedaluwarsa 1 jam sejak terakhir dipakai, atau saat logout panel.
+//  - Cookie dari ONT diberi awalan per port (p8101_...) supaya login ONT yang
+//    berbeda tidak saling menimpa walaupun alamatnya sama-sama IP VPS.
+// =====================================================================
+const gwEsc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" })[c]);
+const GW_TICKET_MS = 60 * 1000;
+const GW_IDLE_MS = 3600 * 1000;
+const GW_SLOTS = new Map(); // port -> slot
+const GW_TICKETS = new Map(); // hash tiket -> { port, exp, sess, by }
+function gwCfg(d) {
+  const g = (d.settings && d.settings.ontGw) || {};
+  const from = parseInt(g.from, 10) || 8101;
+  const count = Math.min(100, Math.max(1, parseInt(g.count, 10) || 20));
+  return { enabled: g.enabled !== false, from, count, to: from + count - 1, tport: parseInt(g.tport, 10) || 80 };
+}
+function gwInRange(d, port) {
+  const c = gwCfg(d);
+  return c.enabled && port >= c.from && port <= c.to;
+}
+// Deret port tidak boleh mengenai layanan VPS, add-on, atau port forwarding router
+function gwCheckRange(d, from, count) {
+  if (!(from >= 1024 && from + count - 1 <= 65535)) return "Deret port harus di antara 1024 dan 65535.";
+  const to = from + count - 1;
+  const busy = [...RESERVED_PORTS].concat(Object.values(ADDONS).map((a) => a.port).filter(Boolean));
+  const hit = busy.find((p) => p >= from && p <= to);
+  if (hit) return `Port ${hit} dipakai layanan VPS. Pilih deret lain.`;
+  for (const s of d.sites)
+    for (const f of s.forwards || []) if (f.publicPort >= from && f.publicPort <= to) return `Port ${f.publicPort} sudah dipakai port forwarding router "${s.name}". Pilih deret lain.`;
+  return "";
+}
+function gwSiteOf(d, ip) {
+  return d.sites.find((s) => {
+    const c = parseCidr(s.virtualSubnet);
+    return c && inSubnet(ip, c);
+  });
+}
+// IP asli ONT di jaringan router (kebalikan NETMAP), dipakai untuk merapikan tautan absolut
+function gwRealIp(site, ip) {
+  const real = parseCidr(site.realSubnet);
+  const virt = parseCidr(site.virtualSubnet);
+  if (!real || !virt) return "";
+  return intToIp(real.net + (ipToInt(ip) - virt.net));
+}
+let GW_UFW = "";
+async function gwFirewall(c) {
+  const want = `${c.from}:${c.to}/tcp`;
+  if (GW_UFW === want) return;
+  GW_UFW = want;
+  const u = await run("ufw", ["status"]);
+  if (u.code === 0 && /Status: active/.test(u.out) && !u.out.includes(want)) await run("ufw", ["allow", want]);
+}
+function gwListen(slot) {
+  return new Promise((resolve) => {
+    const srv = http.createServer((req, res) => {
+      try {
+        gwHandle(slot, req, res);
+      } catch (e) {
+        console.error("Pintu web ONT:", e.message);
+        if (!res.headersSent) gwPage(res, 500, "Terjadi kesalahan", "Pintu web ONT mengalami kesalahan. Coba buka lagi dari panel.");
+      }
+    });
+    srv.on("upgrade", (req, sock) => sock.destroy());
+    srv.on("clientError", (e, sock) => sock.destroy());
+    srv.once("error", (e) => resolve({ error: e.code || e.message }));
+    srv.listen(slot.port, HOST, () => {
+      slot.srv = srv;
+      resolve({ ok: true });
+    });
+  });
+}
+async function gwOpen(d, o) {
+  const c = gwCfg(d);
+  if (!c.enabled) return { error: "Pintu web ONT dimatikan. Aktifkan di GenieACS → Pengaturan." };
+  const ip = String(o.ip || "").trim();
+  if (ipToInt(ip) === null) return { error: "IP ONT tidak valid." };
+  const site = gwSiteOf(d, ip);
+  if (!site) return { error: `IP ${ip} bukan IP virtual router mana pun di panel, jadi web-nya tidak bisa dibuka lewat VPS.` };
+  const links = await siteLinks(d);
+  if (!links[site.id]) return { error: `Router "${site.name}" sedang tidak tersambung ke VPS, web ONT tidak bisa dibuka.` };
+  const tport = parseInt(o.tport, 10) || c.tport;
+  if (!(tport >= 1 && tport <= 65535)) return { error: "Port web ONT harus 1-65535." };
+  const host = /^\d+\.\d+\.\d+\.\d+$/.test(o.host || "") && o.host !== "127.0.0.1" ? o.host : settings(d).publicIp;
+  if (!host) return { error: "IP publik VPS belum diketahui. Isi Alamat VPS di Pengaturan." };
+  gwSweep();
+  let slot = [...GW_SLOTS.values()].find((s) => s.ip === ip && s.tport === tport);
+  if (!slot) {
+    await gwFirewall(c);
+    for (let p = c.from; p <= c.to && !slot; p++) {
+      if (GW_SLOTS.has(p)) continue;
+      const s = { port: p, ip, tport, real: gwRealIp(site, ip), label: "", site: site.id, siteName: site.name, created: Date.now(), keys: new Map(), srv: null };
+      const r = await gwListen(s);
+      if (r.ok) {
+        GW_SLOTS.set(p, s);
+        slot = s;
+      } else if (r.error !== "EADDRINUSE" && r.error !== "EACCES") return { error: `Port ${p} tidak bisa dibuka: ${r.error}` };
+    }
+    if (!slot) return { error: `Semua ${c.count} pintu (port ${c.from}-${c.to}) sedang dipakai. Tutup web ONT yang tidak dipakai di GenieACS → Web ONT.` };
+  }
+  if (o.label) slot.label = String(o.label).slice(0, 80);
+  const t = crypto.randomBytes(24).toString("hex");
+  GW_TICKETS.set(tokHash(t), { port: slot.port, exp: Date.now() + GW_TICKET_MS, sess: o.sess || "", by: o.by || "panel" });
+  return { ok: true, port: slot.port, site: site.name, url: `http://${host}:${slot.port}/__ontgw/${t}` };
+}
+function gwClose(port) {
+  const s = GW_SLOTS.get(port);
+  if (!s) return false;
+  GW_SLOTS.delete(port);
+  for (const [k, t] of GW_TICKETS) if (t.port === port) GW_TICKETS.delete(k);
+  try {
+    s.srv.close();
+    if (s.srv.closeAllConnections) s.srv.closeAllConnections();
+  } catch (e) {
+    // abaikan
+  }
+  return true;
+}
+const gwKeyOk = (r, n) => n - r.last <= GW_IDLE_MS && (!r.sess || sessions.has(r.sess));
+function gwSweep() {
+  const n = Date.now();
+  for (const [k, t] of GW_TICKETS) if (t.exp < n) GW_TICKETS.delete(k);
+  const d = loadData();
+  for (const [port, s] of GW_SLOTS) {
+    for (const [k, r] of s.keys) if (!gwKeyOk(r, n)) s.keys.delete(k);
+    const pending = [...GW_TICKETS.values()].some((t) => t.port === port);
+    const gone = !d.sites.some((x) => x.id === s.site);
+    if (gone || (!s.keys.size && !pending)) gwClose(port);
+  }
+}
+setInterval(gwSweep, 60 * 1000).unref();
+function gwList() {
+  gwSweep();
+  return [...GW_SLOTS.values()].map((s) => {
+    const last = Math.max(s.created, ...[...s.keys.values()].map((r) => r.last));
+    return { port: s.port, ip: s.ip, tport: s.tport, label: s.label, site: s.siteName, created: s.created, last, expires: last + GW_IDLE_MS, users: s.keys.size };
+  }).sort((a, b) => a.port - b.port);
+}
+function gwPage(res, code, title, msg) {
+  res.writeHead(code, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+  res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><body style="font-family:system-ui,sans-serif;background:#f3f6fa;margin:0;display:grid;place-items:center;min-height:100vh;color:#1e2a3b"><div style="background:#fff;border-radius:14px;padding:28px 30px;max-width:420px;box-shadow:0 6px 24px rgba(20,40,80,.08)"><h2 style="margin:0 0 8px;font-size:19px">${title}</h2><p style="margin:0;color:#4a5668;line-height:1.55">${msg}</p></div></body>`);
+}
+// Tautan absolut ke ONT (http://IP-ONT/...) dijadikan tautan relatif ke pintu ini
+function gwStrip(s, slot) {
+  for (const ip of [slot.ip, slot.real].filter(Boolean)) {
+    const port = slot.tport === 80 ? "(?::80)?" : `:${slot.tport}`;
+    const re = new RegExp(`https?://${ip.replace(/\./g, "\\.")}${port}(?![\\d.:])`, "g");
+    s = s.replace(re, (m, off, all) => (all[off + m.length] === "/" ? "" : "/"));
+  }
+  return s;
+}
+function gwCookieOut(c, P) {
+  const parts = String(c).split(";");
+  const first = parts.shift().trim();
+  const attrs = parts.map((x) => x.trim()).filter((x) => x && !/^domain=/i.test(x) && !/^secure$/i.test(x) && !/^samesite\s*=\s*none$/i.test(x));
+  return [P + first].concat(attrs).join("; ");
+}
+// Skrip kecil di awal setiap halaman: document.cookie dibaca/ditulis dengan awalan port
+function gwInject(s, P) {
+  const js = `<script>/*ontgw*/(function(){try{var P=${JSON.stringify(P)},D=Object.getOwnPropertyDescriptor(Document.prototype,"cookie");if(!D||!D.get)return;Object.defineProperty(document,"cookie",{configurable:true,get:function(){return D.get.call(document).split(/;\\s*/).filter(function(c){return c.indexOf(P)===0}).map(function(c){return c.slice(P.length)}).join("; ")},set:function(v){v=String(v).replace(/^\\s+/,"").replace(/;\\s*domain=[^;]*/ig,"").replace(/;\\s*secure(?=;|$)/ig,"");D.set.call(document,P+v)}})}catch(e){}})();</script>`;
+  const m = s.match(/<head\b[^>]*>/i) || s.match(/<html\b[^>]*>/i) || s.match(/<!doctype[^>]*>/i);
+  if (!m) return js + s;
+  const at = m.index + m[0].length;
+  return s.slice(0, at) + js + s.slice(at);
+}
+function gwHandle(slot, req, res) {
+  const n = Date.now();
+  const u = req.url || "/";
+  const CK = "ontgw" + slot.port;
+  if (u.startsWith("/__ontgw/")) {
+    const t = u.slice(9).split(/[?#]/)[0];
+    if (t === "tutup") {
+      const v = getCookie(req, CK);
+      if (v) slot.keys.delete(tokHash(v));
+      res.setHeader("Set-Cookie", `${CK}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
+      return gwPage(res, 200, "Web ONT ditutup", "Akses web ONT dari browser ini sudah ditutup. Buka lagi dari panel jika diperlukan.");
+    }
+    const k = tokHash(t);
+    const tk = GW_TICKETS.get(k);
+    GW_TICKETS.delete(k);
+    if (!tk || tk.port !== slot.port || tk.exp < n) return gwPage(res, 403, "Tautan tidak berlaku", "Tautan ini sudah dipakai atau kedaluwarsa. Klik <b>Buka web ONT</b> lagi di panel.");
+    const key = crypto.randomBytes(24).toString("hex");
+    slot.keys.set(tokHash(key), { last: n, sess: tk.sess, by: tk.by, ip: clientIp(req) });
+    logActivity(req, "Web ONT dibuka", `${slot.label || slot.ip} (${slot.ip}) · ${slot.siteName} · port ${slot.port}${tk.by !== "panel" ? " · dari " + tk.by : ""}`);
+    res.writeHead(302, { Location: "/", "Set-Cookie": `${CK}=${key}; HttpOnly; SameSite=Lax; Path=/`, "Cache-Control": "no-store" });
+    return res.end();
+  }
+  const v = getCookie(req, CK);
+  const rec = v && slot.keys.get(tokHash(v));
+  if (!rec || !gwKeyOk(rec, n)) {
+    if (rec) slot.keys.delete(tokHash(v));
+    return gwPage(res, 403, "Sesi web ONT habis", "Alamat ini hanya bisa dibuka lewat panel, dan sesinya berlaku 1 jam sejak terakhir dipakai. Klik <b>Buka web ONT</b> lagi di panel untuk membuka ONT ini.");
+  }
+  rec.last = n;
+  gwProxy(slot, req, res);
+}
+function gwProxy(slot, req, res) {
+  const P = `p${slot.port}_`;
+  const self = req.headers.host || "";
+  const tgt = slot.tport === 80 ? slot.ip : `${slot.ip}:${slot.tport}`;
+  const skip = new Set(["host", "cookie", "accept-encoding", "connection", "keep-alive", "proxy-connection", "upgrade", "x-forwarded-for", "x-forwarded-proto", "x-forwarded-host", "x-real-ip"]);
+  const headers = {};
+  for (const [k, val] of Object.entries(req.headers)) if (!skip.has(k)) headers[k] = val;
+  headers.host = tgt;
+  headers["accept-encoding"] = "identity";
+  for (const h of ["origin", "referer"]) if (headers[h]) headers[h] = String(headers[h]).split(`http://${self}`).join(`http://${tgt}`);
+  const ck = [];
+  for (const part of String(req.headers.cookie || "").split(";")) {
+    const s = part.trim();
+    if (s.startsWith(P)) ck.push(s.slice(P.length));
+  }
+  if (ck.length) headers.cookie = ck.join("; ");
+  const up = http.request({ host: slot.ip, port: slot.tport, method: req.method, path: req.url, headers, timeout: 30000 }, (r) => {
+    const drop = new Set(["content-security-policy", "content-security-policy-report-only", "strict-transport-security", "connection", "keep-alive", "transfer-encoding", "content-length"]);
+    const h = {};
+    for (const [k, val] of Object.entries(r.headers)) if (!drop.has(k)) h[k] = val;
+    if (r.headers["set-cookie"]) h["set-cookie"] = r.headers["set-cookie"].map((c) => gwCookieOut(c, P));
+    if (h.location) h.location = gwStrip(String(h.location), slot);
+    const ct = String(r.headers["content-type"] || "");
+    const html = /text\/html|application\/xhtml/i.test(ct);
+    const text = html || /javascript|ecmascript|text\/css|json|xml|text\/plain/i.test(ct);
+    const enc = String(r.headers["content-encoding"] || "identity").toLowerCase();
+    const code = r.statusCode || 502;
+    if (!text || enc !== "identity" || req.method === "HEAD" || code === 204 || code === 304) {
+      if (r.headers["content-length"] !== undefined) h["content-length"] = r.headers["content-length"];
+      res.writeHead(code, h);
+      return r.pipe(res);
+    }
+    const chunks = [];
+    let size = 0;
+    r.on("data", (c) => {
+      size += c.length;
+      if (size <= 16 * 1024 * 1024) chunks.push(c);
+    });
+    r.on("end", () => {
+      let s = Buffer.concat(chunks).toString("latin1");
+      s = gwStrip(s, slot);
+      if (html) s = gwInject(s, P);
+      const b = Buffer.from(s, "latin1");
+      h["content-length"] = b.length;
+      res.writeHead(code, h);
+      res.end(b);
+    });
+    r.on("error", () => res.destroy());
+  });
+  up.on("timeout", () => up.destroy(new Error("ETIMEDOUT")));
+  up.on("error", (e) => {
+    if (res.headersSent) return res.destroy();
+    gwPage(res, 502, "ONT tidak menjawab", `Web ONT di ${gwEsc(tgt)} (router ${gwEsc(slot.siteName)}) tidak menjawab: ${gwEsc(String(e.code || e.message))}. Pastikan ONT menyala dan web-nya memakai port ${slot.tport}.`);
+  });
+  req.pipe(up);
+}
+
 // Kirim koneksi TLS ke server https internal (dipakai port 443 dan 8088)
 function pipeTls(sock, buf) {
   sock.pause();
@@ -5077,6 +5336,11 @@ async function handleApi(req, res, url) {
     const key = String(req.headers["x-addon-key"] || "");
     const ok = (ip === "127.0.0.1" || ip === "::1") && d.settings && d.settings.addonKey && key.length === d.settings.addonKey.length && crypto.timingSafeEqual(Buffer.from(key), Buffer.from(d.settings.addonKey));
     if (!ok) return send(res, 403, { error: "Akses ditolak" });
+    // Panel ACS: buka web ONT lewat pintu web ONT panel
+    if (p === "/api/addon/ont-open" && method === "POST") {
+      const r = await gwOpen(d, { ip: body.ip, tport: body.port, label: body.label, host: String(body.host || "").replace(/:\d+$/, ""), by: "Panel ACS" });
+      return send(res, r.error ? 400 : 200, r);
+    }
     if (p === "/api/addon/routers" && method === "GET") {
       const st = settings(d);
       const links = await siteLinks(d);
@@ -5130,6 +5394,61 @@ async function handleApi(req, res, url) {
 
   if (!authed(req)) return send(res, 401, { error: "Silakan login dulu." });
 
+  // --- Pintu web ONT ---
+  if (p === "/api/ontgw" && method === "GET") {
+    const d = loadData();
+    const c = gwCfg(d);
+    return send(res, 200, { cfg: c, list: gwList(), publicIp: settings(d).publicIp || "", idleMin: GW_IDLE_MS / 60000 });
+  }
+  if (p === "/api/ontgw/open" && method === "POST") {
+    const r = await gwOpen(loadData(), { ip: body.ip, tport: body.port, label: body.label, host: reqHost(req), sess: req.sessKey, by: "panel" });
+    return send(res, r.error ? 400 : 200, r);
+  }
+  if (p === "/api/ontgw/close" && method === "POST") {
+    const port = parseInt(body.port, 10);
+    const s = GW_SLOTS.get(port);
+    if (!s) return send(res, 404, { error: "Pintu ini sudah tertutup." });
+    gwClose(port);
+    logActivity(req, "Web ONT ditutup", `${s.label || s.ip} (${s.ip}) · port ${port}`);
+    return send(res, 200, { ok: true });
+  }
+  if (p === "/api/ontgw/settings" && method === "PUT") {
+    const d = loadData();
+    const cur = gwCfg(d);
+    const enabled = body.enabled !== undefined ? !!body.enabled : cur.enabled;
+    const from = body.from !== undefined ? parseInt(body.from, 10) : cur.from;
+    const count = body.count !== undefined ? parseInt(body.count, 10) : cur.count;
+    const tport = body.tport !== undefined ? parseInt(body.tport, 10) : cur.tport;
+    if (!(count >= 1 && count <= 100)) return send(res, 400, { error: "Jumlah pintu 1-100." });
+    if (!(tport >= 1 && tport <= 65535)) return send(res, 400, { error: "Port web ONT 1-65535." });
+    if (enabled) {
+      const e = gwCheckRange(d, from, count);
+      if (e) return send(res, 400, { error: e });
+    }
+    d.settings = d.settings || {};
+    d.settings.ontGw = { enabled, from, count, tport };
+    saveData(d);
+    if (!enabled || from !== cur.from || count !== cur.count) for (const port of [...GW_SLOTS.keys()]) gwClose(port);
+    logActivity(req, "Pintu web ONT diubah", enabled ? `port ${from}-${from + count - 1}, web ONT port ${tport}` : "dimatikan");
+    return send(res, 200, { ok: true });
+  }
+  // Daftar ONT (untuk tombol Buka web ONT)
+  if (p === "/api/genie/devices" && method === "GET") {
+    const d = loadData();
+    const dev = await genieDevices();
+    if (dev.error) return send(res, 200, { error: dev.error, devices: [] });
+    const subs = d.sites.map((s) => [parseCidr(s.virtualSubnet), s]);
+    const links = await siteLinks(d);
+    const dec = (x) => { try { return decodeURIComponent(x); } catch (e) { return x; } };
+    return send(res, 200, {
+      devices: dev.devices.map((x) => {
+        const parts = String(x.id).split("-");
+        const hit = x.ip ? subs.find(([c]) => c && inSubnet(x.ip, c)) : null;
+        const site = hit ? hit[1] : null;
+        return { id: x.id, serial: x.sn || dec(parts[parts.length - 1] || x.id), product: x.pc || (parts.length >= 3 ? dec(parts.slice(1, -1).join("-")) : ""), oui: x.oui || (parts.length >= 2 ? parts[0] : ""), ip: x.ip || "", last: x.last, site: site ? site.name : "", siteId: site ? site.id : "", siteOnline: site ? !!links[site.id] : false };
+      }),
+    });
+  }
   // --- Akun GenieACS UI ---
   if (p === "/api/genie/users" && method === "GET") return send(res, 200, await genieUsers());
   if (p === "/api/genie/users" && method === "POST") {
@@ -9341,6 +9660,115 @@ async function fillGenieUsers() {
   }));
 }
 
+// ---------- Web ONT: buka web ONT lewat internet tanpa VPN (GenieACS → Web ONT) ----------
+const ONTW = { q: "", list: null, gw: null, show: 50 };
+// Tab baru dibuka dulu saat diklik (supaya tidak diblokir browser), alamatnya diisi setelah tiket didapat
+async function openOntWeb(ip, label, btn) {
+  const w = window.open("", "_blank");
+  if (w) { try { w.document.write('<p style="font-family:system-ui;padding:30px;color:#445">Membuka web ONT…</p>'); } catch (e) {} }
+  if (btn) busyBtn(btn, true);
+  try {
+    const r = await api("/api/ontgw/open", { method: "POST", body: { ip, label } });
+    if (w) w.location.href = r.url; else location.href = r.url;
+    toast(`Web ONT dibuka di port ${r.port}`);
+    setTimeout(() => { fillOntOpen(); }, 1500);
+  } catch (e) {
+    if (w) w.close();
+    doneDialog("Web ONT tidak bisa dibuka", `<p>${esc(e.message)}</p>`, "bad", false);
+  } finally { if (btn) busyBtn(btn, false); }
+}
+function ontLabel(x) { return x.product ? `${x.serial} · ${x.product}` : x.serial; }
+async function fillOntOpen() {
+  const box = $("#gOntOpen"); if (!box) return;
+  let r;
+  try { r = await api("/api/ontgw"); } catch (e) { return; }
+  if (!$("#gOntOpen")) return;
+  ONTW.gw = r;
+  const L = r.list || [];
+  box.hidden = !L.length;
+  box.innerHTML = `<div class="ch"><h2>Sedang terbuka</h2><span class="muted" style="font-size:12.5px">${L.length} dari ${r.cfg.count} pintu dipakai</span></div>
+    <table class="t"><thead><tr><th>ONT</th><th class="hide-sm">Router</th><th>Alamat</th><th class="hide-md">Berakhir</th><th class="r"></th></tr></thead><tbody>
+    ${L.map((x) => `<tr><td><b>${esc(x.label || x.ip)}</b><div class="muted mono" style="font-size:12px">${esc(x.ip)}</div></td><td class="hide-sm">${esc(x.site)}</td>
+      <td class="mono">:${x.port}</td><td class="hide-md">${x.users ? `${esc(fmtDur(Math.max(0, x.expires - Date.now())))} lagi` : `<span class="muted">menunggu dibuka</span>`}</td>
+      <td class="r" style="white-space:nowrap"><button class="btn sm" data-oreopen="${esc(x.ip)}" data-olabel="${esc(x.label)}">${ic("ext")}Buka</button> <button class="btn sm" data-oclose="${x.port}">${ic("x")}Tutup</button></td></tr>`).join("")}
+    </tbody></table>`;
+  paintIcons(box);
+  box.querySelectorAll("[data-oreopen]").forEach((b) => (b.onclick = () => openOntWeb(b.dataset.oreopen, b.dataset.olabel, b)));
+  box.querySelectorAll("[data-oclose]").forEach((b) => (b.onclick = async () => {
+    busyBtn(b, true);
+    try { await api("/api/ontgw/close", { method: "POST", body: { port: +b.dataset.oclose } }); toast("Web ONT ditutup"); } catch (e) { toast(e.message); }
+    fillOntOpen();
+  }));
+}
+function ontRows() {
+  const el = $("#gOntRows"); if (!el || !ONTW.list) return;
+  const q = ONTW.q.trim().toLowerCase();
+  const all = ONTW.list.filter((x) => !q || [x.serial, x.product, x.ip, x.site, x.id].join(" ").toLowerCase().includes(q));
+  const rows = all.slice(0, ONTW.show);
+  const HOUR = 3600e3;
+  el.innerHTML = rows.length ? rows.map((x) => {
+    const on = x.last && Date.now() - x.last < HOUR;
+    const why = !x.ip ? "IP ONT belum diketahui GenieACS" : !x.site ? "IP ONT bukan IP virtual router panel" : !x.siteOnline ? `Router ${x.site} sedang putus` : "";
+    return `<tr><td><b>${esc(x.serial)}</b><div class="muted" style="font-size:12px">${esc(x.product || x.oui || "")}</div></td>
+      <td class="hide-sm">${x.site ? esc(x.site) : `<span class="muted">—</span>`}</td>
+      <td class="mono">${esc(x.ip || "—")}</td>
+      <td class="hide-md"><i class="dot ${on ? "ok" : "bad"}"></i> ${x.last ? esc(fmtDur(Date.now() - x.last)) + " lalu" : "belum pernah"}</td>
+      <td class="r">${why ? `<span class="muted" style="font-size:12px" title="${esc(why)}">${esc(why)}</span>` : `<button class="btn sm" data-oopen="${esc(x.ip)}" data-olabel="${esc(ontLabel(x))}">${ic("ext")}Buka web ONT</button>`}</td></tr>`;
+  }).join("") : `<tr><td colspan="5"><div class="empty"><p>${ONTW.list.length ? "Tidak ada ONT yang cocok." : "Belum ada ONT di GenieACS."}</p></div></td></tr>`;
+  const more = $("#gOntMore");
+  if (more) { more.hidden = all.length <= ONTW.show; more.textContent = `Tampilkan lagi (${all.length - ONTW.show} ONT lain)`; }
+  paintIcons(el);
+  el.querySelectorAll("[data-oopen]").forEach((b) => (b.onclick = () => openOntWeb(b.dataset.oopen, b.dataset.olabel, b)));
+}
+async function fillOntWeb() {
+  const box = $("#gOnt"); if (!box) return;
+  if (!$("#gOntRows")) {
+    box.innerHTML = `
+      <div class="card" id="gOntOpen" hidden></div>
+      <div class="card">
+        <div class="ch"><h2>Daftar ONT</h2><div class="tsearch"><span>${ic("search", "")}</span><input id="gOntQ" type="search" placeholder="Cari serial, IP, atau router" value="${esc(ONTW.q)}"></div></div>
+        <table class="t"><thead><tr><th>ONT</th><th class="hide-sm">Router</th><th>IP virtual</th><th class="hide-md">Terakhir lapor</th><th class="r"></th></tr></thead><tbody id="gOntRows"><tr><td colspan="5" class="muted">Membaca daftar ONT…</td></tr></tbody></table>
+        <div class="cb" style="border-top:1px solid var(--line);padding:10px 20px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <button class="btn sm" id="gOntMore" hidden></button>
+          <span class="help" style="margin:0">Web ONT dibuka lewat IP VPS tanpa perlu tersambung VPN. Hanya bisa dibuka dari tombol ini, dan berlaku 1 jam sejak terakhir dipakai. Kalau habis, klik lagi.</span>
+        </div>
+      </div>`;
+    paintIcons(box);
+    $("#gOntQ").oninput = (e) => { ONTW.q = e.target.value; ONTW.show = 50; ontRows(); };
+    $("#gOntMore").onclick = () => { ONTW.show += 100; ontRows(); };
+  }
+  fillOntOpen();
+  let r;
+  try { r = await api("/api/genie/devices"); } catch (e) { r = { error: e.message, devices: [] }; }
+  if (!$("#gOntRows")) return;
+  if (r.error) { $("#gOntRows").innerHTML = `<tr><td colspan="5"><div class="note warn" style="margin:0">${ic("alert")}<div><b>Daftar ONT tidak bisa dibaca</b>${esc(r.error)}</div></div></td></tr>`; paintIcons($("#gOntRows")); return; }
+  ONTW.list = r.devices.sort((a, b) => (b.siteOnline - a.siteOnline) || String(a.site).localeCompare(String(b.site), "id") || a.serial.localeCompare(b.serial));
+  ontRows();
+}
+async function fillGwSettings() {
+  const box = $("#gGw"); if (!box) return;
+  let r;
+  try { r = await api("/api/ontgw"); } catch (e) { box.innerHTML = `<div class="ch"><h2>Pintu web ONT</h2></div><div class="cb muted">${esc(e.message)}</div>`; return; }
+  if (!$("#gGw")) return;
+  const c = r.cfg;
+  box.innerHTML = `<div class="ch"><h2>Pintu web ONT</h2>${c.enabled ? `<span class="pill ok">Aktif</span>` : `<span class="pill">Mati</span>`}</div>
+    <form class="cb" id="gwForm">
+      <label class="check" style="margin:0 0 6px"><input type="checkbox" id="gwOn"${c.enabled ? " checked" : ""}> Izinkan membuka web ONT lewat IP VPS</label>
+      <div class="f2"><div><label for="gwFrom">Port awal</label><input id="gwFrom" type="number" min="1024" max="65535" value="${c.from}"></div>
+        <div><label for="gwCount">Jumlah pintu</label><input id="gwCount" type="number" min="1" max="100" value="${c.count}"></div></div>
+      <label for="gwT">Port web ONT</label><input id="gwT" type="number" min="1" max="65535" value="${c.tport}">
+      <div class="help">Port <b class="mono">${c.from}-${c.to}</b> di IP VPS${r.publicIp ? ` (${esc(r.publicIp)})` : ""}. Satu ONT yang dibuka memakai satu port, jadi ${c.count} ONT bisa dibuka bersamaan. Jika VPS memakai firewall dari penyedia (security group), buka juga port ini di sana.</div>
+      <div class="err" id="gwErr"></div>
+      <div class="form-actions"><button class="btn pri">Simpan</button></div>
+    </form>`;
+  $("#gwForm").onsubmit = async (e) => {
+    e.preventDefault(); $("#gwErr").textContent = "";
+    const b = $("#gwForm button"); busyBtn(b, true);
+    try { await api("/api/ontgw/settings", { method: "PUT", body: { enabled: $("#gwOn").checked, from: +$("#gwFrom").value, count: +$("#gwCount").value, tport: +$("#gwT").value } }); toast("Pintu web ONT disimpan"); fillGwSettings(); }
+    catch (err) { $("#gwErr").textContent = err.message; busyBtn(b, false); }
+  };
+}
+
 /* ================= GenieACS ================= */
 // ---------- Inform berkala ONT: penyebab umum ONT terlihat offline padahal hidup ----------
 function informCard(g) {
@@ -9403,7 +9831,7 @@ async function fillGenie(refresh) {
     : !P.synced ? { c: "warn", t: "Setting GenieACS belum sama dengan panel", d: "Panel akan mencoba lagi dalam 5 menit. Jika tetap begini, cek: journalctl -u vpn-acs -n 50" }
     : { c: "ok", t: "Patch IP virtual aktif", d: "Rentang mengikuti IP virtual router di panel secara otomatis." };
   const svcDown = g.services.filter((x) => !x.active).length;
-  const GT = [["ringkasan", "Ringkasan", "pulse"], ["pengaturan", "Pengaturan", "sliders", P.cidr !== null && (!P.patched || !P.synced || P.outside.length) ? "!" : ""], ["layanan", "Layanan & alamat", "box", svcDown || ""]];
+  const GT = [["ringkasan", "Ringkasan", "pulse"], ["ont", "Web ONT", "globe"], ["pengaturan", "Pengaturan", "sliders", P.cidr !== null && (!P.patched || !P.synced || P.outside.length) ? "!" : ""], ["layanan", "Layanan & alamat", "box", svcDown || ""]];
   if (!GT.some(([k]) => k === GTAB)) GTAB = "ringkasan";
   b.innerHTML = `
     ${subTabs(GT, GTAB)}
@@ -9426,6 +9854,7 @@ async function fillGenie(refresh) {
         <div class="cb" style="border-top:1px solid var(--line);padding:12px 20px"><span class="help" style="margin:0">ONT dikelompokkan menurut IP virtual di ConnectionRequestURL. Diperbarui tiap 1 menit${g.cachedAt ? ` · dibaca ${esc(fmtT(g.cachedAt))}` : ""}.</span></div>
       </div>
     </div>
+    <div data-pane="ont"${GTAB === "ont" ? "" : " hidden"} id="gOnt"><div class="card"><div class="cb muted">Membaca daftar ONT…</div></div></div>
     <div data-pane="pengaturan"${GTAB === "pengaturan" ? "" : " hidden"}>
     <div class="g-setgrid">
     <div class="g-inf">${informCard(g)}</div>
@@ -9446,7 +9875,10 @@ async function fillGenie(refresh) {
           </form>`}
         </div>
     </div>
-    <div class="card" id="gUsers"><div class="ch"><h2>Akun GenieACS UI</h2></div><div class="cb muted">Membaca akun…</div></div>
+    <div class="g-setgrid">
+    <div class="card" id="gUsers" style="margin:0"><div class="ch"><h2>Akun GenieACS UI</h2></div><div class="cb muted">Membaca akun…</div></div>
+    <div class="card" id="gGw" style="margin:0"><div class="ch"><h2>Pintu web ONT</h2></div><div class="cb muted">Membaca…</div></div>
+    </div>
     </div>
     <div data-pane="layanan"${GTAB === "layanan" ? "" : " hidden"}>
       <div class="grid2">
@@ -9466,10 +9898,12 @@ async function fillGenie(refresh) {
           </form>
       </div>
     </div>`;
-  bindSubTabs(b, (k) => (GTAB = k));
+  bindSubTabs(b, (k) => { GTAB = k; if (k === "ont") fillOntWeb(); });
   paintIcons(b);
   bindInform(g);
   fillGenieUsers();
+  fillGwSettings();
+  if (GTAB === "ont") fillOntWeb();
   $("#gRefresh") && ($("#gRefresh").onclick = async () => { busyBtn($("#gRefresh"), true); await fillGenie(true); });
   $("#gExtraForm") && ($("#gExtraForm").onsubmit = async (e) => {
     e.preventDefault(); $("#gExtraErr").textContent = "";
