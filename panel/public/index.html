@@ -278,6 +278,7 @@
   .inf-warn svg{width:16px;height:16px;flex:none;color:var(--warn);margin-top:2px}
   .inf-empty{display:flex;gap:10px;align-items:center;padding:12px 14px;border-radius:10px;background:var(--subtle);font-size:13.5px;color:var(--text-2)}
   .inf-empty svg{width:17px;height:17px;flex:none;color:var(--muted)}
+  .stdp-tags{display:flex;flex-wrap:wrap;gap:6px}.stdp-tags span{font-size:12px;padding:3px 9px;border-radius:999px;background:var(--subtle);color:var(--text);border:1px solid var(--line)}
   .inf-set{display:flex;align-items:center;gap:12px 16px;flex-wrap:wrap;padding-top:12px;border-top:1px solid var(--line)}
   .inf-set-l{flex:1;min-width:160px}.inf-set-l label{margin:0;font-weight:600;color:var(--head);font-size:14px}.inf-set-l small{display:block;color:var(--muted);font-size:12.5px;margin-top:2px}
   .inf-set-r{display:flex;align-items:center;gap:8px}.inf-set-r select{width:auto;min-width:150px}
@@ -3315,6 +3316,53 @@ function bindInform(g) {
     text: "<p>Preset dan provision <code>vpnacs-inform</code> dihapus dari GenieACS. Interval di ONT tidak dikembalikan; ONT tetap memakai nilai terakhir.</p>",
     onOk: async () => { await api("/api/genie/inform", { method: "POST", body: { remove: true } }); closeModal(); toast("Provision dihapus"); fillGenie(true); } });
 }
+// ---------- Parameter standar ONT (virtual parameter + tampilan GenieACS UI) ----------
+const STDP_COLS = ["SN", "PPPoE", "Redaman RX", "Suhu", "IP PPPoE", "IP WAN", "SSID", "Klien WiFi", "Uptime", "GPON/EPON"];
+function paramsCard(g) {
+  const P = g.params || {};
+  const pill = P.error ? `<span class="pill wait">Tidak bisa dicek</span>`
+    : !P.available ? `<span class="pill wait">Berkas tidak ada</span>`
+    : P.update ? `<span class="pill info">Pembaruan v${esc(P.version)}</span>`
+    : P.installed ? `<span class="pill ok">Terpasang · v${esc(P.installedVer)}</span>` : `<span class="pill wait">Belum dipasang</span>`;
+  return `<div class="card inf-card">
+    <div class="ch"><h2>Parameter standar ONT</h2>${pill}</div>
+    <div class="cb inf-body">
+      <div class="stdp-tags">${STDP_COLS.map((x) => `<span>${x}</span>`).join("")}</div>
+      ${P.error ? `<div class="inf-empty">${ic("info")}<span>${esc(P.error)}</span></div>` : ""}
+      ${!P.available ? `<div class="inf-empty">${ic("info")}<span>Folder genieacs-params tidak ditemukan. Perbarui panel dulu.</span></div>` : ""}
+      ${!P.installed && P.conflicts && P.conflicts.length ? `<p class="inf-warn">${ic("alert")}<span><b>${P.conflicts.length} parameter bernama sama</b> sudah ada (${esc(P.conflicts.slice(0, 4).join(", "))}${P.conflicts.length > 4 ? ", …" : ""}). Disimpan dulu dan dikembalikan bila dihapus.</span></p>` : ""}
+      <div class="inf-set">
+        <div class="inf-set-l"><label>Kolom GenieACS UI</label><small>${P.installed ? "Terisi otomatis setiap ONT melapor" : "Mendukung TR-098 dan TR-181 semua merek umum"}</small></div>
+        <div class="inf-set-r">
+          ${P.available && !P.error && (!P.installed || P.update) ? `<button class="btn pri" id="stdpGo">${ic(P.update ? "refresh" : "check")}${P.update ? "Perbarui" : "Pasang"}</button>` : ""}
+          ${P.installed ? `<button class="btn ghost icon" id="stdpRm" title="Hapus parameter standar" aria-label="Hapus parameter standar" style="color:var(--bad)">${ic("trash")}</button>` : ""}
+        </div>
+      </div>
+    </div></div>`;
+}
+function bindParams(g) {
+  const P = g.params || {};
+  const go = $("#stdpGo");
+  if (go) go.onclick = () => confirmDialog({
+    title: P.update ? `Perbarui parameter standar ke v${esc(P.version)}?` : "Pasang parameter standar ONT?",
+    ok: P.update ? "Perbarui" : "Pasang", icon: "box",
+    text: `<p>${Number(P.count) || 14} virtual parameter, provision <code>acsnm-params</code>, serta kolom, filter, dan grafik GenieACS UI dipasang. Data ONT hanya dibaca.</p>
+      ${!P.installed ? `<p>Tampilan GenieACS UI yang sekarang${P.conflicts && P.conflicts.length ? " dan parameter bernama sama" : ""} disimpan dulu, lalu dikembalikan bila dihapus.</p>` : ""}`,
+    onOk: async () => {
+      const r = await api("/api/genie/params", { method: "POST", body: {} });
+      await fillGenie(true);
+      if (r.warn) doneDialog("Parameter terpasang", `<p>${esc(r.warn)}</p>`, "info", false);
+      else doneDialog(P.update ? "Parameter standar diperbarui" : "Parameter standar terpasang", "<p>Kolom terisi saat ONT melapor berikutnya, atau tekan Segarkan di GenieACS UI.</p>");
+    } });
+  const rm = $("#stdpRm");
+  if (rm) rm.onclick = () => confirmDialog({ title: "Hapus parameter standar ONT?", danger: true, ok: "Hapus",
+    text: "<p>Virtual parameter, provision, dan grafik milik panel dihapus. Parameter lama dan tampilan GenieACS UI sebelumnya dikembalikan.</p>",
+    onOk: async () => {
+      const r = await api("/api/genie/params", { method: "POST", body: { remove: true } });
+      await fillGenie(true);
+      if (r.warn) doneDialog("Parameter dihapus", `<p>${esc(r.warn)}</p>`, "info", false); else toast("Parameter standar dihapus");
+    } });
+}
 function viewGenie(v) {
   crumb([["GenieACS"]]);
   const s = STATE.settings;
@@ -3367,6 +3415,7 @@ async function fillGenie(refresh) {
     <div class="set-grid">
       <div class="set-col">
         <div class="g-inf">${informCard(g)}</div>
+        <div class="g-inf">${paramsCard(g)}</div>
     <div class="card" id="gUsers"><div class="ch"><h2>Akun GenieACS UI</h2></div><div class="cb muted">Membaca akun…</div></div>
       </div>
       <div class="set-col">
@@ -3410,6 +3459,7 @@ async function fillGenie(refresh) {
   bindSubTabs(b, (k) => { GTAB = k; if (k === "ont") fillOntWeb(); });
   paintIcons(b);
   bindInform(g);
+  bindParams(g);
   fillGenieUsers();
   if (GTAB === "ont") fillOntWeb();
   $("#gRefresh") && ($("#gRefresh").onclick = async () => { busyBtn($("#gRefresh"), true); await fillGenie(true); });

@@ -113,6 +113,7 @@ Yang dipasang (semua dari sumber resmi, bukan script pihak ketiga):
 | Patch IP virtual | `genieacs-virtualip.sh` (repo ini) | dibangun dari source GenieACS versi yang terpasang |
 | Panel VPN ACS | `install-vpn-acs.sh` (repo ini) | password admin dibuat sendiri di wizard |
 | Inform berkala | provision `vpnacs-inform` | ONT melapor tiap 300 detik (bisa diubah di menu GenieACS) |
+| Parameter standar ONT | folder `genieacs-params` (repo ini) | opsional, dipasang dari menu GenieACS |
 
 Di akhir muncul ringkasan: **alamat panel, alamat GenieACS UI, dan PSK**. Ringkasan yang sama disimpan di **`/root/acs-netmap-info.txt`** (hanya root).
 
@@ -332,6 +333,14 @@ Menu **WireGuard** menampilkan endpoint, public key VPS, rentang IP, serta setia
 Penyebab paling umum: **inform berkala ONT** terlalu jarang (misalnya 1 jam atau 1 hari) atau mati. ONT hanya melapor saat menyala/tersambung, sehingga GenieACS menandainya offline beberapa menit kemudian, walaupun ONT tetap hidup. Ini tidak terkait jalur VPN.
 
 Menu **GenieACS → Inform berkala ONT** menampilkan sebaran interval semua ONT. Klik **Perbaiki semua ONT** (bawaan tiap 4 menit): panel memasang provision `vpnacs-inform` + preset di GenieACS yang menyalakan inform berkala di setiap ONT. Berlaku saat ONT melapor berikutnya.
+
+### I. Parameter standar ONT (kolom GenieACS UI)
+GenieACS baru belum punya virtual parameter, sehingga kolom IP, SSID, dan redaman di GenieACS UI kosong. **GenieACS → Pengaturan → Parameter standar ONT → Pasang** memasang isi folder [`genieacs-params`](genieacs-params/):
+- 14 virtual parameter **hanya baca**: SN, PPPoE (username, IP, MAC, uptime), IP WAN TR-069, redaman RX, suhu, SSID, jumlah klien WiFi, uptime, GPON/EPON/Ethernet. Mendukung TR-098 dan TR-181 (ZTE, Huawei, FiberHome, C-Data, Nokia, Realtek, dan ONT OEM CMCC/CT-COM/CU).
+- Provision + preset `acsnm-params` yang menyegarkannya berkala (data cepat tiap 5 menit, PPPoE/SSID tiap jam, SN/MAC tiap hari).
+- Kolom dan filter daftar perangkat, grafik **Kondisi ONT** (redaman, suhu, jenis jalur), dan 50 ONT per halaman.
+
+Pemasangan lewat NBI tanpa menghapus provision lain. Parameter bernama sama dan tampilan GenieACS UI lama disimpan dulu, lalu dikembalikan bila parameter standar dihapus (ikon 🗑). Versi baru ikut pembaruan panel dan ditandai **Pembaruan** di kartu yang sama.
 
 ### G. Keamanan login & laporan kesehatan VPS
 **Pengaturan → Keamanan:**

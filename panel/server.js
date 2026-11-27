@@ -52,7 +52,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.24.1";
+const VERSION = "2.25.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -1113,6 +1113,7 @@ async function genieInformPreset() {
 // Hash sama dengan GenieACS: pbkdf2-sha512, 10000 putaran, 128 byte, salt 64 byte hex.
 const GENIE_ADMIN_PERMS = ["devices", "faults", "files", "presets", "provisions", "config", "permissions", "users", "virtualParameters"];
 function mongoShell() {
+  if (process.env.VPNACS_MONGOSH) return process.env.VPNACS_MONGOSH; // hanya untuk pengujian
   for (const b of ["mongosh", "mongo"]) for (const d of ["/usr/bin/", "/usr/local/bin/", "/bin/"]) if (fs.existsSync(ROOT + d + b)) return d + b;
   return "";
 }
@@ -1161,6 +1162,127 @@ async function genieInformInstall(iv) {
 async function genieInformRemove() {
   await httpJson("DELETE", `${nbiBase()}/presets/${INFORM_PROV}`, null, null, 10000);
   await httpJson("DELETE", `${nbiBase()}/provisions/${INFORM_PROV}`, null, null, 10000);
+  return { ok: true };
+}
+// ---------- Parameter standar ONT: folder genieacs-params di repo panel ----------
+// Dipasang lewat NBI (virtual parameter, provision, preset) dan MongoDB (tampilan GenieACS UI).
+// Tidak memakai --drop: hanya milik panel yang ditulis. Parameter bernama sama dan tampilan UI
+// yang ada disimpan dulu ke berkas cadangan, lalu dikembalikan saat parameter standar dihapus.
+const STDP_TAG = "// acsnm-params v";
+const STDP_BACKUP = path.dirname(DATA_FILE) + "/genie-params-backup.json";
+function stdpDir() {
+  const env = process.env.VPNACS_PARAMS_DIR;
+  const src = sourceDir();
+  const d = env || (src ? src + "/genieacs-params" : "");
+  return d && fs.existsSync(d + "/manifest.json") ? d : "";
+}
+function stdpLoad() {
+  const dir = stdpDir();
+  if (!dir) return null;
+  const m = readJson(dir + "/manifest.json", null);
+  if (!m || !m.version || !Array.isArray(m.virtualParameters)) return null;
+  const head = `${STDP_TAG}${m.version} · ACS NETMAP Panel · GPL-3.0 · diubah lewat panel, perubahan manual akan ditimpa saat pembaruan\n`;
+  try {
+    const vps = {};
+    for (const n of m.virtualParameters) {
+      if (!/^[A-Za-z0-9_]+$/.test(n)) continue;
+      vps[n] = head + fs.readFileSync(`${dir}/virtual-parameters/${n}.js`, "utf8");
+    }
+    const prov = head + fs.readFileSync(`${dir}/provisions/${m.provision}.js`, "utf8");
+    const ui = m.ui || {};
+    const readMap = (list) => Object.assign({}, ...(list || []).map((f) => readJson(`${dir}/${f}`, {})));
+    return { version: m.version, provision: m.provision, vps, prov, replace: readMap(ui.replace), add: readMap(ui.add), pageSize: parseInt(ui.pageSize, 10) || 0 };
+  } catch (e) {
+    return null;
+  }
+}
+const stdpVer = (script) => { const m = String(script || "").match(/^\/\/ acsnm-params v([\d.]+)/); return m ? m[1] : ""; };
+async function nbiList(coll, ids) {
+  const q = encodeURIComponent(JSON.stringify({ _id: { $in: ids } }));
+  const r = await httpJson("GET", `${nbiBase()}/${coll}/?query=${q}`, null, null, 10000);
+  if (r.status !== 200 || !Array.isArray(r.json)) return { error: r.status === 0 ? `GenieACS NBI tidak menjawab (${r.error})` : `GenieACS NBI menolak (HTTP ${r.status})` };
+  return { list: r.json };
+}
+async function stdpStatus() {
+  const pk = stdpLoad();
+  const out = { available: !!pk, version: pk ? pk.version : "", installed: false, installedVer: "", update: false, conflicts: [], count: pk ? Object.keys(pk.vps).length : 0 };
+  if (!pk) return out;
+  const pr = await nbiList("provisions", [pk.provision]);
+  if (pr.error) return Object.assign(out, { error: pr.error });
+  const p = pr.list[0];
+  out.installed = !!p;
+  out.installedVer = p ? stdpVer(p.script) || "?" : "";
+  out.update = out.installed && verCmp(pk.version, out.installedVer) > 0;
+  const vr = await nbiList("virtual_parameters", Object.keys(pk.vps));
+  if (!vr.error) out.conflicts = vr.list.filter((x) => !stdpVer(x.script)).map((x) => x._id);
+  return out;
+}
+// Tampilan GenieACS UI disimpan di koleksi config (kunci "ui.index.0.label" dst.)
+const STDP_UI_RE = "^ui\\.(index|filters)\\.";
+async function stdpUiRead() {
+  const r = await genieMongo(`print("@@" + JSON.stringify(db.config.find({ $or: [{ _id: { $regex: ${JSON.stringify(STDP_UI_RE)} } }, { _id: "ui.pageSize" }] }).toArray()))`);
+  return r.error ? { error: r.error } : { list: r.json };
+}
+async function stdpUiWrite(replace, add, pageSize, removeAdd) {
+  const docs = Object.entries(replace).map(([k, v]) => ({ _id: k, value: String(v) }));
+  const extra = Object.entries(add).map(([k, v]) => ({ _id: k, value: String(v) }));
+  const js = `
+    db.config.deleteMany({ _id: { $regex: ${JSON.stringify(STDP_UI_RE)} } });
+    var docs = ${JSON.stringify(docs)};
+    if (docs.length) db.config.insertMany(docs);
+    ${JSON.stringify(extra)}.forEach(function (d) { ${removeAdd ? "db.config.deleteMany({ _id: d._id });" : "db.config.updateOne({ _id: d._id }, { $set: { value: d.value } }, { upsert: true });"} });
+    ${pageSize === null ? "" : pageSize ? `db.config.updateOne({ _id: "ui.pageSize" }, { $set: { value: ${JSON.stringify(String(pageSize))} } }, { upsert: true });` : `db.config.deleteMany({ _id: "ui.pageSize" });`}
+    db.cache.deleteMany({ _id: { $in: ["ui-local-cache-hash", "cwmp-local-cache-hash"] } });
+    print("@@" + JSON.stringify({ ok: true }));`;
+  const r = await genieMongo(js);
+  return r.error ? { error: r.error } : { ok: true };
+}
+async function stdpInstall() {
+  const pk = stdpLoad();
+  if (!pk) return { error: "Berkas parameter standar tidak ditemukan di folder repo panel (genieacs-params). Perbarui panel dulu." };
+  const vr = await nbiList("virtual_parameters", Object.keys(pk.vps));
+  if (vr.error) return { error: vr.error };
+  // Cadangan dibuat sekali, pada pemasangan pertama (pembaruan tidak menimpanya)
+  if (!fs.existsSync(STDP_BACKUP)) {
+    const ui = await stdpUiRead();
+    if (ui.error) return { error: "Tampilan GenieACS UI tidak bisa dibaca: " + ui.error };
+    const vps = {};
+    for (const x of vr.list) if (!stdpVer(x.script)) vps[x._id] = x.script;
+    writeJson(STDP_BACKUP, { at: Date.now(), vps, ui: ui.list });
+  }
+  for (const [name, script] of Object.entries(pk.vps)) {
+    const r = await httpJson("PUT", `${nbiBase()}/virtual_parameters/${name}`, script, null, 10000);
+    if (r.status !== 200) return { error: `GenieACS menolak virtual parameter ${name} (HTTP ${r.status || r.error})` };
+  }
+  const a = await httpJson("PUT", `${nbiBase()}/provisions/${pk.provision}`, pk.prov, null, 10000);
+  if (a.status !== 200) return { error: `GenieACS menolak provision (HTTP ${a.status || a.error})` };
+  const preset = { weight: 10, channel: pk.provision, events: {}, precondition: "", configurations: [{ type: "provision", name: pk.provision, args: [5] }] };
+  const b = await httpJson("PUT", `${nbiBase()}/presets/${pk.provision}`, preset, null, 10000);
+  if (b.status !== 200) return { error: `GenieACS menolak preset (HTTP ${b.status || b.error})` };
+  const u = await stdpUiWrite(pk.replace, pk.add, pk.pageSize || null, false);
+  if (u.error) return { ok: true, version: pk.version, warn: "Parameter terpasang, tetapi tampilan GenieACS UI gagal diubah: " + u.error };
+  return { ok: true, version: pk.version };
+}
+async function stdpRemove() {
+  const pk = stdpLoad();
+  const bk = readJson(STDP_BACKUP, null);
+  const names = new Set(pk ? Object.keys(pk.vps) : []);
+  // Hapus hanya virtual parameter milik panel (bertanda acsnm-params), lalu kembalikan cadangan
+  const vr = await nbiList("virtual_parameters", [...names, ...Object.keys((bk && bk.vps) || {})]);
+  if (vr.error) return { error: vr.error };
+  await httpJson("DELETE", `${nbiBase()}/presets/${(pk && pk.provision) || "acsnm-params"}`, null, null, 10000);
+  await httpJson("DELETE", `${nbiBase()}/provisions/${(pk && pk.provision) || "acsnm-params"}`, null, null, 10000);
+  for (const x of vr.list) if (stdpVer(x.script)) await httpJson("DELETE", `${nbiBase()}/virtual_parameters/${x._id}`, null, null, 10000);
+  for (const [name, script] of Object.entries((bk && bk.vps) || {})) await httpJson("PUT", `${nbiBase()}/virtual_parameters/${name}`, script, null, 10000);
+  // Tampilan UI: kembalikan kolom/filter lama, hapus grafik tambahan panel
+  if (bk && Array.isArray(bk.ui)) {
+    const rep = {};
+    let ps = 0;
+    for (const x of bk.ui) { if (x._id === "ui.pageSize") ps = x.value; else rep[x._id] = x.value; }
+    const u = await stdpUiWrite(rep, pk ? pk.add : {}, ps, true);
+    if (u.error) return { ok: true, warn: "Parameter dihapus, tetapi tampilan GenieACS UI gagal dikembalikan: " + u.error };
+  }
+  try { fs.unlinkSync(STDP_BACKUP); } catch (e) { /* abaikan */ }
   return { ok: true };
 }
 async function genieDevices() {
@@ -1228,9 +1350,11 @@ async function genieStatus(d) {
     }
   }
   inform.provision = await genieInformPreset();
+  const params = await stdpStatus();
   const cidr = st.genieCidr;
   return {
     inform,
+    params,
     installed: cidr !== null || services.some((x) => x.active),
     version: genieVersion(),
     services,
@@ -5863,6 +5987,18 @@ async function handleApi(req, res, url) {
     GENIE_CACHE.t = 0;
     logActivity(req, "Inform berkala ONT dipasang", `tiap ${iv} detik (provision ${INFORM_PROV})`);
     return send(res, 200, { ok: true });
+  }
+  if (p === "/api/genie/params" && method === "POST") {
+    if (body.remove) {
+      const r = await stdpRemove();
+      if (r.error) return send(res, 400, { error: r.error });
+      logActivity(req, "Parameter standar ONT dihapus", "parameter lama dan tampilan GenieACS UI dikembalikan");
+      return send(res, 200, r);
+    }
+    const r = await stdpInstall();
+    if (r.error) return send(res, 400, { error: r.error });
+    logActivity(req, "Parameter standar ONT dipasang", `versi ${r.version}`);
+    return send(res, 200, r);
   }
   if (p === "/api/genie" && method === "GET") {
     if (url.searchParams.get("refresh") === "1") GENIE_CACHE.t = 0;

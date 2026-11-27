@@ -2,6 +2,11 @@
 
 Garis besar setiap versi. Panel menampilkan poin-poin ini di Pengaturan → Pembaruan.
 
+## 2.25.0
+- Parameter standar ONT: kolom SN, PPPoE, redaman, suhu, IP, SSID, dan klien WiFi di GenieACS UI terisi otomatis
+- Mendukung TR-098 dan TR-181 untuk semua merek umum, hanya membaca data ONT
+- Pasang, perbarui, dan hapus dari GenieACS → Pengaturan; tampilan lama dikembalikan saat dihapus
+
 ## 2.24.1
 - Jendela tidak lagi tertutup saat menggeser batang gulir halaman
 
