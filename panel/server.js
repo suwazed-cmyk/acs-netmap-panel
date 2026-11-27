@@ -52,7 +52,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.22.0";
+const VERSION = "2.22.1";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -2999,7 +2999,8 @@ async function checkAddonUpdate(id) {
     // Ringkasan dari CHANGELOG.md: versi yang ada di GitHub tetapi belum ada di versi terpasang
     const rem = parseChangelog((await run("git", ["-C", dir, "show", "@{u}:CHANGELOG.md"])).out);
     const loc = new Set(parseChangelog((await run("git", ["-C", dir, "show", "HEAD:CHANGELOG.md"])).out).map((x) => x.v));
-    const changes = rem.filter((x) => !loc.has(x.v)).slice(0, 10);
+    // versi terpasang belum punya CHANGELOG.md: belum bisa dibandingkan, pakai pesan commit saja
+    const changes = loc.size ? rem.filter((x) => !loc.has(x.v)).slice(0, 10) : [];
     return { available: true, behind, current: cur, latest: up[0] || "", notes: (up[1] || "").slice(0, 160), changes };
   }
   // Add-on sistem: versi paket terpasang vs versi yang tersedia di apt

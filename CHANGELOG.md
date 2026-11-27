@@ -2,6 +2,9 @@
 
 Garis besar setiap versi. Panel menampilkan poin-poin ini di Pengaturan → Pembaruan.
 
+## 2.22.1
+- Ringkasan pembaruan add-on lebih akurat
+
 ## 2.22.0
 - Alamat VPS terkunci; bisa memakai domain sendiri asalkan mengarah ke IP VPS
 - Persetujuan sebelum memasang, memperbarui, atau mengganti port
