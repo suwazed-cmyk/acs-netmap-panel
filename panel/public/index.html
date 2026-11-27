@@ -1092,6 +1092,38 @@
   /* menu di dalam halaman: gaya segmen tetap, latar abunya memanjang selebar halaman; menu rata kiri seukuran isinya */
   .tabs{display:flex;width:100%}
   .tabs>.tab,.tabs>button.tab{flex:0 0 auto}
+  /* filter berbentuk segmen, sama dengan tab kartu Dashboard */
+  .filters{display:inline-flex;gap:2px;padding:3px;background:var(--subtle);border:1px solid var(--line);border-radius:11px;flex-wrap:nowrap;overflow-x:auto;max-width:100%;scrollbar-width:none}
+  .filters::-webkit-scrollbar{display:none}
+  .filters .chip{height:auto;padding:6px 12px;border:0;border-radius:8px;background:none;font-size:13.5px;font-weight:500;color:var(--muted);white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+  .filters .chip:hover{color:var(--text)}
+  .filters .chip.on{background:var(--surface);color:var(--text);font-weight:600;box-shadow:0 1px 3px rgba(13,32,64,.12),0 1px 1px rgba(13,32,64,.06)}
+  [data-theme="dark"] .filters{background:#0b1626}
+  [data-theme="dark"] .filters .chip.on{background:var(--surface-3)}
+  .filters .chip .zt-cnt,.filters .chip.on .zt-cnt{background:var(--warn);color:#fff}
+  /* halaman pengaturan: dua kolom, pengaturan utama di kiri */
+  .set-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:12px;align-items:start}
+  .set-grid.one{grid-template-columns:minmax(0,1fr)}
+  .set-col{display:flex;flex-direction:column;gap:12px;min-width:0}
+  .set-col>.card,.set-col>div>.card{margin:0!important}
+  .set-col .sec-steps{grid-template-columns:1fr}
+  .set-form{padding-top:4px!important}
+  .srow{display:grid;grid-template-columns:minmax(0,210px) minmax(0,1fr);gap:6px 20px;align-items:start;padding:12px 0;border-top:1px solid var(--line)}
+  .srow:first-child{border-top:0;padding-top:6px}
+  .srow .sl label{margin:0;font-weight:600;color:var(--head);font-size:14px;display:block}
+  .srow .sl small{display:block;color:var(--muted);font-size:12.5px;line-height:1.45;margin-top:3px}
+  .srow .sc .help{margin-top:6px}
+  .set-url{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;margin:0 0 12px;border-radius:10px;background:var(--subtle);font-size:13.5px}
+  .set-url span{color:var(--muted)}.set-url a{font-weight:600;word-break:break-all}
+  .upd-hero{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:4px 0 12px}
+  .upd-v{display:flex;flex-direction:column}.upd-v small{color:var(--muted);font-size:12.5px}.upd-v b{font-size:22px;font-weight:800;color:var(--head)}
+  .upd-arrow{color:var(--muted)}.upd-arrow svg{width:20px;height:20px}
+  .upd-list{list-style:none;margin:0;padding:0}
+  .upd-list li{display:flex;align-items:center;gap:10px;padding:11px 16px;border-top:1px solid var(--line)}
+  .upd-list li:first-child{border-top:0}
+  .upd-list li b{flex:1;font-weight:600;color:var(--head)}
+  @media (max-width:1100px){.set-grid{grid-template-columns:minmax(0,1fr)}}
+  @media (max-width:700px){.srow{grid-template-columns:minmax(0,1fr)}}
   /* tombol mata di kolom password */
   .pw-wrap{position:relative;display:block}
   .pw-wrap>input{padding-right:42px!important}
@@ -1503,7 +1535,7 @@ function showLogin() { liveStop(); $("#appView").classList.add("hidden"); $("#lo
 function showApp() { $("#loginView").classList.add("hidden"); $("#appView").classList.remove("hidden"); const ok = $("#loginOk"); if (ok) ok.remove(); liveStart(); }
 $("#loginForm").addEventListener("submit", async (e) => {
   e.preventDefault(); $("#loginErr").textContent = "";
-  const btn = $("#loginForm button"); busyBtn(btn, true);
+  const btn = $("#loginForm button:not(.pw-eye)"); busyBtn(btn, true);
   try { await api("/api/login", { method: "POST", body: { password: $("#lp").value } }); $("#lp").value = ""; showApp(); await load(); route(); idleStart(); }
   catch (err) { $("#loginErr").textContent = err.message; }
   busyBtn(btn, false);
@@ -2623,8 +2655,22 @@ function viewSettings(v, tab) {
   else if (tab === "domain") setDomain(b);
   else if (tab === "vpn") setVpn(b);
   else if (tab === "pembaruan") { b.innerHTML = `
-    <div class="card" id="updCard"><div class="ch"><h2>Pembaruan panel</h2><span id="updPill"></span></div><div class="cb" id="updBody" style="padding-top:4px"><p class="muted">Memeriksa…</p></div></div>`; fillUpdate(); }
+    <div class="set-grid">
+      <div class="set-col"><div class="card" id="updCard"><div class="ch"><h2>Pembaruan panel</h2><span id="updPill"></span></div><div class="cb" id="updBody" style="padding-top:4px"><p class="muted">Memeriksa…</p></div></div></div>
+      <div class="set-col"><div class="card" id="updAddons"><div class="ch"><h2>Add-on</h2><a class="btn sm" href="#/addon">Buka Add-on</a></div><div class="cb muted">Memeriksa…</div></div></div>
+    </div>`; fillUpdate(); }
   else setGeneral(b);
+}
+// Susun kartu pengaturan menjadi dua kolom: pengaturan utama (sering diubah) di kiri
+function setCols(b, left, right) {
+  const g = document.createElement("div"); g.className = "set-grid";
+  const L = document.createElement("div"); L.className = "set-col";
+  const R = document.createElement("div"); R.className = "set-col";
+  left.filter(Boolean).forEach((x) => L.appendChild(x));
+  right.filter(Boolean).forEach((x) => R.appendChild(x));
+  g.append(L, R);
+  if (!R.children.length) { g.classList.add("one"); R.remove(); }
+  b.appendChild(g);
 }
 // ---------- Pengaturan → Keamanan ----------
 async function setSecurity(b) {
@@ -2665,9 +2711,10 @@ async function setSecurity(b) {
         ${z.current ? "" : `<button class="btn sm ghost danger" data-kick="${esc(z.id)}">Keluarkan</button>`}</li>`).join("")}</ul>
       <div class="cb card-actions"><span class="muted zt-small">Mengganti password admin otomatis mengeluarkan semua perangkat lain.</span><span class="sp"></span><button class="btn danger" id="kickAll" ${others ? "" : "disabled"}>${ic("logout")}Keluarkan semua perangkat lain</button></div>
     </div>`;
+  { const C = [...b.querySelectorAll(":scope > .card")]; setCols(b, [C[0], C[2]], [C[1]]); }
   paintIcons(b);
   $("#idleForm").onsubmit = async (e) => {
-    e.preventDefault(); const btn = e.target.querySelector("button"); busyBtn(btn, true);
+    e.preventDefault(); const btn = e.target.querySelector("button:not(.pw-eye)"); busyBtn(btn, true);
     try { await api("/api/security", { method: "PUT", body: { idleMin: parseInt($("#secIdle").value, 10) } }); IDLE_MS = parseInt($("#secIdle").value, 10) * 60e3; toast("Logout otomatis disimpan"); setSecurity(b); }
     catch (err) { toast(err.message); busyBtn(btn, false); }
   };
@@ -2682,59 +2729,62 @@ async function setSecurity(b) {
 }
 function setGeneral(b) {
   const s = STATE.settings;
+  const P = s.stdPorts || {}, https = !!(s.cloudflare && s.cloudflare.https);
+  const url = s.panelUrl || "", bp = esc(String(s.port || 8088));
+  const pill = P.enabled ? (P.active ? `<span class="pill ok">Aktif</span>` : `<span class="pill bad">Gagal</span>`) : `<span class="pill wait">Tidak aktif</span>`;
   b.innerHTML = `
-    <div class="card"><div class="ch"><h2>Nama panel</h2></div><form class="cb" id="brandForm" style="padding-top:4px">
-      <label for="sBrand">Nama panel</label>
-      <input id="sBrand" type="text" maxlength="30" placeholder="VPN ACS" value="${esc(s.panelName || "")}">
-      <div class="help">Tampil di judul panel dan dipakai sebagai komentar aturan di script MikroTik (contoh: <code>${esc(s.panelName || "VPN ACS")} - ONT ke IP virtual</code>). Huruf, angka, spasi, - atau _.</div>
-      <div class="err" id="brandErr"></div>
-      <div class="form-actions"><button class="btn pri">Simpan</button></div>
-    </form></div>
-    <div class="card"><div class="ch"><h2>VPS</h2></div><form class="cb" id="vpsForm" style="padding-top:4px">
-      <label for="sIp">Alamat VPS</label>
-      <input id="sIp" type="text" placeholder="103.20.30.40 atau vpn.domain.com" value="${esc(s.publicIp || "")}">
-      <div class="help">Dipakai sebagai <i>connect-to</i> di MikroTik.${s.cloudflare ? ` Saat ini diatur lewat <a href="#/pengaturan/domain">Domain &amp; HTTPS</a>.` : ""}</div>
-      <label for="sTz">Zona waktu</label>
-      <select id="sTz">${(s.timezones || []).map((z) => `<option value="${z.id}" ${z.id === tzId() ? "selected" : ""}>${z.label} (${z.id})</option>`).join("")}</select>
-      <div class="help">Untuk jam di riwayat, log aktivitas, dan pesan Telegram.</div>
-      <div class="err" id="vpsErr"></div>
-      <div class="form-actions"><button class="btn pri">Simpan</button></div>
-    </form></div>
-    ${(() => {
-      const P = STATE.settings.stdPorts || {}, https = !!(STATE.settings.cloudflare && STATE.settings.cloudflare.https);
-      const url = STATE.settings.panelUrl || "", bp = esc(String(STATE.settings.port || 8088));
-      const pill = P.enabled ? (P.active ? `<span class="pill ok">Aktif</span>` : `<span class="pill bad">Gagal</span>`) : `<span class="pill wait">Tidak aktif</span>`;
-      return `<div class="card"><div class="ch"><h2>Alamat panel</h2>${pill}</div><form class="cb" id="portForm" style="padding-top:4px">
-        <p style="color:var(--text-2);margin:0 0 4px">Panel dibuka lewat port web standar sehingga alamatnya tanpa nomor port. Bawaan <b>${P.defHttp || 80}</b> (http) dan <b>${P.defHttps || 443}</b> (https${https ? ", dipakai karena domain ber-HTTPS" : ""}). Bila port itu dipakai aplikasi lain, ganti dengan port lain. Port ${bp} tetap jalan sebagai cadangan.</p>
-        ${P.error ? `<div class="note bad" style="margin:10px 0 0">${ic("alert")}<div><b>Port tidak bisa dipakai</b>${esc(P.error)}. Panel tetap di port ${bp}.</div></div>` : ""}
-        ${P.enabled && P.active ? `<div class="kv" style="padding:10px 0 0;border:0"><span>Alamat panel</span><b><a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a></b></div>` : ""}
-        <div class="f2"><div><label for="pHttp">Port HTTP</label><input id="pHttp" type="number" min="1" max="65535" value="${esc(String(P.http || P.defHttp || 80))}"></div>
-          <div><label for="pHttps">Port HTTPS</label><input id="pHttps" type="number" min="1" max="65535" value="${esc(String(P.https || P.defHttps || 443))}"></div></div>
-        <div class="help">Buka port ini (TCP) di firewall provider VPS. Bila bukan ${P.defHttp || 80}/${P.defHttps || 443}, alamat panel ikut memakai nomor port, misalnya <code>http://IP-VPS:8000</code>.</div>
-        <div class="err" id="portErr"></div>
-        <div class="form-actions">${P.enabled ? `<button class="btn" id="stdOff" type="button">Matikan</button>` : ""}<button class="btn" id="portDef" type="button">Kembalikan bawaan</button><button class="btn pri" id="portSave">${P.enabled ? "Simpan port" : `${ic("globe")}Aktifkan`}</button></div>
-      </form></div>`;
-    })()}
-    <div class="card"><div class="ch"><h2>Password admin</h2></div><form class="cb" id="pwForm" style="padding-top:4px">
-      <div class="f2"><div><label for="pOld">Password lama</label><input id="pOld" type="password" autocomplete="current-password"></div>
-        <div><label for="pNew">Password baru</label><input id="pNew" type="password" autocomplete="new-password" placeholder="Minimal 8 karakter"></div></div>
-      <div class="err" id="pwErr"></div>
-      <div class="form-actions"><button class="btn pri">Ganti password</button></div>
-    </form></div>`;
+    <div class="set-grid">
+      <div class="set-col">
+        <div class="card"><div class="ch"><h2>Panel</h2></div><form class="cb set-form" id="brandForm">
+          <div class="srow"><div class="sl"><label for="sBrand">Nama panel</label><small>Judul panel dan komentar aturan di script MikroTik.</small></div>
+            <div class="sc"><input id="sBrand" type="text" maxlength="30" placeholder="contoh: NetKu WiFi" value="${esc(s.panelName || "")}"><div class="help">Contoh komentar: <code>${esc(s.panelName || "VPN ACS")} - ONT ke IP virtual</code></div></div></div>
+          <div class="srow"><div class="sl"><label for="sTz">Zona waktu</label><small>Jam di riwayat, log, dan pesan Telegram.</small></div>
+            <div class="sc"><select id="sTz">${(s.timezones || []).map((z) => `<option value="${z.id}" ${z.id === tzId() ? "selected" : ""}>${z.label} (${z.id})</option>`).join("")}</select></div></div>
+          <div class="err" id="brandErr"></div>
+          <div class="form-actions"><button class="btn pri" id="brandSave">Simpan</button></div>
+        </form></div>
+        <div class="card"><div class="ch"><h2>Password admin</h2></div><form class="cb set-form" id="pwForm">
+          <div class="srow"><div class="sl"><label for="pOld">Password lama</label></div><div class="sc"><input id="pOld" type="password" autocomplete="current-password"></div></div>
+          <div class="srow"><div class="sl"><label for="pNew">Password baru</label><small>Minimal 8 karakter. Perangkat lain otomatis dikeluarkan.</small></div><div class="sc"><input id="pNew" type="password" autocomplete="new-password"></div></div>
+          <div class="err" id="pwErr"></div>
+          <div class="form-actions"><button class="btn pri" id="pwSave">Ganti password</button></div>
+        </form></div>
+      </div>
+      <div class="set-col">
+        <div class="card"><div class="ch"><h2>Alamat VPS</h2></div><form class="cb set-form" id="vpsForm">
+          <label for="sIp" style="margin-top:0">IP publik atau domain</label>
+          <input id="sIp" type="text" placeholder="contoh: 103.20.30.40 atau vpn.domain.com" value="${esc(s.publicIp || "")}">
+          <div class="help">Dipakai sebagai <i>connect-to</i> di script MikroTik.${s.cloudflare ? ` Saat ini diatur lewat <a href="#/pengaturan/domain">Domain &amp; HTTPS</a>.` : ""}</div>
+          <div class="err" id="vpsErr"></div>
+          <div class="form-actions"><button class="btn pri" id="vpsSave">Simpan</button></div>
+        </form></div>
+        <div class="card"><div class="ch"><h2>Alamat panel</h2>${pill}</div><form class="cb set-form" id="portForm">
+          ${P.enabled && P.active && url ? `<div class="set-url"><span>Panel dibuka di</span><a href="${esc(url)}" target="_blank" rel="noopener">${esc(url.replace(/^https?:\/\//, ""))}</a></div>` : ""}
+          ${P.error ? `<div class="note bad" style="margin:0 0 10px">${ic("alert")}<div><b>Port tidak bisa dipakai</b>${esc(P.error)}. Panel tetap di port ${bp}.</div></div>` : ""}
+          <div class="f2"><div><label for="pHttp" style="margin-top:0">Port HTTP</label><input id="pHttp" type="number" min="1" max="65535" value="${esc(String(P.http || P.defHttp || 80))}"></div>
+            <div><label for="pHttps" style="margin-top:0">Port HTTPS</label><input id="pHttps" type="number" min="1" max="65535" value="${esc(String(P.https || P.defHttps || 443))}"></div></div>
+          <div class="help">Bawaan ${P.defHttp || 80}/${P.defHttps || 443}${https ? " (HTTPS dipakai karena domain ber-HTTPS)" : ""}, jadi alamat panel tanpa nomor port. Ganti bila port itu dipakai aplikasi lain, dan buka port ini di firewall provider. Port ${bp} tetap jalan sebagai cadangan.</div>
+          <div class="err" id="portErr"></div>
+          <div class="form-actions">${P.enabled ? `<button class="btn" id="stdOff" type="button">Matikan</button>` : ""}<button class="btn" id="portDef" type="button">Bawaan</button><button class="btn pri" id="portSave">${P.enabled ? "Simpan port" : `${ic("globe")}Aktifkan`}</button></div>
+        </form></div>
+      </div>
+    </div>`;
+  paintIcons(b);
   $("#brandForm").onsubmit = async (e) => {
     e.preventDefault(); $("#brandErr").textContent = "";
-    const before = s.panelName, btn = $("#brandForm button"); busyBtn(btn, true);
+    const before = s.panelName, btn = $("#brandSave"); busyBtn(btn, true);
     try {
-      await api("/api/settings", { method: "PUT", body: { panelName: $("#sBrand").value } });
+      await api("/api/settings", { method: "PUT", body: { panelName: $("#sBrand").value, timezone: $("#sTz").value } });
       await load(); route();
       const changed = STATE.settings.panelName !== before;
-      doneDialog("Nama panel disimpan", changed ? `<p>Komentar di script MikroTik sekarang memakai <b>${esc(STATE.settings.panelName)}</b>.</p><p>Router yang sudah terpasang tetap jalan. Pasang ulang script terbaru bila ingin komentarnya ikut berubah; script baru otomatis menghapus aturan dengan nama lama.</p>` : "", "ok", !changed);
+      if (changed) doneDialog("Nama panel disimpan", `<p>Komentar di script MikroTik sekarang memakai <b>${esc(STATE.settings.panelName)}</b>.</p><p>Router yang sudah terpasang tetap jalan. Pasang ulang script terbaru bila ingin komentarnya ikut berubah; script baru otomatis menghapus aturan dengan nama lama.</p>`, "ok", false);
+      else toast("Pengaturan disimpan");
     } catch (err) { $("#brandErr").textContent = err.message; busyBtn(btn, false); }
   };
   $("#vpsForm").onsubmit = async (e) => {
     e.preventDefault(); $("#vpsErr").textContent = "";
-    const btn = e.submitter || $("#vpsForm button"); busyBtn(btn, true);
-    try { await api("/api/settings", { method: "PUT", body: { publicIp: $("#sIp").value, timezone: $("#sTz").value } }); await load(); route(); toast("Pengaturan disimpan"); }
+    const btn = $("#vpsSave"); busyBtn(btn, true);
+    try { await api("/api/settings", { method: "PUT", body: { publicIp: $("#sIp").value } }); await load(); route(); toast("Alamat VPS disimpan"); }
     catch (err) { $("#vpsErr").textContent = err.message; busyBtn(btn, false); }
   };
   const off = $("#stdOff");
@@ -2743,7 +2793,7 @@ function setGeneral(b) {
     try { await api("/api/stdports", { method: "POST", body: { enable: false } }); openJob(); }
     catch (err) { busyBtn(off, false); toast(err.message); }
   };
-  $("#portDef").onclick = () => { const P = STATE.settings.stdPorts || {}; $("#pHttp").value = P.defHttp || 80; $("#pHttps").value = P.defHttps || 443; };
+  $("#portDef").onclick = () => { $("#pHttp").value = P.defHttp || 80; $("#pHttps").value = P.defHttps || 443; };
   $("#portForm").onsubmit = async (e) => {
     e.preventDefault(); $("#portErr").textContent = "";
     const btn = $("#portSave"); busyBtn(btn, true);
@@ -2752,7 +2802,7 @@ function setGeneral(b) {
   };
   $("#pwForm").onsubmit = async (e) => {
     e.preventDefault(); $("#pwErr").textContent = "";
-    const btn = $("#pwForm button"); busyBtn(btn, true);
+    const btn = $("#pwSave"); busyBtn(btn, true);
     try { await api("/api/settings", { method: "PUT", body: { oldPassword: $("#pOld").value, newPassword: $("#pNew").value } }); $("#pOld").value = ""; $("#pNew").value = ""; await load(); route(); doneDialog("Password admin diganti", "Gunakan password baru saat login berikutnya."); }
     catch (err) { $("#pwErr").textContent = err.message; }
     busyBtn(btn, false);
@@ -2830,14 +2880,6 @@ function viewL2tp(v) {
 function setVpn(b) {
   const s = STATE.settings;
   b.innerHTML = `
-    <div class="card"><div class="ch"><h2>Enkripsi IPsec</h2>${s.useIpsec ? `<span class="pill ok">${ic("lock", "")}Aktif</span>` : `<span class="pill wait">Tidak aktif</span>`}</div><form class="cb" id="ipsecForm" style="padding-top:4px">
-      <p style="color:var(--text-2);margin:0">L2TP tanpa IPsec tidak dienkripsi tetapi lebih ringan dan didukung semua MikroTik. IPsec menambah enkripsi untuk VPN.</p>
-      <label class="check" style="margin-top:14px"><input id="sIpsec" type="checkbox" ${s.useIpsec ? "checked" : ""}>Pakai IPsec (enkripsi)</label>
-      <div class="help">Setelah diubah, pasang ulang script di semua MikroTik.</div>
-      <div id="pskBox" class="${s.useIpsec ? "" : "hidden"}"><label>Kunci IPsec (PSK)</label><div style="display:flex;gap:8px"><input type="text" readonly class="mono" value="${esc(s.psk || "")}" style="flex:1">${s.psk ? copyBtn(s.psk, "PSK tersalin") : ""}</div></div>
-      <div class="err" id="ipsecErr"></div>
-      <div class="form-actions"><button class="btn pri">Simpan</button></div>
-    </form></div>
     <div class="card"><div class="ch"><h2>Jaringan VPN</h2></div>
       <div class="kv"><span>Jaringan</span><b>${esc(s.tunnelNet || "")}</b></div>
       <div class="kv"><span>IP VPS (URL ACS)</span><b>${esc(s.tunnelLocal || "")}</b></div>
@@ -2851,12 +2893,20 @@ function setVpn(b) {
         <div class="form-actions"><button class="btn danger">Ganti jaringan VPN</button></div>
       </form>
     </div>
+    <div class="card"><div class="ch"><h2>Enkripsi IPsec</h2>${s.useIpsec ? `<span class="pill ok">${ic("lock", "")}Aktif</span>` : `<span class="pill wait">Tidak aktif</span>`}</div><form class="cb" id="ipsecForm" style="padding-top:4px">
+      <p style="color:var(--text-2);margin:0">L2TP tanpa IPsec tidak dienkripsi tetapi lebih ringan dan didukung semua MikroTik. IPsec menambah enkripsi untuk VPN.</p>
+      <label class="check" style="margin-top:14px"><input id="sIpsec" type="checkbox" ${s.useIpsec ? "checked" : ""}>Pakai IPsec (enkripsi)</label>
+      <div class="help">Setelah diubah, pasang ulang script di semua MikroTik.</div>
+      <div id="pskBox" class="${s.useIpsec ? "" : "hidden"}"><label>Kunci IPsec (PSK)</label><div style="display:flex;gap:8px"><input type="text" readonly class="mono" value="${esc(s.psk || "")}" style="flex:1">${s.psk ? copyBtn(s.psk, "PSK tersalin") : ""}</div></div>
+      <div class="err" id="ipsecErr"></div>
+      <div class="form-actions"><button class="btn pri">Simpan</button></div>
+    </form></div>
 `;
   $("#sIpsec").onchange = () => $("#pskBox").classList.toggle("hidden", !$("#sIpsec").checked);
   $("#ipsecForm").onsubmit = async (e) => {
     e.preventDefault(); $("#ipsecErr").textContent = "";
     const changed = $("#sIpsec").checked !== !!s.useIpsec;
-    const btn = $("#ipsecForm button"); busyBtn(btn, true);
+    const btn = $("#ipsecForm button:not(.pw-eye)"); busyBtn(btn, true);
     try { await api("/api/settings", { method: "PUT", body: { useIpsec: $("#sIpsec").checked } }); await load(); route(); doneDialog("Pengaturan disimpan", changed ? "IPsec diubah. Pasang ulang script di semua MikroTik." : "", "ok", !changed); }
     catch (err) { $("#ipsecErr").textContent = err.message; busyBtn(btn, false); }
   };
@@ -2883,11 +2933,22 @@ async function fillUpdate(refresh) {
   b.innerHTML = `
     ${P.available ? `<div class="note info" style="margin:0 0 12px">${ic("dl")}<div><b>Versi ${esc(P.latest)} tersedia</b>${P.notes ? esc(P.notes) : "Ada pembaruan panel di GitHub."}${P.date ? ` <span class="muted">· ${esc(fmtT(Date.parse(P.date), true))}</span>` : ""}</div></div>` : ""}
     ${P.error ? `<div class="note warn" style="margin:0 0 12px">${ic("alert")}<div><b>Tidak bisa menghubungi GitHub</b>${esc(P.error)}</div></div>` : ""}
-    <div class="kv" style="padding:0 0 8px;border:0"><span>Versi terpasang</span><b>v${esc(u.version || "")}</b></div>
-    <div class="kv" style="padding:0 0 8px;border:0"><span>Versi terbaru</span><b>${P.latest ? "v" + esc(P.latest) : "—"}</b></div>
+    <div class="upd-hero">
+      <div class="upd-v"><small>Terpasang</small><b>v${esc(u.version || "")}</b></div>
+      ${P.available ? `<span class="upd-arrow">${ic("chev")}</span><div class="upd-v"><small>Terbaru</small><b style="color:var(--primary)">v${esc(P.latest)}</b></div>` : ""}
+    </div>
     <div class="kv" style="padding:0;border:0"><span>Terakhir diperiksa</span><b>${u.checkedAt ? esc(fmtT(u.checkedAt, true)) : "—"}</b></div>
     <div class="help">Diperiksa otomatis tiap 12 jam. ${u.canSelfUpdate ? "Pembaruan menjalankan <code>git pull</code> lalu installer di folder repo; panel menyala ulang beberapa detik, data tetap aman." : "Perbarui lewat SSH: <code>cd /root/acs-netmap-panel &amp;&amp; git pull &amp;&amp; bash install-vpn-acs.sh</code> (setelah itu tombol Perbarui tersedia di sini)."}</div>
     <div class="form-actions"><button class="btn" id="updCheck" type="button">${ic("refresh")}Periksa sekarang</button>${P.available && u.canSelfUpdate ? `<button class="btn pri" id="updGo" type="button">${ic("dl")}Perbarui ke v${esc(P.latest)}</button>` : ""}</div>`;
+  paintIcons(b);
+  const ab = $("#updAddons");
+  if (ab) {
+    const NM = { "panel-acs": "Panel ACS", bilingku: "Bilingku", zerotier: "ZeroTier", wireguard: "WireGuard" };
+    const A = Object.entries(u.addons || {});
+    ab.innerHTML = `<div class="ch"><h2>Add-on</h2><a class="btn sm" href="#/addon">Buka Add-on</a></div>` + (A.length
+      ? `<ul class="upd-list">${A.map(([id, x]) => `<li><b>${esc(NM[id] || id)}</b>${x.available ? `<span class="pill info">${x.latest ? "v" + esc(x.latest) + " tersedia" : "Ada pembaruan"}</span>` : x.error ? `<span class="pill wait">Tidak bisa dicek</span>` : `<span class="pill ok">Terbaru</span>`}</li>`).join("")}</ul>`
+      : `<div class="cb muted">Belum ada add-on terpasang.</div>`);
+  }
   $("#updCheck").onclick = async () => { busyBtn($("#updCheck"), true); await fillUpdate(true); await load().catch(() => {}); };
   const go = $("#updGo");
   if (go) go.onclick = () => confirmDialog({
@@ -2919,7 +2980,7 @@ async function fillGenieUsers() {
   paintIcons(box);
   const nf = $("#gUserNew");
   if (nf) nf.onsubmit = async (e) => {
-    e.preventDefault(); $("#guErr").textContent = ""; const b = nf.querySelector("button"); busyBtn(b, true);
+    e.preventDefault(); $("#guErr").textContent = ""; const b = nf.querySelector("button:not(.pw-eye)"); busyBtn(b, true);
     try { await api("/api/genie/users", { method: "POST", body: { action: "create", username: $("#guName").value, password: $("#guPw").value } }); toast("Akun GenieACS dibuat"); fillGenieUsers(); }
     catch (err) { $("#guErr").textContent = err.message; busyBtn(b, false); }
   };
@@ -3052,7 +3113,7 @@ async function fillGwSettings() {
     </form>`;
   $("#gwForm").onsubmit = async (e) => {
     e.preventDefault(); $("#gwErr").textContent = "";
-    const b = $("#gwForm button"); busyBtn(b, true);
+    const b = $("#gwForm button:not(.pw-eye)"); busyBtn(b, true);
     try { await api("/api/ontgw/settings", { method: "PUT", body: { enabled: $("#gwOn").checked, from: +$("#gwFrom").value, count: +$("#gwCount").value, tport: +$("#gwT").value } }); toast("Pintu web ONT disimpan"); fillGwSettings(); }
     catch (err) { $("#gwErr").textContent = err.message; busyBtn(b, false); }
   };
@@ -3196,7 +3257,7 @@ async function fillGenie(refresh) {
   $("#gRefresh") && ($("#gRefresh").onclick = async () => { busyBtn($("#gRefresh"), true); await fillGenie(true); });
   $("#gExtraForm") && ($("#gExtraForm").onsubmit = async (e) => {
     e.preventDefault(); $("#gExtraErr").textContent = "";
-    const btn = $("#gExtraForm button"); busyBtn(btn, true);
+    const btn = $("#gExtraForm button:not(.pw-eye)"); busyBtn(btn, true);
     try {
       const r = await api("/api/genie/ranges", { method: "PUT", body: { extra: $("#gExtra").value } });
       await fillGenie(true);
@@ -3205,7 +3266,7 @@ async function fillGenie(refresh) {
   });
   if ($("#genieForm")) $("#genieForm").onsubmit = async (e) => {
     e.preventDefault(); $("#genieErr").textContent = "";
-    const btn = $("#genieForm button"); busyBtn(btn, true);
+    const btn = $("#genieForm button:not(.pw-eye)"); busyBtn(btn, true);
     try { await api("/api/settings", { method: "PUT", body: { genieUrl: $("#sGenie").value } }); await load(); route(); doneDialog("Alamat GenieACS disimpan", ""); }
     catch (err) { $("#genieErr").textContent = err.message; busyBtn(btn, false); }
   };
@@ -3876,6 +3937,7 @@ function setTelegram(b) {
     });
   };
   const hc = document.createElement("div"); b.appendChild(hc); healthSettings(hc);
+  { const C = [...b.querySelectorAll(":scope > .card")]; if (t.tokenSet) setCols(b, [C[1], hc], [C[0]]); else setCols(b, [C[0], C[1]], [hc]); }
 }
 // ---------- Laporan kesehatan VPS (tab Notifikasi Telegram) ----------
 async function healthSettings(el) {
@@ -4024,6 +4086,7 @@ function setDomain(b) {
       });
     };
   }
+  if (c) { const C = [...b.querySelectorAll(":scope > .card")]; const f = C.find((x) => x.id === "cfFormCard"); setCols(b, C.filter((x) => x !== f), [f]); }
   if (CF && CF.plan) drawCf();
 }
 function drawCf() {
@@ -4166,7 +4229,7 @@ document.addEventListener("click", async (e) => {
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeModal(); document.querySelectorAll(".menu-list").forEach((m) => m.classList.add("hidden")); } });
 
 /* ================= Wizard pemasangan awal ================= */
-// Muncul sekali saat panel pertama dibuka (belum ada password admin): password → panel → VPN → ringkasan.
+// Muncul sekali saat panel pertama dibuka (belum ada password admin): nama panel → password → VPN → ringkasan.
 // Setelah selesai, wizard keluar dan halaman login tampil, supaya password yang baru dibuat langsung dicoba.
 const WZ = { step: 0, pw: "", done: false, d: {} };
 function cidrInfo(c) {
@@ -4191,17 +4254,17 @@ function showSetup(me) {
 const wzNetHtml = (c) => (c ? `<div><span>URL ACS untuk ONT</span><b class="mono">${c.acs}</b></div><div><span>IP tetap router</span><b class="mono">${c.fixed}</b></div><div><span>Pool dinamis</span><b class="mono">${c.pool}</b></div>` : `<div class="bad">Format salah. Contoh: 192.168.42.0/24</div>`);
 function wzRender() {
   const el = $("#setupView"), S = WZ.d, st = WZ.step;
-  const steps = ["Password", "Panel", "VPN", "Selesai"];
+  const steps = ["Panel", "Password", "VPN", "Selesai"];
   const nav = `<ol class="wz-steps">${steps.map((t, i) => `<li class="${i < st ? "ok" : i === st ? "on" : ""}"><span>${i < st ? ic("check") : i + 1}</span><b>${t}</b></li>`).join("")}</ol>`;
   const ci = cidrInfo(S.tunnelNet);
   const body = [
-    `<h1>Selamat datang</h1><p>Panel baru saja dipasang. Buat <b>password admin</b> untuk masuk ke panel ini. Minimal 8 karakter.</p>
+    `<h1>Selamat datang</h1><p>Panel baru saja dipasang. Mulai dengan memberi <b>nama panel</b>. Nama ini tampil di judul dan dipakai sebagai komentar aturan di script MikroTik.</p>
+      <label for="wzName">Nama panel</label><input id="wzName" type="text" maxlength="30" placeholder="contoh: NetKu WiFi" value="${esc(S.panelName)}">
+      <label for="wzTz">Zona waktu</label><select id="wzTz">${S.timezones.map((z) => `<option value="${esc(z.id)}" ${z.id === S.timezone ? "selected" : ""}>${esc(z.label)} (${esc(z.id)})</option>`).join("")}</select>`,
+    `<h1>Password admin</h1><p>Buat <b>password admin</b> untuk masuk ke panel ini. Minimal 8 karakter.</p>
       <label for="wzPw">Password</label><input id="wzPw" type="password" autocomplete="new-password" value="${esc(WZ.pw)}">
       <label for="wzPw2">Ulangi password</label><input id="wzPw2" type="password" autocomplete="new-password" value="${esc(WZ.pw)}">
       <div class="help">Tekan ikon mata untuk melihat password yang Anda ketik.</div>`,
-    `<h1>Identitas panel</h1><p>Nama panel tampil di judul dan dipakai sebagai komentar aturan di script MikroTik.</p>
-      <label for="wzName">Nama panel</label><input id="wzName" type="text" maxlength="30" placeholder="contoh: NetKu WiFi" value="${esc(S.panelName)}">
-      <label for="wzTz">Zona waktu</label><select id="wzTz">${S.timezones.map((z) => `<option value="${esc(z.id)}" ${z.id === S.timezone ? "selected" : ""}>${esc(z.label)} (${esc(z.id)})</option>`).join("")}</select>`,
     `<h1>Jaringan VPN L2TP</h1><p>Jaringan VPN menentukan URL ACS di semua ONT. Biarkan bawaannya jika ragu.</p>
       <label for="wzNet">Jaringan VPN</label><input id="wzNet" type="text" class="mono" value="${esc(S.tunnelNet)}">
       <div class="wz-net" id="wzNetInfo">${wzNetHtml(ci)}</div>
@@ -4246,10 +4309,10 @@ async function wzNext() {
   const btn = $("#wzNext");
   try {
     if (WZ.step === 0) {
+      if (WZ.d.panelName && !/^[A-Za-z0-9][A-Za-z0-9 _-]{1,29}$/.test(WZ.d.panelName)) return err("Nama panel 2-30 karakter: huruf, angka, spasi, - atau _.");
+    } else if (WZ.step === 1) {
       if (WZ.pw.length < 8) return err("Password minimal 8 karakter.");
       if (WZ.pw !== $("#wzPw2").value) return err("Kedua password tidak sama.");
-    } else if (WZ.step === 1) {
-      if (WZ.d.panelName && !/^[A-Za-z0-9][A-Za-z0-9 _-]{1,29}$/.test(WZ.d.panelName)) return err("Nama panel 2-30 karakter: huruf, angka, spasi, - atau _.");
     } else if (WZ.step === 2) {
       if (!cidrInfo(WZ.d.tunnelNet)) return err("Jaringan VPN tidak valid. Contoh: 192.168.42.0/24");
     } else if (WZ.step === 3) {

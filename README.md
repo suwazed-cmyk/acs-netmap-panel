@@ -117,8 +117,8 @@ Yang dipasang (semua dari sumber resmi, bukan script pihak ketiga):
 Di akhir muncul ringkasan: **alamat panel, alamat GenieACS UI, dan PSK**. Ringkasan yang sama disimpan di **`/root/acs-netmap-info.txt`** (hanya root).
 
 **Segera** buka alamat panel di browser setelah instalasi selesai. Yang muncul pertama adalah **wizard pemasangan** (±1 menit):
-1. Buat **password admin panel** sendiri (ada ikon mata untuk melihat yang Anda ketik).
-2. **Nama panel** dan **zona waktu**.
+1. **Nama panel** dan **zona waktu**.
+2. Buat **password admin panel** sendiri (ada ikon mata untuk melihat yang Anda ketik).
 3. **Jaringan VPN L2TP**: langsung terlihat URL ACS untuk ONT. Tentukan sekarang, karena mengganti belakangan berarti URL ACS di semua ONT ikut berubah.
 4. Periksa ringkasan, lalu **Selesai**. Halaman login tampil: masuk dengan password yang baru dibuat untuk memastikan Anda mengingatnya.
 
