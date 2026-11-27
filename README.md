@@ -113,7 +113,16 @@ Yang dipasang (semua dari sumber resmi, bukan script pihak ketiga):
 | Panel VPN ACS | `install-vpn-acs.sh` (repo ini) | password admin acak |
 | Inform berkala | provision `vpnacs-inform` | ONT melapor tiap 300 detik (bisa diubah di menu GenieACS) |
 
-Di akhir muncul ringkasan: **alamat panel, password admin, alamat GenieACS UI, URL ACS untuk ONT, dan PSK**. Ringkasan yang sama disimpan di **`/root/acs-netmap-info.txt`** (hanya root). Catat password admin, lalu hapus berkas itu bila sudah aman.
+Di akhir muncul ringkasan: **alamat panel, kode pemasangan, alamat GenieACS UI, dan PSK**. Ringkasan yang sama disimpan di **`/root/acs-netmap-info.txt`** (hanya root).
+
+Buka alamat panel di browser. Yang muncul pertama adalah **wizard pemasangan** (±1 menit):
+1. Isi **kode pemasangan** dari ringkasan instalasi (melindungi panel agar tidak diambil orang lain sebelum Anda).
+2. Buat **password admin panel** sendiri.
+3. **Nama panel** dan **zona waktu**.
+4. **Alamat VPS** (terisi otomatis) dan **Jaringan VPN L2TP**: langsung terlihat URL ACS untuk ONT. Tentukan sekarang, karena mengganti belakangan berarti URL ACS di semua ONT ikut berubah.
+5. Periksa ringkasan, lalu **Selesai** dan langsung masuk ke Dashboard.
+
+Akun **GenieACS UI** terpisah dari akun panel. Buat, ganti, atau reset passwordnya di menu **GenieACS → Pengaturan → Akun GenieACS UI**.
 
 Log lengkap pemasangan: **`/var/log/acs-netmap-install.log`**. Bila satu langkah gagal, layar menampilkan keluaran terakhir langkah itu. Perbaiki penyebabnya lalu jalankan **perintah yang sama** lagi; langkah yang sudah selesai tidak diulang.
 
@@ -163,7 +172,7 @@ bash cek.sh
 Setiap pemeriksaan diberi tanda **[OK]**, **[PERINGATAN]**, atau **[GAGAL]**. Baris yang gagal disertai perintah untuk memperbaikinya. Komponen yang belum dipasang ditandai **[LEWATI]**.
 
 ### 8. Atur panel dan GenieACS (sekali di awal)
-Buka `http://IP_VPS` lalu login dengan **password admin dari ringkasan instalasi** (`cat /root/acs-netmap-info.txt`). Jika port 80 dipakai program lain, buka `http://IP_VPS:8088`.
+Buka `http://IP_VPS`. Pada pemasangan baru, selesaikan dulu wizard pemasangan (lihat langkah 1). Jika port 80 dipakai program lain, buka `http://IP_VPS:8088`.
 
 Menu **Pengaturan → Umum**:
 1. **Nama panel** (opsional), misalnya `INET WIFI`. Dipakai di judul panel dan sebagai komentar aturan di MikroTik (`INET WIFI - ONT ke IP virtual`). Bisa diganti kapan saja; script baru otomatis membersihkan aturan dengan nama lama.

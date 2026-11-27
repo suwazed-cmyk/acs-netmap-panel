@@ -35,7 +35,12 @@ NODE_BIN="$(command -v node || true)"
 DEFAULT_ADMIN_PW="Admin123"
 ask_password() {
   local p1 p2
-  # install.sh mengirim password acak lewat variabel ini (tanpa pertanyaan)
+  # install.sh: password dibuat lewat wizard di panel, dilindungi kode pemasangan
+  if [ -n "${VPNACS_SETUP_CODE:-}" ]; then
+    "$NODE_BIN" "$APP_DIR/server.js" --setup-code "$VPNACS_SETUP_CODE"
+    return
+  fi
+  # password admin langsung dari variabel ini (tanpa pertanyaan)
   if [ -n "${VPNACS_ADMIN_PASSWORD:-}" ]; then
     "$NODE_BIN" "$APP_DIR/server.js" --set-password "$VPNACS_ADMIN_PASSWORD"
     return
@@ -211,7 +216,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.15.0";
+const VERSION = "2.16.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -1252,6 +1257,47 @@ async function genieInformPreset() {
   if (!p) return { installed: false };
   const c = (p.configurations || []).find((x) => x.name === INFORM_PROV) || {};
   return { installed: true, interval: parseInt((c.args || [])[0], 10) || 0 };
+}
+// ---------- Akun GenieACS UI: dibaca/diubah langsung di MongoDB (koleksi users) ----------
+// Hash sama dengan GenieACS: pbkdf2-sha512, 10000 putaran, 128 byte, salt 64 byte hex.
+const GENIE_ADMIN_PERMS = ["devices", "faults", "files", "presets", "provisions", "config", "permissions", "users", "virtualParameters"];
+function mongoShell() {
+  for (const b of ["mongosh", "mongo"]) for (const d of ["/usr/bin/", "/usr/local/bin/", "/bin/"]) if (fs.existsSync(ROOT + d + b)) return d + b;
+  return "";
+}
+function genieMongoUrl() {
+  return readGenieEnv("GENIEACS_MONGODB_CONNECTION_URL") || "mongodb://127.0.0.1/genieacs";
+}
+async function genieMongo(js) {
+  const sh = mongoShell();
+  if (!sh) return { error: "Shell MongoDB (mongosh/mongo) tidak ditemukan di VPS." };
+  const r = await run(sh, ["--quiet", "--norc", genieMongoUrl(), "--eval", js], 20000);
+  if (r.code !== 0) return { error: (r.err || r.out || "MongoDB menolak perintah").trim().split("\n").slice(-2).join(" ") };
+  const line = r.out.trim().split("\n").filter((l) => l.startsWith("@@")).pop();
+  if (!line) return { error: "Jawaban MongoDB tidak dikenali" };
+  try { return { json: JSON.parse(line.slice(2)) }; } catch (e) { return { error: "Jawaban MongoDB tidak dikenali" }; }
+}
+async function genieUsers() {
+  const r = await genieMongo(`print("@@" + JSON.stringify(db.users.find({}, { _id: 1, roles: 1 }).toArray().map(function (u) { return { username: u._id, roles: String(u.roles || "") }; })))`);
+  return r.error ? { error: r.error } : { users: r.json };
+}
+async function genieSetPassword(username, pw, create) {
+  const salt = crypto.randomBytes(64).toString("hex");
+  const hash = crypto.pbkdf2Sync(pw, salt, 10000, 128, "sha512").toString("hex");
+  const U = JSON.stringify(username), H = JSON.stringify(hash), S = JSON.stringify(salt);
+  const perms = JSON.stringify(GENIE_ADMIN_PERMS.map((r) => ({ _id: `admin:${r}:3`, role: "admin", resource: r, access: 3, validate: "true" })));
+  const js = create
+    ? `if (db.users.countDocuments({ _id: ${U} })) { print("@@" + JSON.stringify({ exists: true })); } else {
+         db.users.insertOne({ _id: ${U}, password: ${H}, salt: ${S}, roles: "admin" });
+         if (!db.permissions.countDocuments({ role: "admin" })) ${perms}.forEach(function (p) { db.permissions.updateOne({ _id: p._id }, { $set: p }, { upsert: true }); });
+         db.cache.deleteMany({ _id: "ui-local-cache-hash" }); print("@@" + JSON.stringify({ ok: true })); }`
+    : `var r = db.users.updateOne({ _id: ${U} }, { $set: { password: ${H}, salt: ${S} } });
+       db.cache.deleteMany({ _id: "ui-local-cache-hash" }); print("@@" + JSON.stringify({ ok: r.matchedCount > 0 }));`;
+  const r = await genieMongo(js);
+  if (r.error) return { error: r.error };
+  if (r.json.exists) return { error: `Akun ${username} sudah ada.` };
+  if (!r.json.ok) return { error: `Akun ${username} tidak ditemukan.` };
+  return { ok: true };
 }
 async function genieInformInstall(iv) {
   const a = await httpJson("PUT", `${nbiBase()}/provisions/${INFORM_PROV}`, INFORM_SCRIPT, null, 10000);
@@ -4982,7 +5028,42 @@ async function handleApi(req, res, url) {
     sessionsSave(true);
     return send(res, 200, { ok: true }, { "Set-Cookie": `vpnacs=; ${cookieFlags(req)}; Max-Age=0` });
   }
-  if (p === "/api/me" && method === "GET") return send(res, 200, { loggedIn: authed(req), panelName: brandOf(loadData()) });
+  if (p === "/api/me" && method === "GET") {
+    const d = loadData();
+    const setup = !d.admin && !!d.setupCode;
+    const out = { loggedIn: authed(req), panelName: brandOf(d), setup };
+    if (setup) {
+      const st = settings(d);
+      out.defaults = { publicIp: st.publicIp || "", tunnelNet: tun(d).net, timezone: tzName(d), timezones: Object.entries(TIMEZONES).map(([id, v]) => ({ id, label: v.label })), panelName: brandOf(d) };
+    }
+    return send(res, 200, out);
+  }
+  // --- Wizard pemasangan awal: kode dari installer, lalu password admin ---
+  if (p === "/api/setup" && method === "POST") {
+    const d = loadData();
+    if (d.admin || !d.setupCode) return send(res, 409, { error: "Panel sudah dipasang. Silakan login." });
+    const ip = clientIp(req), now = Date.now();
+    const f = loginFails.get(ip) || { n: 0, level: 0, until: 0, last: 0, total: 0 };
+    if (f.until > now) return send(res, 429, { error: `Terlalu banyak percobaan. Coba lagi dalam ${Math.ceil((f.until - now) / 60000)} menit.` });
+    const code = String(body.code || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (crypto.createHash("sha256").update(code).digest("hex") !== d.setupCode) {
+      f.n += 1; f.last = now;
+      if (f.n >= 5) { f.until = now + 15 * 60e3; f.n = 0; }
+      loginFails.set(ip, f);
+      await new Promise((r) => setTimeout(r, 800));
+      return send(res, 401, { error: "Kode pemasangan salah. Lihat kode di layar terminal atau di /root/acs-netmap-info.txt" });
+    }
+    if (body.password === undefined) return send(res, 200, { ok: true, codeOk: true });
+    const pw = String(body.password || "");
+    if (pw.length < 8) return send(res, 400, { error: "Password minimal 8 karakter." });
+    if (pw === DEFAULT_ADMIN_PW) return send(res, 400, { error: "Gunakan password selain password bawaan." });
+    d.admin = hashPassword(pw);
+    delete d.setupCode;
+    saveData(d);
+    logActivity(req, "Pemasangan awal", "Password admin dibuat lewat wizard");
+    const t = newSession(req);
+    return send(res, 200, { ok: true }, { "Set-Cookie": `vpnacs=${t}; ${cookieFlags(req)}; Max-Age=${30 * 86400}` });
+  }
   // Tanda aktivitas dari browser (klik/ketik) dan sisa waktu sesi
   if (p === "/api/session" && (method === "GET" || method === "POST")) {
     if (!authed(req)) return send(res, 401, { error: "Sesi berakhir. Silakan login lagi." });
@@ -5049,6 +5130,20 @@ async function handleApi(req, res, url) {
 
   if (!authed(req)) return send(res, 401, { error: "Silakan login dulu." });
 
+  // --- Akun GenieACS UI ---
+  if (p === "/api/genie/users" && method === "GET") return send(res, 200, await genieUsers());
+  if (p === "/api/genie/users" && method === "POST") {
+    const u = String(body.username || "").trim();
+    if (!/^[A-Za-z0-9._@-]{2,40}$/.test(u)) return send(res, 400, { error: "Username 2-40 karakter: huruf, angka, titik, minus, garis bawah, atau @." });
+    let pw = String(body.password || "");
+    const reset = body.action === "reset";
+    if (reset) pw = randomPassword(12);
+    else if (pw.length < 8) return send(res, 400, { error: "Password minimal 8 karakter." });
+    const r = await genieSetPassword(u, pw, body.action === "create");
+    if (r.error) return send(res, 400, { error: r.error });
+    logActivity(req, body.action === "create" ? "Akun GenieACS dibuat" : reset ? "Password GenieACS direset" : "Password GenieACS diganti", u);
+    return send(res, 200, { ok: true, password: reset ? pw : undefined });
+  }
   // --- Ringkasan ---
   if (p === "/api/overview" && method === "GET") {
     const d = loadData();
@@ -6191,6 +6286,16 @@ if (process.argv[2] === "--set-password") {
   d.admin = hashPassword(pw);
   saveData(d);
   console.log("Password admin disimpan.");
+  process.exit(0);
+} else if (process.argv[2] === "--setup-code") {
+  // Dipakai install.sh: panel dibuka pertama kali lewat wizard, dilindungi kode ini
+  const code = String(process.argv[3] || "").trim().toUpperCase();
+  if (code.length < 6) { console.error("Kode minimal 6 karakter."); process.exit(1); }
+  const d = loadData();
+  if (d.admin) { console.log("Password admin sudah ada, kode pemasangan tidak dipakai."); process.exit(0); }
+  d.setupCode = crypto.createHash("sha256").update(code).digest("hex");
+  saveData(d);
+  console.log("Kode pemasangan disimpan.");
   process.exit(0);
 } else if (process.argv[2] === "--genie-inform") {
   // Dipakai install.sh: pasang provision "inform berkala" ke GenieACS (dilewati bila sudah ada)
@@ -7388,6 +7493,47 @@ cat > "$APP_DIR/public/index.html" <<'HTMLEOF'
   [data-theme="dark"] .dtabs{background:#0b1626}
   [data-theme="dark"] .dtabs button.on{background:var(--surface-3)}
   @media (max-width:600px){.tab,button.tab{padding:6px 10px;font-size:13px}.dtabs button{padding:5px 9px;font-size:13px}}
+
+  /* Wizard pemasangan awal */
+  .wz{align-items:start;padding-top:6vh}
+  .wz-card{width:100%;max-width:520px}
+  .wz-card>.brand{justify-content:center;padding:0 0 18px;color:var(--head)}
+  .wz-card>.brand b{font-size:18px;font-weight:800}
+  .wz-card>.brand small{color:var(--muted)}
+  .wz-steps{list-style:none;display:flex;gap:4px;margin:0 0 14px;padding:4px;background:var(--subtle);border:1px solid var(--line);border-radius:12px}
+  .wz-steps li{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 4px;border-radius:9px;font-size:12.5px;color:var(--muted);white-space:nowrap}
+  .wz-steps li span{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:700;background:var(--line);color:var(--text-2)}
+  .wz-steps li span svg{width:12px;height:12px}
+  .wz-steps li b{font-weight:600}
+  .wz-steps li.on{background:var(--surface);color:var(--text);box-shadow:0 1px 3px rgba(13,32,64,.12)}
+  .wz-steps li.on span{background:var(--primary);color:#fff}
+  .wz-steps li.ok span{background:var(--ok);color:#fff}
+  .wz-box{padding:24px}
+  .wz-box h1{font-size:19px;font-weight:800;margin:0 0 4px}
+  .wz-box p{color:var(--muted);margin:0 0 6px;line-height:1.55}
+  .wz-box label:not(.check){display:block;margin:14px 0 6px;font-weight:600;font-size:13.5px}
+  .wz-box input:not([type=checkbox]),.wz-box select{width:100%}
+  .wz-code{font-size:20px!important;letter-spacing:.2em;text-align:center;height:48px!important;text-transform:uppercase}
+  .wz-code::placeholder{text-transform:none;letter-spacing:.02em;font-size:15px}
+  .wz-net{margin-top:10px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .wz-net>div,.wz-sum>div{display:flex;justify-content:space-between;gap:10px;padding:8px 12px;font-size:13px;border-top:1px solid var(--line)}
+  .wz-net>div:first-child,.wz-sum>div:first-child{border-top:0}
+  .wz-net span,.wz-sum span{color:var(--muted)}
+  .wz-net .bad{color:var(--bad)}
+  .wz-sum{margin-top:12px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .wz-note{margin:12px 0 4px}
+  .wz-box .check{margin-top:14px}
+  .wz-acts{display:flex;justify-content:space-between;gap:8px;margin-top:20px}
+  .wz-acts .btn{width:auto!important;margin:0!important;min-width:110px}
+  @media (max-width:560px){.wz-steps li b{display:none}.wz{padding-top:3vh}}
+
+  .g-users{list-style:none;margin:0;padding:4px 0}
+  .g-users li{display:flex;align-items:center;gap:10px;padding:9px 16px}
+  .g-users li+li{border-top:1px solid var(--line)}
+  .g-users .grow{flex:1;min-width:0}
+  .g-users b{display:block;font-weight:700}
+  .g-users small{color:var(--muted);font-size:12px}
+  #gUsers{margin-top:0}
 </style>
 </head>
 <body>
@@ -7529,7 +7675,7 @@ async function api(path, opts = {}) {
   const r = await fetch(path, o);
   let data = {};
   try { data = await r.json(); } catch (e) {}
-  if (r.status === 401 && path !== "/api/login") { showLogin(); throw new Error(data.error || "Sesi habis"); }
+  if (r.status === 401 && path !== "/api/login" && path !== "/api/setup") { showLogin(); throw new Error(data.error || "Sesi habis"); }
   if (!r.ok) { const err = new Error(data.error || "Terjadi kesalahan (" + r.status + ")"); err.data = data; throw err; }
   return data;
 }
@@ -9143,6 +9289,58 @@ async function fillUpdate(refresh) {
   });
 }
 
+// ---------- Akun GenieACS UI (GenieACS → Pengaturan) ----------
+async function fillGenieUsers() {
+  const box = $("#gUsers"); if (!box) return;
+  let r;
+  try { r = await api("/api/genie/users"); } catch (e) { r = { error: e.message }; }
+  if (!$("#gUsers")) return;
+  const head = `<div class="ch"><h2>Akun GenieACS UI</h2><span class="muted" style="font-size:12.5px">terpisah dari akun panel</span></div>`;
+  if (r.error) { box.innerHTML = head + `<div class="cb"><div class="note warn" style="margin:0">${ic("alert")}<div><b>Akun GenieACS tidak bisa dibaca</b>${esc(r.error)}</div></div></div>`; paintIcons(box); return; }
+  const U = r.users || [];
+  box.innerHTML = head + (U.length
+    ? `<ul class="g-users">${U.map((u) => `<li><span class="zt-av dev">${ic("user")}</span><span class="grow"><b>${esc(u.username)}</b><small>${esc(u.roles || "tanpa peran")}</small></span>
+        <button class="btn sm" data-gpw="${esc(u.username)}">${ic("key")}Ganti password</button><button class="btn sm" data-greset="${esc(u.username)}">${ic("refresh")}Reset</button></li>`).join("")}</ul>
+       <p class="help" style="margin:0 16px 12px">Dipakai untuk masuk ke GenieACS UI${STATE.settings.genieUrl ? ` (<a href="${esc(STATE.settings.genieUrl)}" target="_blank" rel="noopener">${esc(STATE.settings.genieUrl.replace(/^https?:\/\//, ""))}</a>)` : ""}, bukan ke panel ini.</p>`
+    : `<form class="cb" id="gUserNew">
+        <p class="help" style="margin:0 0 8px">Belum ada akun GenieACS UI. Buat akun admin di sini (atau lewat wizard di GenieACS UI).</p>
+        <div class="f2"><div><label for="guName">Username</label><input id="guName" type="text" value="admin" autocomplete="off"></div>
+          <div><label for="guPw">Password</label><input id="guPw" type="password" autocomplete="new-password" placeholder="Minimal 8 karakter"></div></div>
+        <div class="err" id="guErr"></div>
+        <div class="form-actions"><button class="btn pri">${ic("plus")}Buat akun admin GenieACS</button></div></form>`);
+  paintIcons(box);
+  const nf = $("#gUserNew");
+  if (nf) nf.onsubmit = async (e) => {
+    e.preventDefault(); $("#guErr").textContent = ""; const b = nf.querySelector("button"); busyBtn(b, true);
+    try { await api("/api/genie/users", { method: "POST", body: { action: "create", username: $("#guName").value, password: $("#guPw").value } }); toast("Akun GenieACS dibuat"); fillGenieUsers(); }
+    catch (err) { $("#guErr").textContent = err.message; busyBtn(b, false); }
+  };
+  box.querySelectorAll("[data-gpw]").forEach((b) => (b.onclick = () => {
+    const u = b.dataset.gpw;
+    modal(`Ganti password GenieACS: ${esc(u)}`, `<p class="muted" style="margin:0 0 6px">Password untuk masuk ke <b>GenieACS UI</b>, bukan ke panel.</p>
+      <label for="gp1">Password baru</label><input id="gp1" type="password" autocomplete="new-password" placeholder="Minimal 8 karakter">
+      <label for="gp2">Ulangi password</label><input id="gp2" type="password" autocomplete="new-password"><div class="err" id="gpErr"></div>`,
+      `<button class="btn" data-act="closemodal">Batal</button><button class="btn pri" id="gpOk">Simpan</button>`, { size: "sm" });
+    $("#gpOk").onclick = async () => {
+      $("#gpErr").textContent = "";
+      if ($("#gp1").value !== $("#gp2").value) { $("#gpErr").textContent = "Kedua password tidak sama."; return; }
+      busyBtn($("#gpOk"), true);
+      try { await api("/api/genie/users", { method: "POST", body: { action: "password", username: u, password: $("#gp1").value } }); closeModal(); toast("Password GenieACS diganti"); }
+      catch (err) { $("#gpErr").textContent = err.message; busyBtn($("#gpOk"), false); }
+    };
+  }));
+  box.querySelectorAll("[data-greset]").forEach((b) => (b.onclick = () => {
+    const u = b.dataset.greset;
+    confirmDialog({ title: `Reset password GenieACS "${esc(u)}"?`, icon: "key", ok: "Reset",
+      text: `<p>Password baru dibuat acak dan ditampilkan sekali. Password lama langsung tidak berlaku. Akun panel tidak ikut berubah.</p>`,
+      onOk: async () => {
+        const r2 = await api("/api/genie/users", { method: "POST", body: { action: "reset", username: u } });
+        closeModal();
+        doneDialog("Password GenieACS direset", `<p>Username: <b>${esc(u)}</b></p><p>Password baru: <code class="mono" style="font-size:15px">${esc(r2.password)}</code> ${copyBtn(r2.password, "Password tersalin")}</p><p class="muted">Catat sekarang, password ini tidak ditampilkan lagi.</p>`, "ok", false);
+      } });
+  }));
+}
+
 /* ================= GenieACS ================= */
 // ---------- Inform berkala ONT: penyebab umum ONT terlihat offline padahal hidup ----------
 function informCard(g) {
@@ -9248,6 +9446,7 @@ async function fillGenie(refresh) {
           </form>`}
         </div>
     </div>
+    <div class="card" id="gUsers"><div class="ch"><h2>Akun GenieACS UI</h2></div><div class="cb muted">Membaca akun…</div></div>
     </div>
     <div data-pane="layanan"${GTAB === "layanan" ? "" : " hidden"}>
       <div class="grid2">
@@ -9270,6 +9469,7 @@ async function fillGenie(refresh) {
   bindSubTabs(b, (k) => (GTAB = k));
   paintIcons(b);
   bindInform(g);
+  fillGenieUsers();
   $("#gRefresh") && ($("#gRefresh").onclick = async () => { busyBtn($("#gRefresh"), true); await fillGenie(true); });
   $("#gExtraForm") && ($("#gExtraForm").onsubmit = async (e) => {
     e.preventDefault(); $("#gExtraErr").textContent = "";
@@ -10247,13 +10447,123 @@ document.addEventListener("click", async (e) => {
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeModal(); document.querySelectorAll(".menu-list").forEach((m) => m.classList.add("hidden")); } });
 
+/* ================= Wizard pemasangan awal ================= */
+// Muncul sekali setelah install.sh: kode pemasangan → password admin → panel → VPS & VPN → ringkasan.
+const WZ = { step: 0, code: "", pw: "", done: false, d: {} };
+function cidrInfo(c) {
+  const m = String(c || "").trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/);
+  if (!m) return null;
+  const pre = +m[5], o = m.slice(1, 5).map(Number);
+  if (o.some((x) => x > 255) || pre < 16 || pre > 28) return null;
+  const n = ((o[0] << 24) >>> 0) + (o[1] << 16) + (o[2] << 8) + o[3], size = 2 ** (32 - pre);
+  const net = n - (n % size), ip = (x) => [x >>> 24, (x >>> 16) & 255, (x >>> 8) & 255, x & 255].join(".");
+  const half = net + Math.floor(size / 2);
+  return { acs: `http://${ip(net + 1)}:7547`, local: ip(net + 1), fixed: `${ip(net + 10)} – ${ip(half - 1)}`, pool: `${ip(half)} – ${ip(net + size - 2)}`, max: half - (net + 10) };
+}
+function showSetup(me) {
+  $("#loginView").classList.add("hidden"); $("#appView").classList.add("hidden");
+  const D = me.defaults || {};
+  WZ.d = { panelName: D.panelName && D.panelName !== "VPN ACS" ? D.panelName : "", timezone: D.timezone || "Asia/Makassar", publicIp: D.publicIp || "", tunnelNet: D.tunnelNet || "192.168.42.0/24", useIpsec: false, timezones: D.timezones || [] };
+  let el = $("#setupView");
+  if (!el) { el = document.createElement("div"); el.id = "setupView"; el.className = "login wz"; document.body.appendChild(el); }
+  document.title = "Pemasangan awal";
+  wzRender();
+}
+function wzRender() {
+  const el = $("#setupView"), S = WZ.d, st = WZ.step;
+  const steps = ["Kode", "Password", "Panel", "VPS & VPN", "Selesai"];
+  const nav = `<ol class="wz-steps">${steps.map((t, i) => `<li class="${i < st ? "ok" : i === st ? "on" : ""}"><span>${i < st ? ic("check") : i + 1}</span><b>${t}</b></li>`).join("")}</ol>`;
+  const ci = cidrInfo(S.tunnelNet);
+  const body = [
+    `<h1>Selamat datang</h1><p>Panel baru saja dipasang. Isi <b>kode pemasangan</b> yang tampil di layar terminal setelah instalasi, atau lihat dengan perintah <code>cat /root/acs-netmap-info.txt</code>.</p>
+      <label for="wzCode">Kode pemasangan</label><input id="wzCode" type="text" class="mono wz-code" maxlength="12" autocomplete="off" placeholder="contoh: K7P2M9QX" value="${esc(WZ.code)}">`,
+    `<h1>Password admin panel</h1><p>Dipakai untuk masuk ke panel ini. Minimal 8 karakter.</p>
+      <label for="wzPw">Password</label><input id="wzPw" type="password" autocomplete="new-password" value="${esc(WZ.pw)}">
+      <label for="wzPw2">Ulangi password</label><input id="wzPw2" type="password" autocomplete="new-password" value="${esc(WZ.pw)}">`,
+    `<h1>Identitas panel</h1><p>Nama panel tampil di judul dan dipakai sebagai komentar aturan di script MikroTik.</p>
+      <label for="wzName">Nama panel</label><input id="wzName" type="text" maxlength="30" placeholder="contoh: INET WIFI" value="${esc(S.panelName)}">
+      <label for="wzTz">Zona waktu</label><select id="wzTz">${S.timezones.map((z) => `<option value="${esc(z.id)}" ${z.id === S.timezone ? "selected" : ""}>${esc(z.label)} (${esc(z.id)})</option>`).join("")}</select>`,
+    `<h1>VPS &amp; VPN L2TP</h1><p>Alamat VPS dipakai MikroTik untuk tersambung. Jaringan VPN menentukan URL ACS di semua ONT.</p>
+      <label for="wzIp">Alamat VPS</label><input id="wzIp" type="text" placeholder="IP publik atau domain" value="${esc(S.publicIp)}">
+      <div class="help">Terisi otomatis dari IP publik VPS. Boleh diganti dengan domain.</div>
+      <label for="wzNet">Jaringan VPN</label><input id="wzNet" type="text" class="mono" value="${esc(S.tunnelNet)}">
+      <div class="wz-net" id="wzNetInfo">${ci ? `<div><span>URL ACS untuk ONT</span><b class="mono">${ci.acs}</b></div><div><span>IP tetap router</span><b class="mono">${ci.fixed}</b></div><div><span>Pool dinamis</span><b class="mono">${ci.pool}</b></div>` : `<div class="bad">Format salah. Contoh: 192.168.42.0/24</div>`}</div>
+      <div class="note warn wz-note">${ic("alert")}<div><b>Tentukan sekarang</b>Mengganti jaringan VPN setelah ONT terpasang berarti URL ACS di semua ONT harus diganti.</div></div>
+      <label class="check"><input id="wzIpsec" type="checkbox" ${S.useIpsec ? "checked" : ""}>Pakai IPsec (enkripsi L2TP)</label>
+      <div class="help">Biarkan mati kecuali memang dibutuhkan. Tanpa IPsec lebih ringan dan didukung semua MikroTik.</div>`,
+    `<h1>Periksa sebelum selesai</h1>
+      <div class="wz-sum">
+        <div><span>Nama panel</span><b>${esc(S.panelName || "VPN ACS")}</b></div>
+        <div><span>Zona waktu</span><b>${esc((S.timezones.find((z) => z.id === S.timezone) || {}).label || S.timezone)}</b></div>
+        <div><span>Alamat VPS</span><b class="mono">${esc(S.publicIp || "(otomatis)")}</b></div>
+        <div><span>Jaringan VPN</span><b class="mono">${esc(S.tunnelNet)}</b></div>
+        <div><span>URL ACS untuk ONT</span><b class="mono">${ci ? ci.acs : "—"}</b></div>
+        <div><span>IPsec</span><b>${S.useIpsec ? "Aktif" : "Tidak"}</b></div>
+      </div>
+      <div class="note info wz-note">${ic("info")}<div><b>Akun GenieACS terpisah dari panel</b>Akun admin GenieACS UI dibuat dan diatur di menu <b>GenieACS → Pengaturan</b> setelah ini, bukan di sini.</div></div>`,
+  ][st];
+  el.innerHTML = `<div class="wz-card">
+    <div class="brand"><span class="brand-mark">${ic("shield")}</span><span><b>Pemasangan awal</b><small>${esc(S.panelName || "VPN ACS")}</small></span></div>
+    ${nav}
+    <form class="login-box wz-box" id="wzForm" novalidate>${body}
+      <div class="err" id="wzErr"></div>
+      <div class="wz-acts">${st > 0 && !(st === 1 && false) ? `<button type="button" class="btn" id="wzBack">${ic("back")}Kembali</button>` : "<span></span>"}<button class="btn pri" id="wzNext">${st === 4 ? `${ic("check")}Selesai &amp; masuk` : `Lanjut${ic("chev")}`}</button></div>
+    </form></div>`;
+  const f = el.querySelector("input,select"); if (f) f.focus();
+  const nt = $("#wzNet");
+  if (nt) nt.oninput = () => { const c = cidrInfo(nt.value); $("#wzNetInfo").innerHTML = c ? `<div><span>URL ACS untuk ONT</span><b class="mono">${c.acs}</b></div><div><span>IP tetap router</span><b class="mono">${c.fixed}</b></div><div><span>Pool dinamis</span><b class="mono">${c.pool}</b></div>` : `<div class="bad">Format salah. Contoh: 192.168.42.0/24</div>`; };
+  const back = $("#wzBack"); if (back) back.onclick = () => { wzSave(); WZ.step--; wzRender(); };
+  $("#wzForm").onsubmit = (e) => { e.preventDefault(); wzNext(); };
+}
+function wzSave() {
+  const v = (id) => ($(id) ? $(id).value.trim() : null);
+  if ($("#wzCode")) WZ.code = v("#wzCode").toUpperCase();
+  if ($("#wzPw")) WZ.pw = $("#wzPw").value;
+  if ($("#wzName")) WZ.d.panelName = v("#wzName");
+  if ($("#wzTz")) WZ.d.timezone = v("#wzTz");
+  if ($("#wzIp")) WZ.d.publicIp = v("#wzIp");
+  if ($("#wzNet")) WZ.d.tunnelNet = v("#wzNet");
+  if ($("#wzIpsec")) WZ.d.useIpsec = $("#wzIpsec").checked;
+}
+async function wzNext() {
+  const err = (m) => { $("#wzErr").textContent = m; };
+  err(""); wzSave();
+  const btn = $("#wzNext");
+  try {
+    if (WZ.step === 0) {
+      if (WZ.code.length < 6) return err("Isi kode pemasangan.");
+      busyBtn(btn, true);
+      await api("/api/setup", { method: "POST", body: { code: WZ.code } });
+    } else if (WZ.step === 1) {
+      if (WZ.pw.length < 8) return err("Password minimal 8 karakter.");
+      if (WZ.pw !== $("#wzPw2").value) return err("Kedua password tidak sama.");
+    } else if (WZ.step === 2) {
+      if (WZ.d.panelName && !/^[A-Za-z0-9][A-Za-z0-9 _-]{1,29}$/.test(WZ.d.panelName)) return err("Nama panel 2-30 karakter: huruf, angka, spasi, - atau _.");
+    } else if (WZ.step === 3) {
+      if (!cidrInfo(WZ.d.tunnelNet)) return err("Jaringan VPN tidak valid. Contoh: 192.168.42.0/24");
+    } else if (WZ.step === 4) {
+      busyBtn(btn, true);
+      if (!WZ.done) { await api("/api/setup", { method: "POST", body: { code: WZ.code, password: WZ.pw } }); WZ.done = true; }
+      try {
+        await api("/api/settings", { method: "PUT", body: { panelName: WZ.d.panelName || "VPN ACS", timezone: WZ.d.timezone, publicIp: WZ.d.publicIp, tunnelNet: WZ.d.tunnelNet, useIpsec: WZ.d.useIpsec } });
+      } catch (e2) { WZ.step = 3; wzRender(); $("#wzErr").textContent = e2.message + " (password admin sudah tersimpan; perbaiki lalu lanjutkan)"; return; }
+      $("#setupView").remove();
+      const me = await api("/api/me"); setBrand(me.panelName);
+      showApp(); await load(); location.hash = "#/"; route(); idleStart();
+      toast("Pemasangan selesai. Selamat datang!");
+      return;
+    }
+    WZ.step++; wzRender();
+  } catch (e) { err(e.message); busyBtn(btn, false); }
+}
+
 /* ================= Mulai ================= */
 paintIcons();
 (async () => {
   try {
     const me = await api("/api/me");
     setBrand(me.panelName);
-    if (me.loggedIn) { showApp(); await load(); route(); idleStart(); } else showLogin();
+    if (me.loggedIn) { showApp(); await load(); route(); idleStart(); } else if (me.setup) showSetup(me); else showLogin();
   } catch (e) { showLogin(); }
   setInterval(async () => {
     if ($("#appView").classList.contains("hidden") || $("#mbg") || TEST) return;

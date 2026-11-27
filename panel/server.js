@@ -52,7 +52,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.15.0";
+const VERSION = "2.16.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -1093,6 +1093,47 @@ async function genieInformPreset() {
   if (!p) return { installed: false };
   const c = (p.configurations || []).find((x) => x.name === INFORM_PROV) || {};
   return { installed: true, interval: parseInt((c.args || [])[0], 10) || 0 };
+}
+// ---------- Akun GenieACS UI: dibaca/diubah langsung di MongoDB (koleksi users) ----------
+// Hash sama dengan GenieACS: pbkdf2-sha512, 10000 putaran, 128 byte, salt 64 byte hex.
+const GENIE_ADMIN_PERMS = ["devices", "faults", "files", "presets", "provisions", "config", "permissions", "users", "virtualParameters"];
+function mongoShell() {
+  for (const b of ["mongosh", "mongo"]) for (const d of ["/usr/bin/", "/usr/local/bin/", "/bin/"]) if (fs.existsSync(ROOT + d + b)) return d + b;
+  return "";
+}
+function genieMongoUrl() {
+  return readGenieEnv("GENIEACS_MONGODB_CONNECTION_URL") || "mongodb://127.0.0.1/genieacs";
+}
+async function genieMongo(js) {
+  const sh = mongoShell();
+  if (!sh) return { error: "Shell MongoDB (mongosh/mongo) tidak ditemukan di VPS." };
+  const r = await run(sh, ["--quiet", "--norc", genieMongoUrl(), "--eval", js], 20000);
+  if (r.code !== 0) return { error: (r.err || r.out || "MongoDB menolak perintah").trim().split("\n").slice(-2).join(" ") };
+  const line = r.out.trim().split("\n").filter((l) => l.startsWith("@@")).pop();
+  if (!line) return { error: "Jawaban MongoDB tidak dikenali" };
+  try { return { json: JSON.parse(line.slice(2)) }; } catch (e) { return { error: "Jawaban MongoDB tidak dikenali" }; }
+}
+async function genieUsers() {
+  const r = await genieMongo(`print("@@" + JSON.stringify(db.users.find({}, { _id: 1, roles: 1 }).toArray().map(function (u) { return { username: u._id, roles: String(u.roles || "") }; })))`);
+  return r.error ? { error: r.error } : { users: r.json };
+}
+async function genieSetPassword(username, pw, create) {
+  const salt = crypto.randomBytes(64).toString("hex");
+  const hash = crypto.pbkdf2Sync(pw, salt, 10000, 128, "sha512").toString("hex");
+  const U = JSON.stringify(username), H = JSON.stringify(hash), S = JSON.stringify(salt);
+  const perms = JSON.stringify(GENIE_ADMIN_PERMS.map((r) => ({ _id: `admin:${r}:3`, role: "admin", resource: r, access: 3, validate: "true" })));
+  const js = create
+    ? `if (db.users.countDocuments({ _id: ${U} })) { print("@@" + JSON.stringify({ exists: true })); } else {
+         db.users.insertOne({ _id: ${U}, password: ${H}, salt: ${S}, roles: "admin" });
+         if (!db.permissions.countDocuments({ role: "admin" })) ${perms}.forEach(function (p) { db.permissions.updateOne({ _id: p._id }, { $set: p }, { upsert: true }); });
+         db.cache.deleteMany({ _id: "ui-local-cache-hash" }); print("@@" + JSON.stringify({ ok: true })); }`
+    : `var r = db.users.updateOne({ _id: ${U} }, { $set: { password: ${H}, salt: ${S} } });
+       db.cache.deleteMany({ _id: "ui-local-cache-hash" }); print("@@" + JSON.stringify({ ok: r.matchedCount > 0 }));`;
+  const r = await genieMongo(js);
+  if (r.error) return { error: r.error };
+  if (r.json.exists) return { error: `Akun ${username} sudah ada.` };
+  if (!r.json.ok) return { error: `Akun ${username} tidak ditemukan.` };
+  return { ok: true };
 }
 async function genieInformInstall(iv) {
   const a = await httpJson("PUT", `${nbiBase()}/provisions/${INFORM_PROV}`, INFORM_SCRIPT, null, 10000);
@@ -4823,7 +4864,42 @@ async function handleApi(req, res, url) {
     sessionsSave(true);
     return send(res, 200, { ok: true }, { "Set-Cookie": `vpnacs=; ${cookieFlags(req)}; Max-Age=0` });
   }
-  if (p === "/api/me" && method === "GET") return send(res, 200, { loggedIn: authed(req), panelName: brandOf(loadData()) });
+  if (p === "/api/me" && method === "GET") {
+    const d = loadData();
+    const setup = !d.admin && !!d.setupCode;
+    const out = { loggedIn: authed(req), panelName: brandOf(d), setup };
+    if (setup) {
+      const st = settings(d);
+      out.defaults = { publicIp: st.publicIp || "", tunnelNet: tun(d).net, timezone: tzName(d), timezones: Object.entries(TIMEZONES).map(([id, v]) => ({ id, label: v.label })), panelName: brandOf(d) };
+    }
+    return send(res, 200, out);
+  }
+  // --- Wizard pemasangan awal: kode dari installer, lalu password admin ---
+  if (p === "/api/setup" && method === "POST") {
+    const d = loadData();
+    if (d.admin || !d.setupCode) return send(res, 409, { error: "Panel sudah dipasang. Silakan login." });
+    const ip = clientIp(req), now = Date.now();
+    const f = loginFails.get(ip) || { n: 0, level: 0, until: 0, last: 0, total: 0 };
+    if (f.until > now) return send(res, 429, { error: `Terlalu banyak percobaan. Coba lagi dalam ${Math.ceil((f.until - now) / 60000)} menit.` });
+    const code = String(body.code || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (crypto.createHash("sha256").update(code).digest("hex") !== d.setupCode) {
+      f.n += 1; f.last = now;
+      if (f.n >= 5) { f.until = now + 15 * 60e3; f.n = 0; }
+      loginFails.set(ip, f);
+      await new Promise((r) => setTimeout(r, 800));
+      return send(res, 401, { error: "Kode pemasangan salah. Lihat kode di layar terminal atau di /root/acs-netmap-info.txt" });
+    }
+    if (body.password === undefined) return send(res, 200, { ok: true, codeOk: true });
+    const pw = String(body.password || "");
+    if (pw.length < 8) return send(res, 400, { error: "Password minimal 8 karakter." });
+    if (pw === DEFAULT_ADMIN_PW) return send(res, 400, { error: "Gunakan password selain password bawaan." });
+    d.admin = hashPassword(pw);
+    delete d.setupCode;
+    saveData(d);
+    logActivity(req, "Pemasangan awal", "Password admin dibuat lewat wizard");
+    const t = newSession(req);
+    return send(res, 200, { ok: true }, { "Set-Cookie": `vpnacs=${t}; ${cookieFlags(req)}; Max-Age=${30 * 86400}` });
+  }
   // Tanda aktivitas dari browser (klik/ketik) dan sisa waktu sesi
   if (p === "/api/session" && (method === "GET" || method === "POST")) {
     if (!authed(req)) return send(res, 401, { error: "Sesi berakhir. Silakan login lagi." });
@@ -4890,6 +4966,20 @@ async function handleApi(req, res, url) {
 
   if (!authed(req)) return send(res, 401, { error: "Silakan login dulu." });
 
+  // --- Akun GenieACS UI ---
+  if (p === "/api/genie/users" && method === "GET") return send(res, 200, await genieUsers());
+  if (p === "/api/genie/users" && method === "POST") {
+    const u = String(body.username || "").trim();
+    if (!/^[A-Za-z0-9._@-]{2,40}$/.test(u)) return send(res, 400, { error: "Username 2-40 karakter: huruf, angka, titik, minus, garis bawah, atau @." });
+    let pw = String(body.password || "");
+    const reset = body.action === "reset";
+    if (reset) pw = randomPassword(12);
+    else if (pw.length < 8) return send(res, 400, { error: "Password minimal 8 karakter." });
+    const r = await genieSetPassword(u, pw, body.action === "create");
+    if (r.error) return send(res, 400, { error: r.error });
+    logActivity(req, body.action === "create" ? "Akun GenieACS dibuat" : reset ? "Password GenieACS direset" : "Password GenieACS diganti", u);
+    return send(res, 200, { ok: true, password: reset ? pw : undefined });
+  }
   // --- Ringkasan ---
   if (p === "/api/overview" && method === "GET") {
     const d = loadData();
@@ -6032,6 +6122,16 @@ if (process.argv[2] === "--set-password") {
   d.admin = hashPassword(pw);
   saveData(d);
   console.log("Password admin disimpan.");
+  process.exit(0);
+} else if (process.argv[2] === "--setup-code") {
+  // Dipakai install.sh: panel dibuka pertama kali lewat wizard, dilindungi kode ini
+  const code = String(process.argv[3] || "").trim().toUpperCase();
+  if (code.length < 6) { console.error("Kode minimal 6 karakter."); process.exit(1); }
+  const d = loadData();
+  if (d.admin) { console.log("Password admin sudah ada, kode pemasangan tidak dipakai."); process.exit(0); }
+  d.setupCode = crypto.createHash("sha256").update(code).digest("hex");
+  saveData(d);
+  console.log("Kode pemasangan disimpan.");
   process.exit(0);
 } else if (process.argv[2] === "--genie-inform") {
   // Dipakai install.sh: pasang provision "inform berkala" ke GenieACS (dilewati bila sudah ada)
