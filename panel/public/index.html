@@ -1035,6 +1035,15 @@
   @media (max-width:1080px){.grid-dash{grid-template-columns:minmax(0,1fr)}}
   @media (max-width:900px){.wrap{margin-left:0}.top{height:56px;padding:0 10px}.main{padding:12px 10px 32px}#topWarn{padding:10px 10px 0}.pbar .crumb b{font-size:16px}}
   @media (max-width:600px){.kpi b{font-size:22px}.kpis{gap:8px}}
+
+  button.tab{border:0;border-bottom:2px solid transparent;background:none;cursor:pointer;font:inherit}
+  .subtabs{margin-bottom:14px}
+  .subtabs .tab{padding:9px 12px 10px;font-size:14px}
+  .tab.on{color:var(--primary-ink);border-bottom-color:var(--primary)}
+  .tab.on svg{color:var(--primary)}
+  .tcnt{min-width:19px;height:19px;padding:0 6px;border-radius:10px;font-size:11px;font-weight:700;display:inline-grid;place-items:center;background:var(--bad);color:#fff}
+  .tcnt.warn{background:var(--warn)}
+  [data-pane]>.card+.card,[data-pane]>.card+.grid2,[data-pane]>.kpis+.card{margin-top:12px}
 </style>
 </head>
 <body>
@@ -1598,9 +1607,10 @@ function viewDashboard(v, live) {
 }
 // Add-on yang terpasang, dibuka langsung dari Dashboard
 function dashApps() {
-  const A = Object.entries(STATE.settings.addons || {}).filter(([, a]) => a.installed).map(([id, a]) => Object.assign({ id }, a));
+  // Hanya aplikasi web terpasang yang dibuka di tab baru (Bilingku, Panel ACS); add-on sistem (ZeroTier, WireGuard) punya menu sendiri
+  const A = Object.entries(STATE.settings.addons || {}).filter(([, a]) => a.installed && a.kind === "aplikasi").map(([id, a]) => Object.assign({ id }, a));
   if (!A.length) return "";
-  A.sort((x, y) => (x.kind === y.kind ? x.name.localeCompare(y.name) : x.kind === "aplikasi" ? -1 : 1));
+  A.sort((x, y) => x.name.localeCompare(y.name));
   return `<div class="card"><div class="ch"><h2>Aplikasi</h2><a href="#/addon">Kelola</a></div>
     <ul class="dapps">${A.map((a) => `<li>${adIcon(a, "sm")}<span class="grow"><b>${esc(a.name)}</b><small>${esc(a.tagline || "")}</small></span>${a.kind === "aplikasi"
       ? `<a class="btn sm" href="${esc(adHref(a))}" target="_blank" rel="noopener">${ic("ext")}Buka</a>`
@@ -1683,6 +1693,15 @@ function fillList() {
 
 /* ================= Detail router ================= */
 const TABS = [["ringkasan", "Ringkasan", "bolt"], ["port", "Port Forwarding", "share"], ["script", "Script MikroTik", "code"], ["riwayat", "Riwayat", "pulse"]];
+// Tab di dalam halaman (tanpa pindah alamat): [kunci, judul, ikon, angka/tanda]
+const subTabs = (list, cur) => `<nav class="tabs subtabs" role="tablist">${list.map(([k, t, i, n]) => `<button type="button" role="tab" class="tab ${k === cur ? "on" : ""}" data-st="${k}" aria-selected="${k === cur}">${ic(i, "")}${t}${n ? `<span class="tcnt${n === "!" ? " warn" : ""}">${n}</span>` : ""}</button>`).join("")}</nav>`;
+function bindSubTabs(root, set) {
+  root.querySelectorAll(":scope > .subtabs [data-st]").forEach((btn) => (btn.onclick = () => {
+    set(btn.dataset.st);
+    root.querySelectorAll(":scope > .subtabs [data-st]").forEach((x) => { x.classList.toggle("on", x === btn); x.setAttribute("aria-selected", x === btn); });
+    root.querySelectorAll(":scope > [data-pane]").forEach((p) => (p.hidden = p.dataset.pane !== btn.dataset.st));
+  }));
+}
 const tabsHtml = (list, cur, base) => `<nav class="tabs">${list.map(([k, t, i]) => `<a class="tab ${k === cur ? "on" : ""}" href="${base}/${k}">${ic(i, "")}${t}</a>`).join("")}</nav>`;
 function viewDetail(v, id, tab) {
   const x = site(id);
@@ -2757,6 +2776,7 @@ function viewGenie(v) {
     <div id="gBody"><div class="card"><div class="empty"><p>Membaca data GenieACS…</p></div></div></div>`;
   fillGenie(false);
 }
+let GTAB = "ringkasan"; // tab yang terbuka di halaman GenieACS
 async function fillGenie(refresh) {
   const b = $("#gBody"); if (!b) return;
   let g;
@@ -2770,15 +2790,18 @@ async function fillGenie(refresh) {
     : !P.patched ? { c: "warn", t: "Patch IP virtual belum terpasang", d: "Summon ke ONT akan gagal. Di VPS jalankan: bash genieacs-virtualip.sh" }
     : !P.synced ? { c: "warn", t: "Setting GenieACS belum sama dengan panel", d: "Panel akan mencoba lagi dalam 5 menit. Jika tetap begini, cek: journalctl -u vpn-acs -n 50" }
     : { c: "ok", t: "Patch IP virtual aktif", d: "Rentang mengikuti IP virtual router di panel secara otomatis." };
+  const svcDown = g.services.filter((x) => !x.active).length;
+  const GT = [["ringkasan", "Ringkasan", "pulse"], ["inform", "Inform berkala", "clock"], ["patch", "Patch IP virtual", "code", P.cidr !== null && (!P.patched || !P.synced || P.outside.length) ? "!" : ""], ["layanan", "Layanan & alamat", "box", svcDown || ""]];
+  if (!GT.some(([k]) => k === GTAB)) GTAB = "ringkasan";
   b.innerHTML = `
+    ${subTabs(GT, GTAB)}
+    <div data-pane="ringkasan"${GTAB === "ringkasan" ? "" : " hidden"}>
     <div class="kpis">
       <div class="kpi"><span>Total ONT</span><b>${g.devicesError ? "—" : T.total}</b><small>terdaftar di GenieACS</small></div>
       <div class="kpi"><span><i class="dot ok"></i>Melapor</span><b>${g.devicesError ? "—" : T.active}</b><small>dalam 1 jam terakhir</small></div>
       <div class="kpi"><span><i class="dot bad"></i>Tidak melapor</span><b>${g.devicesError ? "—" : T.idle}</b><small>lebih dari 1 jam</small></div>
       <div class="kpi"><span>Tanpa router</span><b>${g.devicesError ? "—" : T.other}</b><small>IP tidak cocok dengan router panel</small></div>
     </div>
-    ${informCard(g)}
-    <div class="grid-dash">
       <div class="card">
         <div class="ch"><h2>ONT per router</h2><button class="btn sm ghost" id="gRefresh" title="Baca ulang dari GenieACS">${ic("refresh")}Perbarui</button></div>
         ${g.devicesError ? `<div class="cb"><div class="note warn" style="margin:0">${ic("alert")}<div><b>Data ONT tidak bisa dibaca</b>${esc(g.devicesError)}</div></div></div>`
@@ -2790,10 +2813,11 @@ async function fillGenie(refresh) {
           </tbody></table>`}
         <div class="cb" style="border-top:1px solid var(--line);padding:12px 20px"><span class="help" style="margin:0">ONT dikelompokkan menurut IP virtual di ConnectionRequestURL. Diperbarui tiap 1 menit${g.cachedAt ? ` · dibaca ${esc(fmtT(g.cachedAt))}` : ""}.</span></div>
       </div>
-      <div class="stack">
-        <div class="card"><div class="ch"><h2>Layanan</h2>${g.version ? `<span class="muted mono" style="font-size:12px">v${esc(g.version)}</span>` : ""}</div>
-          ${g.services.map((x) => `<div class="kv"><span>${esc(x.label)}</span><b>${x.active ? `<span class="pill ok">Berjalan</span>` : `<span class="pill bad">${esc(x.state === "tidak ada" ? "Tidak ada" : "Mati")}</span>`}</b></div>`).join("")}
-        </div>
+    </div>
+    <div data-pane="inform"${GTAB === "inform" ? "" : " hidden"}>
+    ${informCard(g)}
+    </div>
+    <div data-pane="patch"${GTAB === "patch" ? "" : " hidden"}>
         <div class="card"><div class="ch"><h2>Patch IP virtual</h2></div><div class="cb">
           <div class="note ${patch.c}" style="margin:0">${ic(patch.c === "ok" ? "check" : patch.c === "warn" ? "alert" : "info")}<div><b>${esc(patch.t)}</b>${esc(patch.d)}</div></div>
           ${P.outside.length ? `<div class="note warn" style="margin:12px 0 0">${ic("alert")}<div><b>${P.outside.length} router di luar rentang patch</b>${P.outside.map((o) => `<a href="#/router/${o.id}">${esc(o.name)}</a> (${esc(o.virtualSubnet)})`).join(", ")}</div></div>` : ""}
@@ -2810,6 +2834,12 @@ async function fillGenie(refresh) {
             <div class="form-actions"><button class="btn pri">Simpan</button></div>
           </form>`}
         </div>
+    </div>
+    <div data-pane="layanan"${GTAB === "layanan" ? "" : " hidden"}>
+      <div class="grid2">
+        <div class="card"><div class="ch"><h2>Layanan</h2>${g.version ? `<span class="muted mono" style="font-size:12px">v${esc(g.version)}</span>` : ""}</div>
+          ${g.services.map((x) => `<div class="kv"><span>${esc(x.label)}</span><b>${x.active ? `<span class="pill ok">Berjalan</span>` : `<span class="pill bad">${esc(x.state === "tidak ada" ? "Tidak ada" : "Mati")}</span>`}</b></div>`).join("")}
+        </div>
         <div class="card"><div class="ch"><h2>Alamat</h2></div>
           <div class="kv"><span>GenieACS UI</span><b>${g.url ? `<a class="ext" href="${esc(g.url)}" target="_blank" rel="noopener">${esc(g.url.replace(/^https?:\/\//, ""))}${ic("ext", "")}</a>` : "—"}</b></div>
           <div class="kv"><span>Subdomain</span><b>${g.subdomain ? esc(g.subdomain) : s.cloudflare ? `<a href="#/pengaturan/domain">Buat subdomain</a>` : "—"}</b></div>
@@ -2821,9 +2851,9 @@ async function fillGenie(refresh) {
             <div class="err" id="genieErr"></div>
             <div class="form-actions"><button class="btn pri">Simpan</button></div>
           </form>
-        </div>
       </div>
     </div>`;
+  bindSubTabs(b, (k) => (GTAB = k));
   paintIcons(b);
   bindInform(g);
   $("#gRefresh") && ($("#gRefresh").onclick = async () => { busyBtn($("#gRefresh"), true); await fillGenie(true); });
@@ -2836,7 +2866,7 @@ async function fillGenie(refresh) {
       doneDialog("Rentang GenieACS disimpan", `<p>Rentang yang dipakai GenieACS:</p><p class="mono">${esc(r.value.split(",").join(", "))}</p>${r.restarted ? "<p>GenieACS CWMP sudah di-restart. ONT perlu Inform sekali lagi (maksimal 5 menit) sebelum Summon memakai rentang baru.</p>" : ""}`);
     } catch (err) { $("#gExtraErr").textContent = err.message; busyBtn(btn, false); }
   });
-  $("#genieForm").onsubmit = async (e) => {
+  if ($("#genieForm")) $("#genieForm").onsubmit = async (e) => {
     e.preventDefault(); $("#genieErr").textContent = "";
     const btn = $("#genieForm button"); busyBtn(btn, true);
     try { await api("/api/settings", { method: "PUT", body: { genieUrl: $("#sGenie").value } }); await load(); route(); doneDialog("Alamat GenieACS disimpan", ""); }
@@ -2869,6 +2899,7 @@ function ztAgo(t) {
   if (s < 86400) return Math.round(s / 3600) + " jam lalu";
   return Math.round(s / 86400) + " hari lalu";
 }
+let ZTAB = "ringkasan"; // tab yang terbuka di halaman ZeroTier
 async function setZerotier(b) {
   if (!b.innerHTML) b.innerHTML = `<div class="card"><div class="empty"><span class="spin"></span><p style="margin-top:10px">Membaca controller ZeroTier…</p></div></div>`;
   let z;
@@ -2926,7 +2957,10 @@ async function setZerotier(b) {
   const okNet = cur.status === "OK";
   const act = cur.active;
   const actNet = nets.find((n) => n.current);
-  b.innerHTML = `${ztnetNote}
+  const ZT = [["ringkasan", "Ringkasan", "hub"], ["perangkat", "Perangkat", "monitor", pending.length || ""], ["jaringan", "Rute & jaringan", "share"]];
+  if (!ZT.some(([k]) => k === ZTAB)) ZTAB = "ringkasan";
+  b.innerHTML = `${subTabs(ZT, ZTAB)}
+    <div data-pane="ringkasan"${ZTAB === "ringkasan" ? "" : " hidden"}>${ztnetNote}
     ${cur.checkError ? `<div class="note bad">${ic("alert")}<div><b>Jaringan ZeroTier bermasalah</b>${esc(cur.checkError)}</div></div>` : ""}
     ${act && !okNet ? `<div class="note warn">${ic("alert")}<div><b>VPS belum tersambung ke jaringan</b>Status: ${esc(cur.status || "-")}. Biasanya selesai dalam beberapa detik; muat ulang halaman ini.</div></div>` : ""}
     ${pending.length ? `<div class="note warn zt-pend">${ic("clock")}<div><b>${pending.length} perangkat menunggu persetujuan</b>${pending.slice(0, 3).map((m) => `<span class="mono">${esc(m.node)}</span>${m.name ? ` (${esc(m.name)})` : ""}`).join(", ")}${pending.length > 3 ? " dan lainnya" : ""}. Router yang dipasang dari panel disetujui otomatis.
@@ -2967,6 +3001,8 @@ async function setZerotier(b) {
       </div>
     </div>
 
+    </div>
+    <div data-pane="perangkat"${ZTAB === "perangkat" ? "" : " hidden"}>
     <div class="card" id="ztMembers">
       <div class="ch"><h2>Perangkat di jaringan</h2><span class="muted" style="font-size:12.5px">${members.length} perangkat</span></div>
       <div class="toolbar">
@@ -2981,6 +3017,8 @@ async function setZerotier(b) {
       <div class="zt-tw"><table class="t zt-t"><thead><tr><th>Perangkat</th><th class="zt-colnode">Node ID</th><th class="zt-colnode">IP ZeroTier</th><th class="hide-sm">Koneksi</th><th>Status</th><th class="r"></th></tr></thead><tbody id="ztRows"></tbody></table></div>
     </div>
 
+    </div>
+    <div data-pane="jaringan"${ZTAB === "jaringan" ? "" : " hidden"}>
     <div class="grid2 zt-g2">
       <div class="card"><div class="ch"><h2>Rute jaringan</h2><span class="muted" style="font-size:12.5px">dibagikan ke semua perangkat</span></div>
         <ul class="zt-routes">${(cur.routes || []).map((r) => `<li><span class="mono zt-rt">${esc(r.target)}</span>
@@ -2993,7 +3031,8 @@ async function setZerotier(b) {
 
       </div>
     </div>
-    <p class="help" style="margin-top:12px">${act ? "" : "Rute IP virtual router dan URL ACS hanya dibuat otomatis di jaringan panel. "}Rentang IP ZeroTier tidak boleh bentrok dengan ${esc(s.tunnelNet || "")} (L2TP), ${esc(s.virtualPool || "")} (IP virtual), subnet ONT, dan 172.17.0.0/16 (Docker). URL ACS untuk ONT tetap ${esc(s.acsUrl || "")}.</p>`;
+    <p class="help" style="margin-top:12px">${act ? "" : "Rute IP virtual router dan URL ACS hanya dibuat otomatis di jaringan panel. "}Rentang IP ZeroTier tidak boleh bentrok dengan ${esc(s.tunnelNet || "")} (L2TP), ${esc(s.virtualPool || "")} (IP virtual), subnet ONT, dan 172.17.0.0/16 (Docker). URL ACS untuk ONT tetap ${esc(s.acsUrl || "")}.</p>
+    </div>`;
 
   // ---------- tabel perangkat ----------
   const fill = () => {
@@ -3032,10 +3071,11 @@ async function setZerotier(b) {
       ztMemberAct({ dataset: { zm: "edit" } }, members.find((x) => x.node === tr.dataset.node), cur, b);
     }));
   };
+  bindSubTabs(b, (k) => (ZTAB = k));
   $("#ztQ").addEventListener("input", (e) => { ZTV.q = e.target.value; fill(); });
   b.querySelectorAll("[data-zf]").forEach((c) => (c.onclick = () => { ZTV.f = c.dataset.zf; b.querySelectorAll("[data-zf]").forEach((x) => x.classList.toggle("on", x === c)); fill(); }));
   fill();
-  const sp = $("#ztShowPend"); if (sp) sp.onclick = () => { ZTV.f = "wait"; ZTV.q = ""; setZerotier(b).then(() => { const el = $("#ztMembers"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }); };
+  const sp = $("#ztShowPend"); if (sp) sp.onclick = () => { ZTV.f = "wait"; ZTV.q = ""; ZTAB = "perangkat"; setZerotier(b); };
   $("#ztSet").onclick = () => ztSettingsDialog(cur, b);
   $("#ztQr").onclick = () => ztQrDialog(cur);
   ztInlineEdit(cur, b);
@@ -3561,10 +3601,8 @@ async function dashHealth() {
   const bar = (label, p, sub) => `<div class="vh-r"><div class="vh-t"><span>${label}</span><b>${p == null ? "—" : p + "%"}</b></div><div class="zt-bar"><i style="width:${p || 0}%;background:${col(p || 0)}"></i></div><small>${sub}</small></div>`;
   const fb = (n) => (n >= 1024 ** 3 ? (n / 1024 ** 3).toFixed(1).replace(".", ",") + " GB" : Math.round(n / 1024 ** 2) + " MB");
   const down = x.services.filter((v) => !v.active);
-  const ip = STATE.settings.publicIp || "";
   const html = `<div class="card"><div class="ch"><h2>Kesehatan VPS</h2><span class="live${down.length ? " bad" : ""}"><i></i>${down.length ? "Ada layanan mati" : "Online"}</span></div>
     <div class="vh">
-      ${ip ? `<div class="vps-ip">${ic("monitor")}<b>${esc(ip)}</b><button type="button" id="vpsCopy">${ic("copy")}Salin</button></div>` : ""}
       ${bar("CPU", x.cpu == null ? null : Math.round(x.cpu), `beban ${x.load[0].toFixed(2).replace(".", ",")} · ${x.cores} inti`)}
       ${bar("RAM", x.mem.pct, `${fb(x.mem.used)} / ${fb(x.mem.total)}`)}
       ${x.disk ? bar("Disk", x.disk.pct, `${fb(x.disk.used)} / ${fb(x.disk.total)}`) : ""}
@@ -3574,8 +3612,6 @@ async function dashHealth() {
     </div></div>`;
   if (el.firstElementChild) { const t = document.createElement("div"); t.innerHTML = html; paintIcons(t); morph(el, t); } else { el.innerHTML = html; paintIcons(el); }
   HEALTH_HTML = el.innerHTML;
-  const cb = $("#vpsCopy");
-  if (cb) cb.onclick = () => { try { navigator.clipboard.writeText(ip).then(() => toast("Alamat VPS disalin"), () => toast(ip)); } catch (e) { toast(ip); } };
 }
 function fmtDurShortD(ms) { const d = Math.floor(ms / 86400e3), h = Math.floor((ms % 86400e3) / 3600e3); return d ? `${d} hari ${h} jam` : `${h} jam ${Math.floor((ms % 3600e3) / 60e3)} menit`; }
 
