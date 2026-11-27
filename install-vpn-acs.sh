@@ -195,7 +195,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.8.0";
+const VERSION = "2.8.1";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -3208,8 +3208,8 @@ const ADDONS = {
     icon: "wallet",
     color: "teal",
     tagline: "Billing PPPoE & Hotspot MikroTik: paket, tagihan, isolir, voucher.",
-    features: ["Pelanggan PPPoE, paket, dan jatuh tempo", "Isolir otomatis & halaman pemberitahuan", "Voucher hotspot dan laporan penjualan", "Router diambil dari panel, API lewat VPN"],
-    desc: "Billing PPPoE & Hotspot MikroTik: paket, jatuh tempo, isolir otomatis, pembayaran, voucher. Router bisa diambil dari panel, API lewat VPN.",
+    features: ["Pelanggan PPPoE, paket, dan jatuh tempo", "Isolir otomatis & halaman pemberitahuan", "Voucher hotspot dan laporan penjualan", "Router dari panel (L2TP/ZeroTier/WireGuard) · Node.js, tanpa PHP"],
+    desc: "Billing PPPoE & Hotspot MikroTik: paket, jatuh tempo, isolir otomatis, pembayaran, voucher, laporan. Router bisa diambil dari panel, API lewat VPN. Berjalan dengan Node.js (tanpa PHP); data versi PHP langsung terbaca.",
     repo: process.env.VPNACS_REPO_BILINGKU || "https://github.com/suwazed-cmyk/bilingku.git",
     port: 8092,
     path: "/billing",
@@ -5372,10 +5372,10 @@ async function handleApi(req, res, url) {
         if (action === "update" && !addonInstalled(d, id)) return send(res, 400, { error: "Add-on belum terpasang." });
         steps = a.kind === "aplikasi" ? phpInstallSteps(id, req, { update: action === "update" }) : sysSteps(id, action);
         label = action === "install" ? "dipasang" : "diperbarui";
-      } else {
+      } else if (action === "remove") {
         steps = a.kind === "aplikasi" ? phpRemoveSteps(id, !!body.purge) : sysSteps(id, "remove", !!body.purge);
         label = "dilepas";
-      }
+      } else return send(res, 405, { error: "Pakai GET untuk pemeriksaan." });
       const job = { id: crypto.randomBytes(6).toString("hex"), addon: id, action, title: `Add-on ${a.name} ${label}`, log: [], steps: [], pct: 0, req, created: Date.now() };
       runJob(job, steps).catch((e) => {
         job.done = true;

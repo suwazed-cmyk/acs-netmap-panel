@@ -263,9 +263,9 @@ Menu **Add-on**: cari add-on, klik untuk melihat detail dan fiturnya, lalu **Ins
 | **ZeroTier** | Controller ZeroTier di VPS (lihat bagian E) | menu ZeroTier |
 | **WireGuard** | Jalur VPN UDP untuk semua RouterOS v7 (lihat bagian F) | menu WireGuard |
 | **Panel ACS** | Monitoring ONT dari GenieACS: daftar perangkat per router, history redaman (tiap 15 menit, disimpan 90 hari), redaman memburuk 24 jam, peta lokasi | `/acs` |
-| **Bilingku** | Billing PPPoE & Hotspot. Router bisa diambil langsung dari panel utama: cukup isi user/password API | `/billing` |
+| **Bilingku** | Billing PPPoE & Hotspot. Router bisa diambil langsung dari panel utama: cukup isi user/password API. Versi PHP lama ikut ter-update ke Node.js lewat **Update**; data, login admin, dan template tetap | `/billing` |
 
-- Panel ACS memakai **Node.js** (bila Node di VPS lebih lama dari 22.13, Node 22 khusus add-on dipasang otomatis di `/opt/addons/.node`; Node milik GenieACS tidak diubah). Bilingku memakai PHP. Keduanya memakai database **SQLite** di `/opt/addons/<nama>/data` yang tetap aman saat **Update**.
+- Panel ACS dan Bilingku memakai **Node.js**, tanpa PHP (bila Node di VPS lebih lama dari 22.13, Node 22 khusus add-on dipasang otomatis di `/opt/addons/.node`; Node milik GenieACS tidak diubah). Keduanya memakai database **SQLite** di `/opt/addons/<nama>/data` yang tetap aman saat **Update**.
 - Path (`/acs`, `/billing`) bisa diganti di kartu add-on.
 - Router di Panel ACS dikelompokkan menurut **router di panel utama** (berdasarkan IP virtual ONT), bukan tag GenieACS. Tag GenieACS dipakai untuk **nama pelanggan** (`nama:Budi_Santoso`) dan **label** bebas (ODP, paket, VIP).
 - History redaman butuh provision GenieACS: Panel ACS → **Settings → History Redaman → Pasang provision**.
