@@ -3122,8 +3122,24 @@ async function fillGwSettings() {
 /* ================= GenieACS ================= */
 // ---------- Inform berkala ONT: penyebab umum ONT terlihat offline padahal hidup ----------
 function informCard(g) {
-  const I = g.inform; if (!I || !I.total || g.devicesError) return "";
+  const I = g.inform || {};
   const P = I.provision || {};
+  // Belum ada ONT (VPS baru) atau data ONT tidak terbaca: kartu tetap tampil, provision bisa dipasang lebih dulu
+  if (!I.total || g.devicesError) {
+    const pe = P.error ? `<span class="pill wait">Tidak bisa dicek</span>` : P.installed ? `<span class="pill ok">Provision aktif${P.interval ? ` · tiap ${P.interval} detik` : ""}</span>` : `<span class="pill wait">Belum dipasang</span>`;
+    return `<div class="card inf-card">
+    <div class="ch"><h2>Inform berkala ONT</h2>${pe}</div>
+    <div class="cb" style="padding-top:12px">
+      <p class="inf-lead">${g.devicesError ? `Data ONT tidak bisa dibaca: ${esc(g.devicesError)}.` : "Belum ada ONT yang melapor ke GenieACS."} ${P.installed ? `Provision sudah aktif, jadi ONT yang tersambung nanti otomatis melapor ${P.interval ? `tiap <b>${P.interval} detik</b>` : "secara berkala"}.` : "Pasang provision sekarang supaya setiap ONT yang tersambung nanti langsung melapor secara berkala dan tidak terlihat offline."}</p>
+      <div class="inf-act">
+        <label for="infIv" class="muted zt-small" style="margin:0">Laporkan tiap</label>
+        <select id="infIv" style="width:auto">${[120, 240, 300, 600].map((v) => `<option value="${v}" ${(P.interval || 240) === v ? "selected" : ""}>${v / 60} menit${v === 240 ? " (disarankan)" : ""}</option>`).join("")}</select>
+        <button class="btn pri" id="infGo">${ic("check")}${P.installed ? "Simpan interval" : "Pasang provision"}</button>
+        ${P.installed ? `<button class="btn ghost danger" id="infRm">Hapus provision</button>` : ""}
+      </div>
+      <p class="help">Panel memasang provision <code>vpnacs-inform</code> + preset di GenieACS yang menyalakan inform berkala di setiap ONT. Tidak mengubah pengaturan lain.</p>
+    </div></div>`;
+  }
   const bad = I.slow + I.off + I.unknown;
   const top = Object.entries(I.intervals).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([iv, n]) => `<span class="pill ${iv <= 300 ? "ok" : "bad"}">${iv >= 3600 ? iv / 3600 + " jam" : iv >= 60 ? Math.round(iv / 60) + " menit" : iv + " dtk"} · ${n} ONT</span>`).join("");
   const seg = (n, cls) => (n ? `<i class="${cls}" style="width:${(n / I.total) * 100}%"></i>` : "");
@@ -3206,8 +3222,12 @@ async function fillGenie(refresh) {
     </div>
     <div data-pane="ont"${GTAB === "ont" ? "" : " hidden"} id="gOnt"><div class="card"><div class="cb muted">Membaca daftar ONT…</div></div></div>
     <div data-pane="pengaturan"${GTAB === "pengaturan" ? "" : " hidden"}>
-    <div class="g-setgrid">
-    <div class="g-inf">${informCard(g)}</div>
+    <div class="set-grid">
+      <div class="set-col">
+        <div class="g-inf">${informCard(g)}</div>
+    <div class="card" id="gUsers"><div class="ch"><h2>Akun GenieACS UI</h2></div><div class="cb muted">Membaca akun…</div></div>
+      </div>
+      <div class="set-col">
         <div class="card"><div class="ch"><h2>Patch IP virtual</h2></div><div class="cb">
           <div class="note ${patch.c}" style="margin:0">${ic(patch.c === "ok" ? "check" : patch.c === "warn" ? "alert" : "info")}<div><b>${esc(patch.t)}</b>${esc(patch.d)}</div></div>
           ${P.outside.length ? `<div class="note warn" style="margin:12px 0 0">${ic("alert")}<div><b>${P.outside.length} router di luar rentang patch</b>${P.outside.map((o) => `<a href="#/router/${o.id}">${esc(o.name)}</a> (${esc(o.virtualSubnet)})`).join(", ")}</div></div>` : ""}
@@ -3224,10 +3244,8 @@ async function fillGenie(refresh) {
             <div class="form-actions"><button class="btn pri">Simpan</button></div>
           </form>`}
         </div>
-    </div>
-    <div class="g-setgrid">
-    <div class="card" id="gUsers" style="margin:0"><div class="ch"><h2>Akun GenieACS UI</h2></div><div class="cb muted">Membaca akun…</div></div>
-    <div class="card" id="gGw" style="margin:0"><div class="ch"><h2>Pintu web ONT</h2></div><div class="cb muted">Membaca…</div></div>
+    <div class="card" id="gGw"><div class="ch"><h2>Pintu web ONT</h2></div><div class="cb muted">Membaca…</div></div>
+      </div>
     </div>
     </div>
     <div data-pane="layanan"${GTAB === "layanan" ? "" : " hidden"}>
