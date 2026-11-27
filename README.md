@@ -28,7 +28,7 @@ ONT ─ OLT ─ MikroTik router C ═══ VPN L2TP / WireGuard / ZeroTier ═�
   - Menu **Add-on** dengan tombol **Install** dan progres 0–100%:
     - **ZeroTier** (add-on sistem, hanya paket zerotier-one; menu ZeroTier baru muncul setelah dipasang)
     - **WireGuard** (add-on sistem, hanya paket wireguard-tools; menu WireGuard baru muncul setelah dipasang)
-    - **[Panel ACS](https://github.com/suwazed-cmyk/panel-acs)**: monitoring ONT, **history redaman** seperti SmartOLT, peta lokasi. Dibuka di `/acs`
+    - **[Panel ACS](https://github.com/suwazed-cmyk/panel-acs)**: monitoring ONT, **history redaman**, nama pelanggan & label (tag GenieACS), router dikenali otomatis dari IP virtual. Node.js, tanpa PHP. Dibuka di `/acs`
     - **[Bilingku](https://github.com/suwazed-cmyk/bilingku)**: billing PPPoE & Hotspot MikroTik. Dibuka di `/billing`
 - Script bantu: **`ringkasan.sh`** (alamat web dan port) dan **`cek.sh`** (tes semua layanan)
 
@@ -265,9 +265,9 @@ Menu **Add-on**: cari add-on, klik untuk melihat detail dan fiturnya, lalu **Ins
 | **Panel ACS** | Monitoring ONT dari GenieACS: daftar perangkat per router, history redaman (tiap 15 menit, disimpan 90 hari), redaman memburuk 24 jam, peta lokasi | `/acs` |
 | **Bilingku** | Billing PPPoE & Hotspot. Router bisa diambil langsung dari panel utama: cukup isi user/password API | `/billing` |
 
-- Panel ACS dan Bilingku memakai PHP (dipasang otomatis) dan database **SQLite**. Datanya di `/opt/addons/<nama>/data` dan tetap aman saat **Update**.
+- Panel ACS memakai **Node.js** (bila Node di VPS lebih lama dari 22.13, Node 22 khusus add-on dipasang otomatis di `/opt/addons/.node`; Node milik GenieACS tidak diubah). Bilingku memakai PHP. Keduanya memakai database **SQLite** di `/opt/addons/<nama>/data` yang tetap aman saat **Update**.
 - Path (`/acs`, `/billing`) bisa diganti di kartu add-on.
-- Router di Panel ACS dikelompokkan menurut **router di panel utama** (berdasarkan IP virtual ONT), bukan tag GenieACS. Tag GenieACS dipakai untuk **area** (tag ke-1) dan **nama pelanggan** (tag ke-2).
+- Router di Panel ACS dikelompokkan menurut **router di panel utama** (berdasarkan IP virtual ONT), bukan tag GenieACS. Tag GenieACS dipakai untuk **nama pelanggan** (`nama:Budi_Santoso`) dan **label** bebas (ODP, paket, VIP).
 - History redaman butuh provision GenieACS: Panel ACS → **Settings → History Redaman → Pasang provision**.
 
 ### E. Router lewat ZeroTier

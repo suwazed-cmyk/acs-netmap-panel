@@ -195,7 +195,7 @@ const RETENTION_MS = 90 * 24 * 3600 * 1000; // riwayat & log disimpan 90 hari
 const DAY_MS = 24 * 3600 * 1000;
 const TIMEZONES = { "Asia/Jakarta": { label: "WIB", off: 7 }, "Asia/Makassar": { label: "WITA", off: 8 }, "Asia/Jayapura": { label: "WIT", off: 9 } };
 
-const VERSION = "2.7.0";
+const VERSION = "2.8.0";
 const DEFAULT_BRAND = "VPN ACS";
 const DEFAULT_TUNNEL_NET = "192.168.42.0/24";
 const XL2TPD_CONF = ROOT + "/etc/xl2tpd/xl2tpd.conf";
@@ -3193,8 +3193,8 @@ const ADDONS = {
     icon: "box",
     color: "blue",
     tagline: "Monitoring ONT dari GenieACS lengkap dengan history redaman.",
-    features: ["Daftar & detail ONT per router panel", "History redaman RX (grafik 1–90 hari)", "Ubah WiFi, reboot, faults, peta lokasi", "Database SQLite, data tetap aman saat diperbarui"],
-    desc: "Monitoring ONT dari GenieACS: daftar & detail ONT, redaman RX dengan history grafik, ubah WiFi, reboot, faults, peta. ONT dikelompokkan otomatis per router panel.",
+    features: ["ONT dikelompokkan otomatis per router (IP virtual)", "History redaman RX (grafik 24 jam–90 hari)", "Nama pelanggan & label lewat tag GenieACS", "Ubah WiFi, reboot, faults · Node.js, tanpa PHP"],
+    desc: "Monitoring ONT dari GenieACS: dashboard, daftar & detail ONT, redaman RX dengan history grafik, ubah WiFi, reboot, faults. ONT dikelompokkan otomatis per router panel dari IP virtual; nama pelanggan dan label disimpan sebagai tag GenieACS. Berjalan dengan Node.js (tanpa PHP).",
     repo: process.env.VPNACS_REPO_PANEL_ACS || "https://github.com/suwazed-cmyk/panel-acs.git",
     port: 8091,
     path: "/acs",
@@ -3606,15 +3606,23 @@ async function addonCheck(id) {
     return out;
   }
   const dir = addonDir(id);
-  const okDir = fs.existsSync(dir + "/index.php");
+  const isNode = isNodeApp(id);
+  const okDir = fs.existsSync(dir + (isNode ? "/server.js" : "/index.php"));
   const ver = okDir ? (await run("git", ["-C", dir, "log", "-1", "--format=%h %cs"])).out.trim() : "";
-  add("Berkas aplikasi", okDir, okDir ? `${dir}${ver ? " · versi " + ver : ""}` : `${dir} tidak lengkap`, okDir ? "" : "Klik Perbarui atau Install ulang");
-  const php = await run("php", ["-r", 'echo PHP_VERSION; foreach (["pdo_sqlite","curl","mbstring"] as $e) if (!extension_loaded($e)) echo " -", $e;']);
-  const phpOk = php.code === 0 && !/ -/.test(php.out);
-  add("PHP", phpOk, php.code === 0 ? "PHP " + php.out.trim().replace(/ -/g, " kurang: ") : "PHP tidak ditemukan", phpOk ? "" : "apt-get install -y php-cli php-sqlite3 php-curl php-mbstring");
+  add("Berkas aplikasi", okDir, okDir ? `${dir}${ver ? " · versi " + ver : ""}${isNode ? " · Node.js" : " · PHP"}` : `${dir} tidak lengkap`, okDir ? "" : "Klik Perbarui atau Install ulang");
+  let phpOk = false;
+  if (isNode) {
+    const nb = await addonNodeBin();
+    const nv = nb ? (await run(nb, ["-v"])).out.trim() : "";
+    add("Node.js untuk add-on", !!nb, nb ? `${nv} · ${nb}` : "Node.js 22.13+ tidak ditemukan", nb ? "" : "Klik Perbarui (Node 22 dipasang otomatis)");
+  } else {
+    const php = await run("php", ["-r", 'echo PHP_VERSION; foreach (["pdo_sqlite","curl","mbstring"] as $e) if (!extension_loaded($e)) echo " -", $e;']);
+    phpOk = php.code === 0 && !/ -/.test(php.out);
+    add("PHP", phpOk, php.code === 0 ? "PHP " + php.out.trim().replace(/ -/g, " kurang: ") : "PHP tidak ditemukan", phpOk ? "" : "apt-get install -y php-cli php-sqlite3 php-curl php-mbstring");
+  }
   const svc = (await run("systemctl", ["is-active", `addon-${id}`])).out.trim();
   add(`Layanan addon-${id}`, svc === "active", svc || "tidak ada", svc === "active" ? "" : `journalctl -u addon-${id} -n 50`);
-  if (a.timer) {
+  if (a.timer && !isNode) {
     const t = (await run("systemctl", ["is-active", `addon-${id}-${a.timer.unit}.timer`])).out.trim();
     add(a.timer.desc || "Tugas berkala", t === "active", t === "active" ? `Berjalan (${a.timer.every})` : t || "tidak ada", t === "active" ? "" : `systemctl enable --now addon-${id}-${a.timer.unit}.timer`);
   }
@@ -3627,7 +3635,7 @@ async function addonCheck(id) {
   add(`Alamat ${pth}/ di panel`, viaOk, !route ? "Belum terdaftar di panel" : viaOk ? `Diteruskan ke port ${route.port}` : `Diteruskan ke port ${route.port}, tetapi aplikasi tidak menjawab`, !route ? "Klik Perbarui" : viaOk ? "" : `systemctl restart addon-${id}`);
   const w = await run("runuser", ["-u", "www-data", "--", "test", "-w", dir + "/data"]);
   add("Folder data bisa ditulis", w.code === 0, w.code === 0 ? dir + "/data" : "Tidak bisa ditulis oleh www-data", w.code === 0 ? "" : `chown -R www-data:www-data ${dir}/data`);
-  if (a.db) {
+  if (a.db && !isNode) {
     const q = await run("runuser", ["-u", "www-data", "--", "php", "-r", '$p=new PDO("sqlite:".$argv[1]); echo $p->query("PRAGMA quick_check")->fetchColumn(), " ", round(filesize($argv[1])/1024), " KB";', dir + "/" + a.db]);
     const dbOk = q.code === 0 && /^ok /.test(q.out.trim());
     add("Database SQLite", fs.existsSync(dir + "/" + a.db) ? dbOk : null, fs.existsSync(dir + "/" + a.db) ? (dbOk ? `Sehat · ${q.out.trim().slice(3)}` : q.out.trim().slice(0, 200)) : "Belum dibuat (dibuat saat aplikasi pertama dibuka)", dbOk ? "" : "Klik Perbarui untuk menyiapkan ulang data");
@@ -3640,11 +3648,11 @@ async function addonCheck(id) {
   }
   const linkOk = !!(link && link.key === d.settings.addonKey && link.prefix === pth);
   add("Penghubung ke panel utama", linkOk, link ? (linkOk ? "Kunci dan alamat cocok" : "Kunci atau alamat tidak cocok") : "panel-link.json tidak ada", linkOk ? "" : "Klik Perbarui");
-  if (link && phpOk) {
-    const api = await run("runuser", ["-u", "www-data", "--", "php", "-r", '$l=json_decode(file_get_contents($argv[1]),true); $c=curl_init(rtrim($l["url"],"/")."/api/addon/routers"); curl_setopt_array($c,[CURLOPT_RETURNTRANSFER=>1,CURLOPT_TIMEOUT=>8,CURLOPT_HTTPHEADER=>["X-Addon-Key: ".$l["key"]]]); $b=curl_exec($c); $j=json_decode((string)$b,true); echo curl_getinfo($c,CURLINFO_HTTP_CODE)," ",is_array($j)&&isset($j["routers"])?count($j["routers"]):-1;', dir + "/data/panel-link.json"]);
-    const m = api.out.trim().match(/^(\d+) (-?\d+)$/);
-    const apiOk = !!(m && m[1] === "200" && m[2] !== "-1");
-    add("Aplikasi membaca router panel", apiOk, apiOk ? `${m[2]} router terbaca` : `Gagal (${api.out.trim().slice(0, 120) || "tidak ada jawaban"})`, apiOk ? "" : "Klik Perbarui, lalu restart panel: systemctl restart vpn-acs");
+  if (link && (isNode || phpOk)) {
+    // Uji jalur yang sama dengan aplikasi: alamat lokal panel + kunci add-on
+    const api = await httpJson("GET", String(link.url).replace(/\/$/, "") + "/api/addon/routers", null, { "X-Addon-Key": link.key }, 8000);
+    const apiOk = api.status === 200 && api.json && Array.isArray(api.json.routers);
+    add("Aplikasi membaca router panel", apiOk, apiOk ? `${api.json.routers.length} router terbaca` : `Gagal (${api.status ? "HTTP " + api.status : api.error})`, apiOk ? "" : "Klik Perbarui, lalu restart panel: systemctl restart vpn-acs");
   }
   if (a.nbi) {
     const nb = nbiBase();
@@ -3668,6 +3676,43 @@ function writeIfChanged(file, text, mode) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text, mode ? { mode } : undefined);
   return true;
+}
+// ---------- Runtime Node.js untuk add-on aplikasi (node:sqlite butuh Node 22.13+) ----------
+const ADDON_NODE_DIR = () => ADDON_ROOT + "/.node";
+function isNodeApp(id) {
+  return fs.existsSync(addonDir(id) + "/server.js");
+}
+async function nodeVer(bin) {
+  const r = await run(bin, ["-v"]);
+  const m = r.out.match(/v(\d+)\.(\d+)/);
+  return m ? [+m[1], +m[2]] : null;
+}
+const nodeOk = (v) => !!v && (v[0] > 22 || (v[0] === 22 && v[1] >= 13));
+async function addonNodeBin() {
+  for (const b of [process.execPath, ADDON_NODE_DIR() + "/bin/node"]) if (fs.existsSync(b) && nodeOk(await nodeVer(b))) return b;
+  return "";
+}
+function nodeUnits(id, bin) {
+  const a = ADDONS[id];
+  const dir = addonDir(id);
+  return {
+    [`addon-${id}.service`]: `[Unit]
+Description=Add-on ${a.name} (ACS NETMAP Panel, Node.js)
+After=network.target
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=${dir}
+Environment=PORT=${a.port} HOST=127.0.0.1 DATA_DIR=${dir}/data NODE_ENV=production
+ExecStart=${bin} --disable-warning=ExperimentalWarning ${dir}/server.js
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+`,
+  };
 }
 function phpUnits(id) {
   const a = ADDONS[id];
@@ -3713,6 +3758,35 @@ WantedBy=timers.target
   }
   return units;
 }
+// Pastikan ada Node.js 22.13+ untuk add-on; bila Node sistem lebih lama, Node 22 LTS resmi
+// dipasang terpisah di /opt/addons/.node (Node milik GenieACS/panel tidak diubah)
+async function nodeRuntimeStep(job) {
+  const have = await addonNodeBin();
+  if (have) return { skip: true, detail: `Node.js ${(await run(have, ["-v"])).out.trim()} sudah ada` };
+  const dir = ADDON_NODE_DIR();
+  fs.mkdirSync(ADDON_ROOT, { recursive: true });
+  const sh = [
+    "set -e",
+    'A="$(uname -m)"; case "$A" in x86_64) A=x64 ;; aarch64) A=arm64 ;; armv7l) A=armv7l ;; *) echo "Arsitektur $A tidak didukung"; exit 13 ;; esac',
+    'U="https://nodejs.org/dist/latest-v22.x"',
+    'echo "@@PROGRESS 10 Mencari Node.js 22 LTS"',
+    'SUM="$(curl -fsSL --retry 3 "$U/SHASUMS256.txt")"',
+    'F="$(printf "%s\n" "$SUM" | awk -v f="linux-$A.tar.xz" \'$2 ~ f"$" {print $2; exit}\')"',
+    '[ -n "$F" ] || { echo "Berkas Node.js untuk $A tidak ditemukan"; exit 14; }',
+    'echo "@@PROGRESS 25 Mengunduh $F"',
+    'T="$(mktemp -d)"; curl -fsSL --retry 3 -o "$T/$F" "$U/$F"',
+    'echo "@@PROGRESS 70 Memeriksa checksum"',
+    '(cd "$T" && printf "%s\n" "$SUM" | grep " $F\$" | sha256sum -c -)',
+    'echo "@@PROGRESS 85 Membuka arsip"',
+    `rm -rf "${dir}.new"; mkdir -p "${dir}.new"; tar -xJf "$T/$F" -C "${dir}.new" --strip-components=1`,
+    `rm -rf "${dir}"; mv "${dir}.new" "${dir}"; rm -rf "$T"`,
+    `echo "@@PROGRESS 100 Node.js $(${dir}/bin/node -v) siap"`,
+  ].join("\n");
+  const r = await runDetached(job, "nodejs", sh, { timeoutMs: 20 * 60 * 1000 });
+  if (r.code !== 0) return { error: "Gagal memasang Node.js 22 untuk add-on (lihat log). Cek koneksi VPS ke nodejs.org." };
+  const bin = await addonNodeBin();
+  return bin ? { detail: `Node.js ${(await run(bin, ["-v"])).out.trim()} dipasang di ${dir}` } : { error: "Node.js terpasang tetapi tidak bisa dijalankan" };
+}
 function phpInstallSteps(id, req, opts) {
   const a = ADDONS[id];
   const dir = addonDir(id);
@@ -3728,33 +3802,6 @@ function phpInstallSteps(id, req, opts) {
       const free = parseInt((r.out.split("\n")[1] || "").split(/\s+/)[3], 10);
       if (free && free < 500) return { error: `Ruang disk tinggal ${free} MB (minimal 500 MB)` };
       return { detail: free ? `Disk kosong ${Math.round(free / 1024)} GB` : "" };
-    },
-  });
-  steps.push({
-    label: "Pasang PHP",
-    weight: 4,
-    run: async (job) => {
-      const chk = await run("php", ["-r", 'echo PHP_VERSION, " ", (extension_loaded("pdo_sqlite") && extension_loaded("curl") && extension_loaded("mbstring")) ? "lengkap" : "kurang";']);
-      if (chk.code === 0 && /lengkap/.test(chk.out)) return { skip: true, detail: `PHP ${chk.out.split(" ")[0]} sudah ada` };
-      needrestartGuard();
-      job.detail = "memasang PHP lewat apt";
-      job.sub = 0.05;
-      // dpkg --configure -a memulihkan paket setengah terpasang (mis. proses sebelumnya terputus);
-      // apt menunggu bila sedang dipakai proses lain (update otomatis Ubuntu)
-      const sh = [
-        "echo '@@PROGRESS 5 memeriksa paket'",
-        "dpkg --configure -a",
-        "echo '@@PROGRESS 15 apt-get update'",
-        "apt-get -o DPkg::Lock::Timeout=300 update -q || exit 11",
-        "echo '@@PROGRESS 45 apt-get install php'",
-        "apt-get -o DPkg::Lock::Timeout=300 install -y -q php-cli php-sqlite3 php-curl php-mbstring php-xml || exit 12",
-        "echo '@@PROGRESS 100 PHP terpasang'",
-      ].join("\n");
-      const i = await runDetached(job, "php", sh, { timeoutMs: 30 * 60 * 1000 });
-      if (i.code === 11) return { error: "apt-get update gagal (lihat log). Cek koneksi internet VPS, lalu coba lagi." };
-      if (i.code !== 0) return { error: "Gagal memasang PHP (lihat log). Jika apt sedang dipakai proses lain, tunggu beberapa menit lalu coba lagi." };
-      const v = await run("php", ["-r", "echo PHP_VERSION;"]);
-      return { detail: `PHP ${v.out.trim()} terpasang` };
     },
   });
   steps.push({
@@ -3784,6 +3831,34 @@ function phpInstallSteps(id, req, opts) {
     },
   });
   steps.push({
+    label: "Siapkan runtime",
+    weight: 4,
+    run: async (job) => {
+      if (isNodeApp(id)) return nodeRuntimeStep(job);
+      const chk = await run("php", ["-r", 'echo PHP_VERSION, " ", (extension_loaded("pdo_sqlite") && extension_loaded("curl") && extension_loaded("mbstring")) ? "lengkap" : "kurang";']);
+      if (chk.code === 0 && /lengkap/.test(chk.out)) return { skip: true, detail: `PHP ${chk.out.split(" ")[0]} sudah ada` };
+      needrestartGuard();
+      job.detail = "memasang PHP lewat apt";
+      job.sub = 0.05;
+      // dpkg --configure -a memulihkan paket setengah terpasang (mis. proses sebelumnya terputus);
+      // apt menunggu bila sedang dipakai proses lain (update otomatis Ubuntu)
+      const sh = [
+        "echo '@@PROGRESS 5 memeriksa paket'",
+        "dpkg --configure -a",
+        "echo '@@PROGRESS 15 apt-get update'",
+        "apt-get -o DPkg::Lock::Timeout=300 update -q || exit 11",
+        "echo '@@PROGRESS 45 apt-get install php'",
+        "apt-get -o DPkg::Lock::Timeout=300 install -y -q php-cli php-sqlite3 php-curl php-mbstring php-xml || exit 12",
+        "echo '@@PROGRESS 100 PHP terpasang'",
+      ].join("\n");
+      const i = await runDetached(job, "php", sh, { timeoutMs: 30 * 60 * 1000 });
+      if (i.code === 11) return { error: "apt-get update gagal (lihat log). Cek koneksi internet VPS, lalu coba lagi." };
+      if (i.code !== 0) return { error: "Gagal memasang PHP (lihat log). Jika apt sedang dipakai proses lain, tunggu beberapa menit lalu coba lagi." };
+      const v = await run("php", ["-r", "echo PHP_VERSION;"]);
+      return { detail: `PHP ${v.out.trim()} terpasang` };
+    },
+  });
+  steps.push({
     label: "Siapkan data",
     weight: 1,
     run: async () => {
@@ -3793,7 +3868,7 @@ function phpInstallSteps(id, req, opts) {
       writeIfChanged(dir + "/data/panel-link.json", JSON.stringify({ url: `http://127.0.0.1:${PORT}`, key: d.settings.addonKey, prefix: addonPath(d, id), nbi: nbiBase() }, null, 2), 0o640);
       await run("chown", ["-R", "www-data:www-data", dir + "/data"]);
       await run("chmod", ["750", dir + "/data"]);
-      if (fs.existsSync(dir + "/bin/setup.php")) {
+      if (!isNodeApp(id) && fs.existsSync(dir + "/bin/setup.php")) {
         const r = await runStream("runuser", ["-u", "www-data", "--", "php", dir + "/bin/setup.php"], { timeoutMs: 5 * 60 * 1000, cwd: dir });
         if (r.code !== 0) return { error: "Setup database gagal (lihat log)" };
       }
@@ -3804,7 +3879,18 @@ function phpInstallSteps(id, req, opts) {
     label: "Pasang layanan",
     weight: 1,
     run: async () => {
-      const units = phpUnits(id);
+      let units;
+      if (isNodeApp(id)) {
+        const bin = await addonNodeBin();
+        if (!bin) return { error: "Node.js 22.13+ untuk add-on tidak ditemukan" };
+        units = nodeUnits(id, bin);
+        // Versi PHP lama: hapus timer pencatat (versi Node.js mencatat sendiri)
+        for (const n of Object.keys(phpUnits(id))) {
+          if (units[n]) continue;
+          await run("systemctl", ["disable", "--now", n]);
+          try { fs.unlinkSync(`${SYSTEMD_DIR}/${n}`); } catch (e) { /* tidak ada */ }
+        }
+      } else units = phpUnits(id);
       for (const [n, t] of Object.entries(units)) writeIfChanged(`${SYSTEMD_DIR}/${n}`, t);
       await run("systemctl", ["daemon-reload"]);
       // Layanan oneshot milik timer tidak diaktifkan langsung; timer yang menjalankannya
