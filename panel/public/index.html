@@ -1052,6 +1052,8 @@
   .zt-qrside .zt-qrbig{width:124px;height:124px;margin:0;padding:8px}
   .zt-qrside .zt-small{font-size:11.5px}
   .zt-curc,.zt-hcard{margin-bottom:12px}
+  .zt-cur .zt-hv b.mono{font-size:14px;font-weight:600}
+  .zt-cur .zt-hv .zt-small{margin-left:8px}
   .zt-hcard .zt-health{grid-template-columns:repeat(4,1fr)}
   .zt-hcard .zt-hc{border-bottom:0;border-right:1px solid var(--line)}
   .zt-hcard .zt-hc:last-child{border-right:0}
@@ -2976,7 +2978,7 @@ async function setZerotier(b) {
   const okNet = cur.status === "OK";
   const act = cur.active;
   const actNet = nets.find((n) => n.current);
-  const ZT = [["ringkasan", "Ringkasan", "hub"], ["perangkat", "Perangkat", "monitor", pending.length || ""], ["pengaturan", "Pengaturan", "sliders"]];
+  const ZT = [["ringkasan", "Ringkasan", "hub", pending.length || ""], ["pengaturan", "Pengaturan", "sliders"]];
   if (!ZT.some(([k]) => k === ZTAB)) ZTAB = "ringkasan";
   b.innerHTML = `${subTabs(ZT, ZTAB)}
     <div data-pane="ringkasan"${ZTAB === "ringkasan" ? "" : " hidden"}>${ztnetNote}
@@ -2991,25 +2993,17 @@ async function setZerotier(b) {
         <div class="zt-cur">
             <div class="zt-hrow"><span class="zt-hl">Network ID</span><span class="zt-hv"><span class="zt-idbox"><span class="zt-nwid mono">${esc(cur.nwid)}</span><button class="zt-ib" data-copy="${esc(cur.nwid)}" data-msg="Network ID tersalin" title="Salin Network ID" aria-label="Salin Network ID">${ic("copy")}</button></span></span></div>
             <div class="zt-hrow"><span class="zt-hl">Nama jaringan</span><span class="zt-hv" id="ztNameBox"><span class="zt-nname">${esc(cur.name || "(tanpa nama)")}</span><button class="zt-ib" id="ztNameEdit" title="Ganti nama" aria-label="Ganti nama">${ic("edit")}</button></span></div>
+            <div class="zt-hrow"><span class="zt-hl">Rentang IP</span><span class="zt-hv"><b class="mono">${esc(cur.subnet || "—")}</b><span class="muted zt-small">${cur.poolStart && cur.poolEnd ? `pool ${esc(cur.poolStart)} – .${esc(cur.poolEnd.split(".").pop())}` : "pool otomatis"}</span></span></div>
+            <div class="zt-hrow"><span class="zt-hl">IP VPS (gateway)</span><span class="zt-hv"><b class="mono">${esc(act ? cur.vpsIp : "—")}</b><span class="muted zt-small">${act ? `${cur.sites || 0} router panel memakai jalur ini` : "VPS tidak bergabung"}</span></span></div>
             <div class="zt-hmeta">${act ? (okNet ? `<span class="pill ok">VPS tersambung</span>` : `<span class="pill bad">VPS belum tersambung</span>`) : `<span class="pill wait">Tidak dipakai panel</span>`}${cur.private ? `<span class="pill ok">${ic("lock", "")}Private</span>` : `<span class="pill bad">Public</span>`}${act ? `<span class="muted">interface <span class="mono">${esc(cur.iface || "—")}</span></span>` : ""}</div>
         </div>
         <div class="zt-qrside"><button class="zt-qrbig" id="ztQr" title="Perbesar QR Network ID" aria-label="Perbesar QR Network ID">${(() => { try { const q = qrcode(0, "M"); q.addData(cur.nwid); q.make(); return q.createSvgTag({ cellSize: 4, margin: 0, scalable: true }); } catch (e) { return ic("qr"); } })()}</button><span class="muted zt-small">Pindai untuk menyalin Network ID</span></div>
       </div>
     </div>
-    <div class="card zt-hcard">
-          <div class="ch"><h2>Konfigurasi &amp; kesehatan</h2><span class="muted zt-small">${act ? "jaringan panel" : "VPS tidak bergabung"}</span></div>
-          <div class="zt-health">
-            <div class="zt-hc"><span>Rentang IP</span><b class="mono">${esc(cur.subnet || "—")}</b><small>${cur.poolStart && cur.poolEnd ? `Pool ${esc(cur.poolStart)} – .${esc(cur.poolEnd.split(".").pop())}` : "Pool otomatis (seluruh rentang)"}</small></div>
-            <div class="zt-hc"><span>IP VPS (gateway)</span><b class="mono">${esc(act ? cur.vpsIp : "—")}</b><small>${act ? `${cur.sites || 0} router panel memakai jalur ini` : "VPS tidak bergabung ke jaringan ini"}</small></div>
-            <div class="zt-hc"><span>Perangkat online</span><b>${onlineN} <em>dari ${members.filter((m) => m.authorized).length}</em></b><div class="zt-bar"><i style="width:${members.filter((m) => m.authorized).length ? Math.round((onlineN / members.filter((m) => m.authorized).length) * 100) : 0}%"></i></div></div>
-            <div class="zt-hc"><span>Menunggu persetujuan</span><b class="${pending.length ? "warn" : ""}">${pending.length} <em>perangkat</em></b><small>${cur.private ? "perangkat baru perlu disetujui" : "jaringan public: tanpa persetujuan"}</small></div>
-          </div>
-        </div>
 
-    </div>
-    <div data-pane="perangkat"${ZTAB === "perangkat" ? "" : " hidden"}>
+
     <div class="card" id="ztMembers">
-      <div class="ch"><h2>Perangkat di jaringan</h2><span class="muted" style="font-size:12.5px">${members.length} perangkat</span></div>
+      <div class="ch"><h2>Perangkat di jaringan</h2><span class="muted" style="font-size:12.5px">${members.length} perangkat · ${onlineN} online${pending.length ? ` · <b style="color:var(--warn)">${pending.length} menunggu</b>` : ""}</span></div>
       <div class="toolbar">
         <div class="search">${ic("search", "")}<input id="ztQ" type="text" placeholder="Cari nama, Node ID, atau IP" value="${esc(ZTV.q)}"></div>
         <div class="filters">
@@ -3021,7 +3015,6 @@ async function setZerotier(b) {
       </div>
       <div class="zt-tw"><table class="t zt-t"><thead><tr><th>Perangkat</th><th class="zt-colnode">Node ID</th><th class="zt-colnode">IP ZeroTier</th><th class="hide-sm">Koneksi</th><th>Status</th><th class="r"></th></tr></thead><tbody id="ztRows"></tbody></table></div>
     </div>
-
     </div>
     <div data-pane="pengaturan"${ZTAB === "pengaturan" ? "" : " hidden"}>
     <div class="zt-setgrid">
@@ -3089,7 +3082,7 @@ async function setZerotier(b) {
   $("#ztQ").addEventListener("input", (e) => { ZTV.q = e.target.value; fill(); });
   b.querySelectorAll("[data-zf]").forEach((c) => (c.onclick = () => { ZTV.f = c.dataset.zf; b.querySelectorAll("[data-zf]").forEach((x) => x.classList.toggle("on", x === c)); fill(); }));
   fill();
-  const sp = $("#ztShowPend"); if (sp) sp.onclick = () => { ZTV.f = "wait"; ZTV.q = ""; ZTAB = "perangkat"; setZerotier(b); };
+  const sp = $("#ztShowPend"); if (sp) sp.onclick = () => { ZTV.f = "wait"; ZTV.q = ""; ZTAB = "ringkasan"; setZerotier(b).then(() => { const el = $("#ztMembers"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }); };
   if ($("#ztSetBox")) ztSettingsDialog(cur, b, $("#ztSetBox"));
   $("#ztQr").onclick = () => ztQrDialog(cur);
   ztInlineEdit(cur, b);
